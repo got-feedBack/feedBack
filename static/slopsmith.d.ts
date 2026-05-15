@@ -83,7 +83,7 @@ interface SlopsmithSongInfo {
     /** Tuning offsets — length 6 for guitar, 4 for bass. */
     tuning: number[];
     capo: number;
-    format: 'psarc' | 'sloppak' | 'loose' | string;
+    format: 'sloppak' | 'loose' | string;
     /** `null` when audio is unavailable. */
     audio_url: string | null;
     /** Non-null only when `audio_url` is null. */
@@ -309,6 +309,9 @@ interface SlopsmithApi extends EventTarget {
     audio?: SlopsmithAudioApi;
     /** Attached by diagnostics.js early in `<head>`. */
     diagnostics?: SlopsmithDiagnosticsApi;
+    /** Per-session map of loaded plugin screen.js versions. Owned by app.js. */
+    _loadedPluginScripts?: Map<string, string>;
+    [key: string]: unknown;
 }
 
 // ─── Keyboard-shortcut API ──────────────────────────────────────────────────
@@ -321,6 +324,8 @@ interface SlopsmithShortcutSpec {
     scope?: 'global' | 'player' | 'library' | 'settings' | string;
     condition?: () => boolean;
     handler: (e: KeyboardEvent) => void;
+    /** Optional modifier-key requirements (ctrl/alt/shift/meta). */
+    modifiers?: { ctrl?: boolean; alt?: boolean; shift?: boolean; meta?: boolean } | null;
 }
 
 /** A panel-scoped shortcut registry returned by `createShortcutPanel`. */
@@ -353,11 +358,25 @@ declare global {
         getActiveShortcutPanel(): string;
         clearWindowShortcuts(windowId: string): number;
         getShortcutWindowId(): string;
+        isInShortcutPanel(): boolean;
+        getGlobalShortcutContext(): unknown;
+        _setDebugShortcuts(enabled: boolean): void;
+        _listShortcuts(): void;
+        _testShortcut(key: string, scope?: string): unknown;
+        /** Debug-only internals exposed by app.js. */
+        _panels?: unknown;
+        _getCurrentContext?: () => unknown;
+        _isShortcutActive?: (shortcut: unknown, ctx: unknown) => boolean;
 
         /** Desktop JUCE audio bridge — present only in slopsmith-desktop. */
         jucePlayer?: unknown;
         _juceMode?: boolean;
-        _juceAudioUrl?: string;
+        _juceAudioUrl?: string | null;
+
+        /** Native desktop bridge — present only when running inside slopsmith-desktop. */
+        slopsmithDesktop?: any;
+        /** Demo analytics hook — real impl set by demo.js, else null. */
+        slopsmithDemoTrack?: ((event: string, props?: unknown) => void) | null;
 
         /** Lottie animation helper (lottie-api.js). */
         slopsmithLottie?: unknown;
@@ -370,6 +389,15 @@ declare global {
          */
         [vizFactory: `slopsmithViz_${string}`]: SlopsmithVizFactory;
     }
+
+    /** Bare global — assigned via `window.registerShortcut =` in app.js. */
+    function registerShortcut(options: SlopsmithShortcutSpec): void;
+    /** Bare global — assigned via `window.unregisterShortcut =` in app.js. */
+    function unregisterShortcut(key: string, scope?: string): boolean;
+    /** Bare global — assigned via `window.createShortcutPanel =` in app.js. */
+    function createShortcutPanel(id: string): SlopsmithShortcutPanel;
+    /** Bare global — assigned via `window.setActiveShortcutPanel =` in app.js. */
+    function setActiveShortcutPanel(id: string): void;
 }
 
 export {};
