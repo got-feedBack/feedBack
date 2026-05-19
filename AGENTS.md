@@ -8,7 +8,7 @@ This file is the canonical orientation. Tool-specific automation (Claude skills/
 
 ## Architecture quick reference
 
-```
+```text
 server.py              FastAPI app — library API, WebSocket highway, plugin loading
 main.py                Programmatic uvicorn entrypoint — installs structlog before boot
 logging_setup.py       Structured logging + correlation IDs (LOG_LEVEL/LOG_FORMAT/LOG_FILE)

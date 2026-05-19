@@ -31,6 +31,7 @@ for path in sorted(glob.glob('plugins/*/plugin.json')):
     plugin_dir = pathlib.Path(path).parent
     plugin_id = plugin_dir.name
     m = json.load(open(path))
+    plugin_ok = True  # per-iteration flag so we don't print OK after a later FAIL
     # 1. Schema
     try:
         jsonschema.validate(m, schema)
@@ -42,16 +43,19 @@ for path in sorted(glob.glob('plugins/*/plugin.json')):
     if m['id'] != plugin_id:
         print(f"FAIL {path}: id={m['id']!r} but directory is {plugin_id!r}")
         ok = False
+        plugin_ok = False
     # 3. Declared files exist
     for field in ('script', 'routes', 'tour'):
         if field in m and not (plugin_dir / m[field]).exists():
             print(f"FAIL {path}: {field}={m[field]!r} but file missing")
             ok = False
+            plugin_ok = False
     if 'settings' in m and 'html' in m['settings']:
         h = m['settings']['html']
         if not (plugin_dir / h).exists():
             print(f"FAIL {path}: settings.html={h!r} but file missing")
             ok = False
+            plugin_ok = False
     for field in ('settings', 'diagnostics'):
         if field in m and 'server_files' in m[field]:
             for relpath in m[field]['server_files']:
@@ -61,7 +65,9 @@ for path in sorted(glob.glob('plugins/*/plugin.json')):
                 if '..' in relpath or relpath.startswith('/') or '\\' in relpath:
                     print(f"FAIL {path}: {field}.server_files contains unsafe path {relpath!r}")
                     ok = False
-    print(f"OK   {path}")
+                    plugin_ok = False
+    if plugin_ok:
+        print(f"OK   {path}")
 sys.exit(0 if ok else 1)
 PY
 ```
@@ -84,13 +90,13 @@ pytest tests/test_plugin_schema.py::test_schema_license_enum_subset_of_contribut
 
 Use the format from the script: `OK <path>` per validated manifest, `FAIL <path>: <reason>` per failure. Add a one-line summary:
 
-```
+```text
 Result: 3/3 plugins valid (OK app_tour_library, app_tour_settings, highway_3d)
 ```
 
 or
 
-```
+```text
 Result: 2/3 plugins valid; 1 FAIL (see above)
 ```
 

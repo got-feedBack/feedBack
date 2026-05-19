@@ -4,7 +4,7 @@ This directory holds [Claude Code](https://claude.ai/code) artifacts: skills, ru
 
 ## Layout
 
-```
+```text
 .claude/
 ├── agents/                            Subagents (invoked via @<name>)
 │   └── slopsmith-reviewer.md          Plugin-aware code review

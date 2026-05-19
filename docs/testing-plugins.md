@@ -4,7 +4,7 @@ Slopsmith has three test surfaces — Python unit/integration tests (pytest), JS
 
 ## Test layout
 
-```
+```text
 tests/
 ├── conftest.py          Shared pytest fixtures (isolate_logging)
 ├── test_plugins.py      Plugin loader + load_sibling + collision tests (includes reset_plugin_state)

@@ -6,7 +6,7 @@ This guide is the entry point. Each topic below has a dedicated doc — read wha
 
 ## Quickstart
 
-```
+```text
 plugins/my_plugin/
 ├── plugin.json          Manifest (required) — see docs/plugin-manifest.md
 ├── screen.html          Optional — markup mounted at #plugin-my_plugin

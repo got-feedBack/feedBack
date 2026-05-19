@@ -46,7 +46,7 @@ Run each item; structure the output as `PASS` / `FAIL` / `N/A` with file:line ci
 
 ## Output format
 
-```
+```text
 plugin-review: <plugin_id>
 =========================
 1. manifest validates                 PASS

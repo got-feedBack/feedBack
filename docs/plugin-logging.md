@@ -44,7 +44,7 @@ That logger inherits from the root `slopsmith` logger, which is configured by `l
 
 Look for your plugin's logger name in the console output:
 
-```
+```text
 INFO     slopsmith.plugin.my_plugin: plugin ready
 ```
 

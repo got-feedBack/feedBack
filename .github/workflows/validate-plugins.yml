@@ -67,4 +67,8 @@ jobs:
           PY
 
       - name: Run schema sanity tests
-        run: pytest tests/test_plugin_schema.py -v
+        # --noconftest skips tests/conftest.py, which imports structlog
+        # (not in requirements-test.txt). The schema tests don't use
+        # shared fixtures, so this is safe and avoids dragging the full
+        # runtime requirements into a 2 KB schema-validation job.
+        run: pytest tests/test_plugin_schema.py -v --noconftest

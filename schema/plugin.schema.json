@@ -92,8 +92,8 @@
           "type": "array",
           "items": {
             "type": "string",
-            "not": { "pattern": "^/|^[a-zA-Z]:|\\\\|(^|/)\\.\\.(/|$)" },
-            "description": "Relpath under context['config_dir']. No abs paths, no '..', no backslashes. Trailing '/' denotes a directory (recurse)."
+            "not": { "pattern": "^/|^[a-zA-Z]:|\\\\|(^|/)\\.\\.(/|$)|//|(^|/)\\.(/|$)|^\\." },
+            "description": "Relpath under context['config_dir']. No abs paths, no '..', no '//', no './', no leading dotfiles, no backslashes. Mirrors the runtime _validate_relpath rules in plugins/__init__.py so a schema-valid manifest is also load-time-valid. Trailing '/' denotes a directory (recurse)."
           },
           "uniqueItems": true,
           "description": "Opt-in for Settings export/import (slopsmith#113). Files included in user-triggered backups. See docs/plugin-manifest.md."
@@ -108,10 +108,10 @@
           "type": "array",
           "items": {
             "type": "string",
-            "not": { "pattern": "^/|^[a-zA-Z]:|\\\\|(^|/)\\.\\.(/|$)" }
+            "not": { "pattern": "^/|^[a-zA-Z]:|\\\\|(^|/)\\.\\.(/|$)|//|(^|/)\\.(/|$)|^\\." }
           },
           "uniqueItems": true,
-          "description": "Files copied verbatim into plugins/<id>/<relpath> inside the diagnostics bundle."
+          "description": "Files copied verbatim into plugins/<id>/<relpath> inside the diagnostics bundle. Path rules match the settings.server_files pattern (no abs paths, no '..', no '//', no './', no leading dotfiles, no backslashes)."
         },
         "callable": {
           "type": "string",

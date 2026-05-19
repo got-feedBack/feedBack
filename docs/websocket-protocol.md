@@ -9,7 +9,7 @@ Each connection receives the following JSON frames, roughly in this order:
 | Message | Shape | Description |
 |---------|-------|-------------|
 | `loading` | `{ type: 'loading', stage }` | Status/progress message during extraction or conversion. |
-| `song_info` | `{ type, title, artist, arrangement, arrangement_index, arrangements, duration, tuning, capo, format, audio_url, audio_error, stems }` | Song metadata. `arrangements` is the full list for the switcher. `audio_url` is `null` when audio is unavailable, in which case `audio_error` is non-null; otherwise `audio_error` is `null`. `stems` is always present — an empty array for non-sloppak songs or sloppak songs with no split stems. `tuning` is an array (6 for guitar, 4 for bass). |
+| `song_info` | `{ type, title, artist, arrangement, arrangement_index, arrangements, duration, tuning, capo, format, audio_url, audio_error, stems }` | Song metadata. `arrangements` is the full list for the switcher. `audio_url` is `null` when audio is unavailable, in which case `audio_error` is non-null; otherwise `audio_error` is `null`. `stems` is always present — an empty array for non-sloppak songs or sloppak songs with no split stems. `tuning` is an array whose length depends on the source arrangement (typically 6 for guitar, 4 for bass, but extended-range GP imports can be 7/8 for guitar or 5/6 for bass — use `highway.getStringCount()` for the authoritative count). |
 | `beats` | `{ type, data: [{ time, measure }] }` | Beat timestamps with measure numbers. |
 | `sections` | `{ type, data: [{ time, name }] }` | Named sections (Intro, Verse, Chorus, etc.). |
 | `anchors` | `{ type, data: [{ time, fret, width }] }` | Fret zoom anchors. |

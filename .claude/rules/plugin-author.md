@@ -32,7 +32,7 @@ These rules apply only when editing files under `plugins/**`. They encode the co
 ## State and config
 
 - **`localStorage` keys must be prefixed with the plugin id** to avoid collisions.
-- **`settings.server_files` declares config-dir paths the plugin wants included in the Settings export/import flow.** Relpaths only — no `..`, no abs paths, no backslashes. See [`docs/plugin-manifest.md`](../../docs/plugin-manifest.md).
+- **`settings.server_files` declares config-dir paths the plugin wants to include in the Settings export/import flow.** Relpaths only — no `..`, no abs paths, no backslashes. See [`docs/plugin-manifest.md`](../../docs/plugin-manifest.md).
 - **`diagnostics.server_files` / `diagnostics.callable`** declares what enters the Export Diagnostics bundle. Keep payloads under 100 KB and don't include secrets. See [`docs/plugin-diagnostics.md`](../../docs/plugin-diagnostics.md).
 
 ## Visualization specifics
