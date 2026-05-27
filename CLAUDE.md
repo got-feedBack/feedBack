@@ -199,6 +199,11 @@ usually an unrelated plugin's per-frame DOM work.
 
 Slopsmith supports two ways for a plugin to participate in the main player's visuals. They coexist; the setRenderer contract is the default for any viz that draws a highway-shaped surface, and overlays handle layered decorations on top.
 
+**Deeper references** (in [`docs/`](docs/)):
+- [`realtime-scoring-pipeline.md`](docs/realtime-scoring-pipeline.md) — end-to-end trace from audio sample → lit gem, across native engine, IPC, `note_detect`, highway, renderer.
+- [`note-state-provider.md`](docs/note-state-provider.md) — full contract for `setNoteStateProvider` / `bundle.getNoteState` (key formats, sustain semantics, alpha ownership).
+- [`visualization-feedback-guide.md`](docs/visualization-feedback-guide.md) — practical walkthrough with a minimal 2D Canvas example + troubleshooting decision tree.
+
 **Pick the right shape:**
 - Replacing the whole highway drawing on the existing highway canvas (your renderer owns its rendering context / resources; `createHighway()` still owns the canvas element and the rAF loop)? → **setRenderer** (section 1). Enters the viz picker. Works in both the main player and per-panel under splitscreen.
 - Adding a layer on top of whichever viz is active? → **Overlay** (section 2). Navbar toggle, not in the picker.
@@ -361,6 +366,8 @@ Reference: [fretboard plugin](https://github.com/got-feedback/feedback-plugin-fr
 A previous standalone-pane contract (`window.createMyVisualization({ container })` with its own WebSocket per pane) was used by splitscreen pre-Wave-C. It's been retired now that splitscreen calls `setRenderer` on per-panel `createHighway()` instances; if you find references in older plugin docs or external integration guides, those describe the legacy path.
 
 #### 3. Note-state provider — for scorers that want renderers to "light up" notes (slopsmith#254)
+
+> **Full reference**: [`docs/note-state-provider.md`](docs/note-state-provider.md) covers the contract in depth (key formats, sustain `'active'` vs `'hit'` semantics, alpha-ownership, common pitfalls). The summary below is the API at a glance.
 
 A scoring plugin (note_detect) can publish a per-note judgment so whichever renderer is active draws the **gem itself** lit on a correct hit, and keeps a sustain trail glowing while it's still being played correctly — instead of a separate overlay ring floating near the note.
 
