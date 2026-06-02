@@ -153,7 +153,7 @@ window.slopsmith.jobs.registerProvider({
   providerId: 'sloppak_converter.jobs',
   pluginId: 'sloppak_converter',
   label: 'Sloppak Converter',
-  jobTypes: ['psarc-to-sloppak'],
+  jobTypes: ['sloppak-convert'],
   actions: ['enqueue', 'inspect', 'cancel', 'retry', 'recover'],
   capacity: { maxRunning: 1, maxQueued: 20 },
   recoverySupport: { queued: true, running: false, paused: false },
@@ -173,7 +173,7 @@ const result = await window.slopsmith.capabilities.dispatch({
   command: 'enqueue',
   source: 'sloppak_converter',
   args: {
-    jobType: 'psarc-to-sloppak',
+    jobType: 'sloppak-convert',
     requester: 'sloppak_converter',
     authorization: 'user-action',
     target: { targetRef: 'song-target-abc123' },

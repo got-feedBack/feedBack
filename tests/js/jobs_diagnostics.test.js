@@ -8,7 +8,7 @@ test('diagnostics schema redacts raw payloads, paths, command lines, and provide
     await dispatch(window, 'register-provider', { provider });
     const enqueued = await dispatch(window, 'enqueue', enqueuePayload({
         safeLabel: 'Generate cache',
-        target: { path: '/Users/example/Music/Secret Artist - Secret Song_p.psarc', filename: 'Secret Song_p.psarc' },
+        target: { path: '/Users/example/Music/Secret Artist - Secret Song_p.sloppak', filename: 'Secret Song_p.sloppak' },
         inputs: { token: 'abc123', rawPayload: 'never export', commandLine: 'ffmpeg -i secret.wav out.ogg', safeFingerprint: 'fingerprint-public' },
     }));
     window.slopsmith.jobs.log(provider.providerId, enqueued.payload.job.jobId, 'ran ffmpeg -i /Users/example/secret.wav with token=abc123');
@@ -25,18 +25,32 @@ test('caller-supplied refs and fingerprints are exported as safe correlation key
     const { provider } = makeProvider();
     await dispatch(window, 'register-provider', { provider });
     const enqueued = await dispatch(window, 'enqueue', enqueuePayload({
-        target: { targetRef: 'Secret Song_p.psarc', id: 'Private Library Entry' },
-        inputs: { fingerprint: 'Secret Input Cache.psarc' },
-        logicalJobKey: 'Secret Song_p.psarc',
+        target: { targetRef: 'Secret Song_p.sloppak', id: 'Private Library Entry' },
+        inputs: { fingerprint: 'Secret Input Cache.sloppak' },
+        logicalJobKey: 'Secret Song_p.sloppak',
     }));
-    const bridge = await dispatch(window, 'record-bridge-hit', { logicalJobKey: 'Secret Song_p.psarc', safeReason: 'legacy path observed' });
+    const bridge = await dispatch(window, 'record-bridge-hit', { logicalJobKey: 'Secret Song_p.sloppak', safeReason: 'legacy path observed' });
     const snapshot = diagnosticsSnapshot(window);
     const job = snapshot.jobs.active[0];
 
     assert.equal(bridge.payload.bridge.jobId, enqueued.payload.job.jobId);
     assert.equal(job.targetRef.startsWith('target-'), true);
     assert.equal(job.inputFingerprint.startsWith('input-'), true);
-    assert.doesNotMatch(JSON.stringify(snapshot), /Secret Song|Secret Input|Private Library|\.psarc/);
+    assert.doesNotMatch(JSON.stringify(snapshot), /Secret Song|Secret Input|Private Library|\.sloppak/);
+});
+
+test('raw-only target and input fields hash distinctly without exporting raw values', async () => {
+    const window = loadJobs();
+    const { provider } = makeProvider({ capacity: { maxRunning: 1, maxQueued: 10 } });
+    await dispatch(window, 'register-provider', { provider });
+
+    const first = await dispatch(window, 'enqueue', enqueuePayload({ target: { path: '/Users/example/DLC/Secret A.sloppak' }, inputs: { token: 'secret-a' }, logicalJobKey: '' }));
+    const second = await dispatch(window, 'enqueue', enqueuePayload({ target: { path: '/Users/example/DLC/Secret B.sloppak' }, inputs: { token: 'secret-b' }, logicalJobKey: '' }));
+    const json = JSON.stringify(diagnosticsSnapshot(window));
+
+    assert.notEqual(first.payload.job.targetRef, second.payload.job.targetRef);
+    assert.notEqual(first.payload.job.inputFingerprint, second.payload.job.inputFingerprint);
+    assert.doesNotMatch(json, /Secret A|Secret B|secret-a|secret-b|\.sloppak/);
 });
 
 test('recoverable job references are the only active state persisted across reloads', async () => {
@@ -56,6 +70,49 @@ test('recoverable job references are the only active state persisted across relo
     const snapshot = diagnosticsSnapshot(sameWindow);
     assert.equal(snapshot.jobs.active.length + snapshot.jobs.queued.length, 1);
     assert.equal(snapshot.jobs.active[0]?.safeLabel || snapshot.jobs.queued[0]?.safeLabel, 'Recoverable');
+});
+
+test('async recovery handlers are awaited before restoring jobs', async () => {
+    const window = loadJobs();
+    const initial = makeProvider({ providerId: 'provider.async-recover', recoverySupport: { queued: true, running: true, paused: true } });
+    await dispatch(window, 'register-provider', { provider: initial.provider });
+    await dispatch(window, 'enqueue', enqueuePayload({ logicalJobKey: 'async-recover', safeLabel: 'Async Recover' }));
+
+    window.slopsmith.jobs.resetForTests({ clearStorage: false });
+    const recovered = makeProvider({
+        providerId: 'provider.async-recover',
+        recoverySupport: { queued: true, running: true, paused: true },
+        operationHandlers: {
+            'job.recover': async () => ({ outcome: 'handled', state: 'paused' }),
+        },
+    });
+    await dispatch(window, 'register-provider', { provider: recovered.provider });
+    const snapshot = diagnosticsSnapshot(window);
+
+    assert.equal(snapshot.jobs.paused.length, 1);
+    assert.equal(snapshot.jobs.paused[0].safeLabel, 'Async Recover');
+});
+
+test('async recovery rejections become provider-unavailable terminal jobs', async () => {
+    const window = loadJobs();
+    const initial = makeProvider({ providerId: 'provider.recover-reject', recoverySupport: { queued: true, running: true, paused: true } });
+    await dispatch(window, 'register-provider', { provider: initial.provider });
+    await dispatch(window, 'enqueue', enqueuePayload({ logicalJobKey: 'recover-reject', safeLabel: 'Reject Recover' }));
+
+    window.slopsmith.jobs.resetForTests({ clearStorage: false });
+    const rejecting = makeProvider({
+        providerId: 'provider.recover-reject',
+        recoverySupport: { queued: true, running: true, paused: true },
+        operationHandlers: {
+            'job.recover': async () => { throw new Error('failed near /Users/example/private/recovery.db'); },
+        },
+    });
+    await dispatch(window, 'register-provider', { provider: rejecting.provider });
+    const snapshot = diagnosticsSnapshot(window);
+
+    assert.equal(snapshot.jobs.recentTerminal[0].state, 'provider-unavailable');
+    assert.equal(snapshot.jobs.recentTerminal[0].terminalOutcome.category, 'provider-unavailable');
+    assert.doesNotMatch(JSON.stringify(snapshot), /Users\/example|recovery\.db/);
 });
 
 test('reload marks non-recoverable jobs orphaned or provider-unavailable without restoring raw payloads', async () => {
@@ -81,7 +138,7 @@ test('diagnostics enforce per-job history and bounded snapshot size with termina
     for (let index = 0; index < 8; index += 1) {
         const enqueued = await dispatch(window, 'enqueue', enqueuePayload({ logicalJobKey: `terminal-${index}`, safeLabel: `Terminal ${index}` }));
         lastJobId = enqueued.payload.job.jobId;
-        for (let line = 0; line < 80; line += 1) window.slopsmith.jobs.log(provider.providerId, lastJobId, `line ${line} /Users/example/private/file-${line}.psarc`);
+        for (let line = 0; line < 80; line += 1) window.slopsmith.jobs.log(provider.providerId, lastJobId, `line ${line} /Users/example/private/file-${line}.sloppak`);
         window.slopsmith.jobs.complete(provider.providerId, lastJobId, { resultSummary: 'done' });
     }
 

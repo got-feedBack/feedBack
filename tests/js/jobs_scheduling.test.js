@@ -75,7 +75,7 @@ test('provider enqueue exceptions fail safely without leaking private details', 
     const window = loadJobs();
     const { provider } = makeProvider({
         operationHandlers: {
-            'job.enqueue': () => { throw new Error('failed near /Users/example/private/song.psarc token=abc123'); },
+            'job.enqueue': () => { throw new Error('failed near /Users/example/private/song.sloppak token=abc123'); },
         },
     });
     await dispatch(window, 'register-provider', { provider });
@@ -87,7 +87,7 @@ test('provider enqueue exceptions fail safely without leaking private details', 
     assert.equal(result.outcome, 'failed');
     assert.equal(snapshot.jobs.active.length, 0);
     assert.equal(snapshot.jobs.recentTerminal[0].terminalOutcome.category, 'provider-failure');
-    assert.doesNotMatch(JSON.stringify(snapshot), /Users\/example|song\.psarc|abc123/);
+    assert.doesNotMatch(JSON.stringify(snapshot), /Users\/example|song\.sloppak|abc123/);
 });
 
 test('provider enqueue failed results become terminal failures', async () => {
@@ -126,6 +126,20 @@ test('async provider enqueue rejections become terminal provider failures', asyn
     assert.equal(snapshot.jobs.active.length, 0);
     assert.equal(snapshot.jobs.recentTerminal[0].terminalOutcome.category, 'provider-failure');
     assert.doesNotMatch(JSON.stringify(snapshot), /Users\/example|cache\.bin/);
+});
+
+test('retry accepts approved continuation using the stored scope key', async () => {
+    const window = loadJobs();
+    const { provider } = makeProvider({ providerId: 'provider.retry-continuation' });
+    await dispatch(window, 'register-provider', { provider });
+    const enqueued = await dispatch(window, 'enqueue', enqueuePayload({ providerId: provider.providerId, logicalJobKey: 'retry-continuation' }));
+    const jobId = enqueued.payload.job.jobId;
+    const approvalScopeKey = window.slopsmith.jobs._test.jobs.get(jobId).approvalScopeKey;
+
+    window.slopsmith.jobs.fail(provider.providerId, jobId, { category: 'provider-failure', safeReason: 'retryable failure', retryable: true });
+    const retried = await dispatch(window, 'retry', { jobId, authorization: 'approved-continuation', approvalScopeKey });
+
+    assert.equal(retried.status, 'retry-started');
 });
 
 test('cancel, pause, resume, retry, and stale transitions use canonical outcomes', async () => {

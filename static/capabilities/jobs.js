@@ -110,7 +110,7 @@
             .replace(/[A-Za-z]:\\[^\s]+/g, '[path]')
             .replace(/https?:\/\/[^\s?#]+[^\s]*/gi, '[url]')
             .replace(/\b(token|secret|password|api[_-]?key)=([^\s&]+)/gi, '$1=[redacted]')
-            .replace(/\b[A-Za-z0-9._%+-]+\.(psarc|sloppak|wav|mp3|ogg|flac|zip|sqlite|db)\b/gi, '[file]')
+            .replace(/\b[A-Za-z0-9._%+-]+\.(sloppak|wav|mp3|ogg|flac|zip|sqlite|db)\b/gi, '[file]')
             .replace(/\b(raw[-_ ]?artifact|raw[-_ ]?audio|audio[-_ ]?buffer|sample[s]?|waveform[s]?|recording[s]?|subprocess|native[-_ ]?handle|process[-_ ]?handle)\b/gi, '[private]')
             .replace(/\b(?:ffmpeg|vgmstream|rscli|python|node|uvicorn)\s+[^\n\r]*/gi, '[command]');
     }
@@ -129,6 +129,23 @@
         if (!normalized) return '';
         if (new RegExp(`^${prefix}-[A-Za-z0-9_.:-]+$`).test(normalized)) return normalized.slice(0, 96);
         return `${prefix}-${_hash(normalized)}`;
+    }
+
+    function _rawHashSeed(value, fallback = 'unknown') {
+        const seen = typeof WeakSet === 'function' ? new WeakSet() : null;
+        try {
+            const raw = JSON.stringify(value, (_key, item) => {
+                if (typeof item === 'function') return '[function]';
+                if (item && typeof item === 'object' && seen) {
+                    if (seen.has(item)) return '[circular]';
+                    seen.add(item);
+                }
+                return item;
+            });
+            return raw || fallback;
+        } catch (_) {
+            return fallback;
+        }
     }
 
     function _safeValue(value, depth = 0) {
@@ -258,14 +275,14 @@
         const source = _plainObject(target);
         if (source.safeRef || source.safeTargetRef || source.safeFingerprint) return _safeId(source.safeRef || source.safeTargetRef || source.safeFingerprint, 'target-unknown');
         if (source.targetRef && /^target-[A-Za-z0-9_.:-]+$/.test(String(source.targetRef))) return String(source.targetRef).slice(0, 96);
-        const seed = JSON.stringify(_safeValue(source)) || source.kind || 'unknown';
+        const seed = _rawHashSeed(source, source.kind || 'unknown');
         return `target-${_hash(seed)}`;
     }
 
     function _inputFingerprint(inputs) {
         const source = _plainObject(inputs);
         if (source.safeFingerprint) return _safeId(source.safeFingerprint, 'input-unknown');
-        return `input-${_hash(JSON.stringify(_safeValue(source)))}`;
+        return `input-${_hash(_rawHashSeed(source, 'inputs'))}`;
     }
 
     function _approvalScope(args, providerId) {
@@ -497,6 +514,12 @@
         return { outcome: 'handled' };
     }
 
+    async function _settleProviderResult(result, operation) {
+        if (!_isPromiseLike(result)) return result;
+        try { return await result; }
+        catch (err) { return _providerException(operation, err); }
+    }
+
     function _compatibleProviders(jobType) {
         return Array.from(providers.values()).filter(provider => {
             if (!provider.jobTypes.includes(jobType)) return false;
@@ -536,7 +559,7 @@
         if (args.authorization === 'user-action') return true;
         if (args.authorization === 'approved-continuation') {
             const scope = _approvalScope(args, providerId);
-            return _scopeKey(scope) === _safeId(args.approvalScopeKey || args.approvalKey || '', '');
+            return _scopeKey(scope) === _string(args.approvalScopeKey || args.approvalKey, '');
         }
         return false;
     }
@@ -615,7 +638,7 @@
             targetRef: _safeId(ref.targetRef, 'target-unknown'),
             inputFingerprint: _safeId(ref.inputFingerprint, 'input-unknown'),
             approvalScope: null,
-            approvalScopeKey: _safeId(ref.approvalScopeKey, ''),
+            approvalScopeKey: _string(ref.approvalScopeKey, ''),
             authorization: 'recovered',
             priority: _priority(ref.priority),
             safeLabel: _safeText(ref.safeLabel || 'Recovered job', 'Recovered job', MAX_LABEL),
@@ -637,7 +660,7 @@
         return job;
     }
 
-    function _recoverRefsForProvider(provider) {
+    async function _recoverRefsForProvider(provider) {
         for (const [jobId, ref] of Array.from(pendingRecoverableRefs.entries())) {
             if (ref.providerId !== provider.providerId || jobs.has(jobId)) continue;
             const recoverState = ref.state === STATES.PAUSED ? STATES.PAUSED : (ref.state === STATES.RUNNING ? STATES.RUNNING : STATES.QUEUED);
@@ -649,11 +672,11 @@
                 continue;
             }
             let nextState = recoverState;
-            const recoveryResult = _callProvider(provider, 'job.recover', { ref });
+            const recoveryResult = await _settleProviderResult(_callProvider(provider, 'job.recover', { ref }), 'recover');
             if (_providerCallFailed(recoveryResult)) {
                 const job = _jobFromRecoveryRef(ref, STATES.PROVIDER_UNAVAILABLE);
                 jobs.set(job.jobId, job);
-                _terminal(job, 'provider-unavailable', 'provider-unavailable', recoveryResult.safeReason || 'Provider recovery callback failed', false);
+                _terminal(job, 'provider-unavailable', 'provider-unavailable', recoveryResult.safeReason || recoveryResult.reason || 'Provider recovery callback failed', false);
                 _emitJobs('provider-unavailable', { job: _jobSummary(job, { includeHistory: false }) });
                 pendingRecoverableRefs.delete(jobId);
                 continue;
@@ -668,7 +691,7 @@
         _persistRecoverableRefs();
     }
 
-    function _registerProviderCommand(ctx) {
+    async function _registerProviderCommand(ctx) {
         const provider = _normalizeProvider(ctx.payload && ctx.payload.provider || ctx.payload);
         if (!provider.providerId || !provider.jobTypes.length) {
             _rememberOutcome('register-provider', 'validation-failed', { safeReason: 'providerId and jobTypes are required' });
@@ -677,7 +700,7 @@
         if (provider.version !== 1 || provider.availability === 'incompatible') provider.availability = 'incompatible';
         const existing = providers.get(provider.providerId);
         providers.set(provider.providerId, { ...(existing || {}), ...provider, lastSeenAt: _now() });
-        _recoverRefsForProvider(provider);
+        await _recoverRefsForProvider(provider);
         _rememberOutcome('register-provider', provider.availability === 'incompatible' ? 'incompatible-version' : 'handled', { providerId: provider.providerId, safeReason: provider.safeReason });
         _emitJobs('provider-registered', { provider: _providerSummary(provider) });
         return provider.availability === 'incompatible'
@@ -839,7 +862,7 @@
         if (!job.retryable) return _result('unsupported-operation', { job: _jobSummary(job) }, 'job is not retryable');
         if (job.attempts.some(attempt => !TERMINAL_STATES.has(attempt.state))) return _result('stale', { job: _jobSummary(job) }, 'retry already active');
         if (args.authorization !== 'user-action') {
-            if (args.authorization !== 'approved-continuation' || _safeId(args.approvalScopeKey || args.approvalKey, '') !== job.approvalScopeKey) {
+            if (args.authorization !== 'approved-continuation' || _string(args.approvalScopeKey || args.approvalKey, '') !== job.approvalScopeKey) {
                 return _result(args.authorization ? 'denied' : 'user-action-required', { job: _jobSummary(job) }, 'matching approval required for retry');
             }
         }

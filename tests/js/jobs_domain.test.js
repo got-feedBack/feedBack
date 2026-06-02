@@ -44,12 +44,26 @@ test('privileged enqueue requires approval before provider work starts', async (
     assert.equal(diagnosticsContributions(window).jobs.schema, 'slopsmith.jobs.diagnostics.v1');
 });
 
+test('approved continuation enqueue matches the stored approval scope key', async () => {
+    const window = loadJobs();
+    const { calls, provider } = makeProvider({ capacity: { maxRunning: 2, maxQueued: 10 } });
+    await dispatch(window, 'register-provider', { provider });
+    const request = enqueuePayload({ target: { path: '/Users/example/DLC/Song A.sloppak' }, inputs: { token: 'secret-a' }, logicalJobKey: '' });
+    const first = await dispatch(window, 'enqueue', request);
+    const approvalScopeKey = window.slopsmith.jobs._test.jobs.get(first.payload.job.jobId).approvalScopeKey;
+
+    const continued = await dispatch(window, 'enqueue', { ...request, authorization: 'approved-continuation', approvalScopeKey });
+
+    assert.equal(continued.status, 'applied');
+    assert.equal(calls.length, 2);
+});
+
 test('approved enqueue queues and starts with redaction-safe public job fields', async () => {
     const window = loadJobs();
     const { calls, provider } = makeProvider({ capacity: { maxRunning: 1, maxQueued: 10 } });
     await dispatch(window, 'register-provider', { provider });
 
-    const result = await dispatch(window, 'enqueue', enqueuePayload({ target: { path: '/Users/example/DLC/Secret.psarc' }, inputs: { token: 'secret', safeFingerprint: 'fingerprint-1' } }));
+    const result = await dispatch(window, 'enqueue', enqueuePayload({ target: { path: '/Users/example/DLC/Secret.sloppak' }, inputs: { token: 'secret', safeFingerprint: 'fingerprint-1' } }));
     const job = result.payload.job;
 
     assert.equal(result.status, 'applied');
@@ -57,7 +71,7 @@ test('approved enqueue queues and starts with redaction-safe public job fields',
     assert.equal(job.targetRef.startsWith('target-'), true);
     assert.equal(job.inputFingerprint, 'fingerprint-1');
     assert.equal(calls.length, 1);
-    assert.doesNotMatch(JSON.stringify(diagnosticsSnapshot(window)), /Secret\.psarc|token|secret/);
+    assert.doesNotMatch(JSON.stringify(diagnosticsSnapshot(window)), /Secret\.sloppak|token|secret/);
 });
 
 test('list and inspect are prompt-free and do not invoke provider callbacks', async () => {
