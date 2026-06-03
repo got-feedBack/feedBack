@@ -16,7 +16,7 @@ plugins/my_plugin/
 └── requirements.txt     Optional — pip deps auto-installed on load
 ```
 
-Start every new plugin by describing its Slopsmith-facing behavior in the manifest. A plugin with no behavior beyond metadata can be this small:
+Start every plugin by describing its Slopsmith-facing behavior in the manifest with `standards: ["capability-pipelines.v1"]`, native `capabilities`, and redaction-safe `ui` metadata. A plugin with no app-facing behavior beyond metadata can still be this small:
 
 ```json
 {
@@ -26,7 +26,7 @@ Start every new plugin by describing its Slopsmith-facing behavior in the manife
 }
 ```
 
-Any plugin that participates in app behavior should also declare `standards: ["capability-pipelines.v1"]`, native `capabilities`, and redaction-safe `ui` metadata. Capability declarations are the source of truth for diagnostics, the Capability Inspector, and migration tooling.
+Capability declarations are the source of truth for diagnostics, the Capability Inspector, and plugin tooling. Treat missing capability metadata as an intentional exception for metadata-only or transitional plugin manifests.
 
 ## Topics
 
@@ -49,7 +49,7 @@ Any plugin that participates in app behavior should also declare `standards: ["c
 ## General guidelines
 
 - Wrap your plugin code in an IIFE: `(function () { 'use strict'; ... })();`
-- Declare `standards: ["capability-pipelines.v1"]` and native `capabilities` when your plugin participates in a Slopsmith capability domain.
+- Declare `standards: ["capability-pipelines.v1"]` and native `capabilities` for the plugin's Slopsmith-facing behavior.
 - Use `ui` / `ui_contributions` for plugin-owned UI surfaces so the host can attribute them in diagnostics and support bundles.
 - Use `localStorage` for user-facing settings, prefixed with your plugin id.
 - Prefer native capability commands, events, and provider registration over private globals. If a domain you need is not active yet, document the gap in the PR instead of baking in a new private integration.

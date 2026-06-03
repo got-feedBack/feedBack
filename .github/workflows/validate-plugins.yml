@@ -34,7 +34,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-test.txt
 
-      - name: Validate every in-tree plugin.json against capability-aware schema
+      - name: Validate every in-tree plugin.json against capability schema
         run: |
           python - <<'PY'
           import glob, json, sys

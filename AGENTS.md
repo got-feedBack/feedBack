@@ -119,7 +119,7 @@ Slopsmith supports two:
 
 ## Plugin authoring — see [`docs/PLUGIN_AUTHORING.md`](docs/PLUGIN_AUTHORING.md)
 
-Plugins are the primary extension point. Each lives in `plugins/<name>/` with a `plugin.json` manifest. Curated plugins must be AGPL-3.0 or AGPL-compatible — see [`CONTRIBUTING.md`](CONTRIBUTING.md) for the allowlist. Manifest is validated in CI against [`schema/plugin.schema.json`](schema/plugin.schema.json), including `capability-pipelines.v1` metadata for native capability declarations.
+Plugins are the primary extension point. Each lives in `plugins/<name>/` with a `plugin.json` manifest that declares its `capability-pipelines.v1` participation. Curated plugins must be AGPL-3.0 or AGPL-compatible — see [`CONTRIBUTING.md`](CONTRIBUTING.md) for the allowlist. Manifest is validated in CI against [`schema/plugin.schema.json`](schema/plugin.schema.json), including capability metadata.
 
 Topic | Doc
 --- | ---
@@ -140,7 +140,7 @@ Tuning the note_detect plugin | [`docs/note-detect-tuning.md`](docs/note-detect-
 
 1. **`load_sibling` for cross-file backend plugins.** Bare `from extractor import X` in `routes.py` collides across plugins because Python caches by module name in `sys.modules`. Use `context["load_sibling"]("extractor")` — gets a per-plugin namespaced module. Full explanation: [`docs/plugin-sibling-imports.md`](docs/plugin-sibling-imports.md).
 
-2. **Capability declarations are the integration map.** New plugin behavior should be visible in `standards`, `capabilities`, and `ui` metadata before runtime code hydrates. If the domain you need is missing, document it as a capability gap instead of adding another private global contract.
+2. **Capability declarations are the integration map.** Plugin behavior should be visible in `standards`, `capabilities`, and `ui` metadata before runtime code hydrates. If the domain you need is missing, document it as a capability gap instead of adding another private global contract.
 
 3. **Highway flex layout.** `#highway` has `flex:1` in the player. Hiding it with `display:none` removes the flex child and `#player-controls` floats to the top. If you must hide the highway, add `margin-top: auto` to the controls div.
 
@@ -169,7 +169,7 @@ python -c "import json,glob,jsonschema; s=json.load(open('schema/plugin.schema.j
 - **No frontend frameworks.** Vanilla JS, fetch API, Tailwind classes. Don't add React/Vue/Svelte.
 - **Backend logging.** Plugin `routes.py` must use `context["log"]`, never `print()`. See [`docs/plugin-logging.md`](docs/plugin-logging.md).
 - **Plugin Python imports.** Multi-file backends use `context["load_sibling"]("<module>")`, not bare `from <module> import`. See [`docs/plugin-sibling-imports.md`](docs/plugin-sibling-imports.md).
-- **Capability metadata.** New plugin integrations should declare `standards: ["capability-pipelines.v1"]` plus redaction-safe `capabilities`/`ui` metadata as the primary integration contract.
+- **Capability metadata.** Plugin integrations declare `standards: ["capability-pipelines.v1"]` plus redaction-safe `capabilities`/`ui` metadata as the primary integration contract.
 - **Spec-kit owns `.specify/` and `specs/`.** Don't modify those without explicit instruction; the `/speckit-*` skills own that surface.
 
 ## Tool-specific surfaces (optional reading)

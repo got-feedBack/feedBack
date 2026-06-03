@@ -143,7 +143,7 @@ def test_in_tree_manifest_id_matches_directory(manifest_path: str) -> None:
 
 
 def test_capability_manifest_metadata_validates(schema: dict) -> None:
-    """Capability-aware manifests should validate alongside runtime loader fields."""
+    """Capability-declared manifests should validate alongside runtime loader fields."""
     manifest = {
         "id": "capability_example",
         "name": "Capability Example",

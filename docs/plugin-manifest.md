@@ -65,9 +65,9 @@ Plain semver string. Advisory only — the plugin loader does not consume this. 
 
 Advisory metadata for plugin authors. Not consumed by the loader.
 
-### `standards` (string[], optional)
+### `standards` (string[], expected)
 
-Versioned contracts the plugin participates in. New plugins should declare `"capability-pipelines.v1"` when they include native `capabilities`, `ui`, or related metadata.
+Versioned contracts the plugin participates in. Plugin manifests are expected to declare `"capability-pipelines.v1"` for Slopsmith-facing behavior and metadata. Omit it only for metadata-only or transitional manifests with no capability participation yet.
 
 Declare `"plugin-runtime-idempotent.v1"` only when repeated script hydration cannot duplicate wrappers, listeners, timers, DOM roots, diagnostics contributors, jobs, media nodes, or capability participants.
 
@@ -143,9 +143,9 @@ Example:
 
 Contribution ids must be stable and unique per plugin. Keep metadata redaction-safe: no settings values, DOM handles, local paths, callbacks, or private payloads.
 
-### `capabilities` (object, optional)
+### `capabilities` (object, expected for app-facing behavior)
 
-Native `capability-pipelines.v1` declarations keyed by capability domain. They describe what the plugin owns, provides, requests, observes, or emits before the runtime script hydrates.
+Native `capability-pipelines.v1` declarations keyed by capability domain. They describe what the plugin owns, provides, requests, observes, or emits before the runtime script hydrates, and are the default way plugin behavior is made visible to Slopsmith.
 
 ```json
 {

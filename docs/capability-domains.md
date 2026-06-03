@@ -51,7 +51,7 @@ Backend route metadata should support a declared capability domain. A generic `b
 
 Plugins that call `context["register_library_provider"](...)` are attributed to the loading plugin id in `/api/library/providers` as `owner_plugin_id`. The browser library capability module at [static/capabilities/library.js](../static/capabilities/library.js) owns the `library` domain as a `provider-coordinator`: it refreshes `/api/library/providers`, registers the built-in `local` provider as `core.library.local`, and registers plugin-backed providers under their `owner_plugin_id` when one is known. Provider manifests should still declare the `library` capability so diagnostics and the bundled inspector can show intended relationships before the backend route code runs.
 
-Route-only external plugins that participate in library workflows without registering a browsable provider should declare requester/observer intent instead of provider ownership when they adopt this contract in their own repositories. This PR documents the generic shape only: such plugins use `library` requester/observer `requests` and `observes` declarations and do not appear as providers, owners, or separate `backend.routes` domains.
+Route-only external plugins that participate in library workflows without registering a browsable provider declare requester/observer intent instead of provider ownership when they adopt this contract in their own repositories. This PR documents the generic shape only: such plugins use `library` requester/observer `requests` and `observes` declarations and do not appear as providers, owners, or separate `backend.routes` domains.
 
 ```json
 {

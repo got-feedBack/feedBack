@@ -8,7 +8,7 @@ Claude Code memory file. This repo's canonical project orientation lives in [`AG
 
 The rest of this file is content that *only* makes sense for Claude Code (other AI tools have their own incompatible automation mechanisms). Skills, subagent, rule, and settings live under [`.claude/`](.claude/):
 
-- [`.claude/skills/plugin-scaffold/`](.claude/skills/plugin-scaffold/SKILL.md) - generates a capability-aware plugin skeleton.
+- [`.claude/skills/plugin-scaffold/`](.claude/skills/plugin-scaffold/SKILL.md) - generates a plugin skeleton with capability-pipelines metadata.
 - [`.claude/skills/plugin-validate/`](.claude/skills/plugin-validate/SKILL.md) - validates `plugin.json` against `schema/plugin.schema.json` locally before push.
 - [`.claude/skills/speckit-*/`](.claude/skills/) - spec-kit skills (auto-generated from `.specify/`; don't edit manually).
 - [`.claude/rules/plugin-author.md`](.claude/rules/plugin-author.md) - glob-scoped to `plugins/**`; encodes the contracts from `docs/PLUGIN_AUTHORING.md` so suggestions don't drift from them.

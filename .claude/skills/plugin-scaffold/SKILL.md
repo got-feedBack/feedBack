@@ -1,6 +1,6 @@
 ---
 name: plugin-scaffold
-description: Scaffold a new capability-aware Slopsmith plugin skeleton. USE WHEN the user asks to create a new plugin, scaffold a plugin, bootstrap a plugin, new visualization plugin, new overlay plugin, new settings-only plugin, plugin starter, plugin skeleton. Args needed - plugin slug (snake_case) and type (visualization / overlay / settings-only / routes-only). Generates plugins/<id>/ with plugin.json, capability-pipelines metadata, screen.js, and optional routes.py / settings.html / Playwright test stub matching the requested type.
+description: Scaffold a Slopsmith plugin skeleton with capability-pipelines metadata. USE WHEN the user asks to create a new plugin, scaffold a plugin, bootstrap a plugin, new visualization plugin, new overlay plugin, new settings-only plugin, plugin starter, plugin skeleton. Args needed - plugin slug (snake_case) and type (visualization / overlay / settings-only / routes-only). Generates plugins/<id>/ with plugin.json, capability-pipelines metadata, screen.js, and optional routes.py / settings.html / Playwright test stub matching the requested type.
 ---
 
 # plugin-scaffold

@@ -100,7 +100,7 @@ A plugin that registers a remote client or generated library source declares its
 
 ## Library Requester And Observer
 
-A route-only wrapper that uses the library capability without registering a browsable provider should declare requester/observer intent instead of provider ownership. This is a generic manifest shape for external plugins to adopt in their own repositories; it does not make the wrapper part of this PR's delivered domain set.
+A route-only wrapper that uses the library capability without registering a browsable provider declares requester/observer intent instead of provider ownership. This is a generic manifest shape for external plugins to adopt in their own repositories; it does not make the wrapper part of this PR's delivered domain set.
 
 ```json
 {
@@ -149,7 +149,7 @@ Native audio-mix fader providers should register a stable participant id and fad
 
 ## Audio Input And Monitoring Requester
 
-Plugins that need live instrument input should declare requester/observer intent and let the host expose redaction-safe source identity. Diagnostics must not contain raw device labels, stable hardware ids, or audio buffers.
+Plugins that need live instrument input declare requester/observer intent and let the host expose redaction-safe source identity. Diagnostics must not contain raw device labels, stable hardware ids, or audio buffers.
 
 ```json
 {
@@ -299,7 +299,7 @@ The Stems plugin remains the provider/owner of actual stem playback state. `core
 
 ## Playback Requester And Observer
 
-Plugins that need to inspect or coordinate song transport should declare `playback` requester/observer intent and use the capability dispatch surface. Raw media handles stay private to core; diagnostics expose only pseudonymous targets, sanitized timing, route, loop, requester, observer, and recent outcome summaries.
+Plugins that need to inspect or coordinate song transport declare `playback` requester/observer intent and use the capability dispatch surface. Raw media handles stay private to core; diagnostics expose only pseudonymous targets, sanitized timing, route, loop, requester, observer, and recent outcome summaries.
 
 ```json
 {
@@ -347,6 +347,6 @@ if (state.status !== 'idle') {
 
 Some domain names are reserved for expected future contracts, but they are not registered in the runtime graph yet. For example, `ui.player-panels` is documented as a likely panel-host surface, but Slopsmith does not currently expose a capability command for panel contributions. See [capability-roadmap.md](capability-roadmap.md) for the PR1 domain set and deferred-domain checklist.
 
-Plugins should not declare future expansion domains until the corresponding host workflow ships. For current integrations, prefer active domains such as `library`, `playback`, `audio-mix`, `audio-input`, `audio-monitoring`, or `stems` intent matching the recipes above.
+Do not declare future expansion domains until the corresponding host workflow ships. For current integrations, use active domains such as `library`, `playback`, `audio-mix`, `audio-input`, `audio-monitoring`, or `stems` intent matching the recipes above.
 
 Invalid capability metadata is excluded from the capability graph. The `library` workflow is native in PR1 and does not use compatibility shim metadata. Unsupported `capability-pipelines` versions are reported as incompatible and their runtime handlers must not execute.
