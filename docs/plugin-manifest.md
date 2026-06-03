@@ -205,6 +205,8 @@ SPDX identifier. Contributions must use `AGPL-3.0-only`. See [CONTRIBUTING.md](.
 - `load_sibling(name)` — loads a sibling module from this plugin's directory under a unique, namespaced module name. See [plugin-sibling-imports.md](plugin-sibling-imports.md).
 - `log` — stdlib `logging.Logger` namespaced to `slopsmith.plugin.<id>`. Pre-configured with the app-wide level, format (including JSON mode), and correlation IDs. Use this for all backend plugin output instead of `print()`. See [plugin-logging.md](plugin-logging.md).
 
+Prefer native capability declarations and provider registration for Slopsmith-facing behavior. Backend plugins should not open ad hoc SQLite connections to core databases or treat database tables as a public integration surface. If a legacy or core-provided route path already needs metadata access through `context["meta_db"]`, use the shared `MetadataDB` instance and its synchronized methods only; do not bypass its `threading.Lock` protection with direct SQLite access.
+
 Example:
 
 ```python

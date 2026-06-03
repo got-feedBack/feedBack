@@ -56,4 +56,6 @@ Capability declarations are the source of truth for diagnostics, the Capability 
 
 ## Licensing for curated plugins
 
-Plugins submitted for inclusion in the curated list must be AGPL-3.0 or AGPL-compatible (MIT, BSD, Apache-2.0). See [CONTRIBUTING.md](../CONTRIBUTING.md) for the full policy. The `plugin.json` schema enforces this via the `license` field enum — see [plugin-manifest.md](plugin-manifest.md).
+Plugins submitted for inclusion in Slopsmith must use AGPL-3.0-only. See [CONTRIBUTING.md](../CONTRIBUTING.md) for the full policy. The `plugin.json` schema enforces this via the `license` field enum — see [plugin-manifest.md](plugin-manifest.md).
+
+Add an `SPDX-License-Identifier: AGPL-3.0-only` comment to plugin source files (`screen.js`, `routes.py`, helper modules, and similar authored code) so the manifest license and source-file metadata stay aligned.
