@@ -310,7 +310,7 @@ def note_from_wire(d: dict, time: float | None = None) -> Note:
         right_hand=_wire_int_optional(d.get("rh"), -1),
         pick_direction=_wire_int_optional(d.get("pkd"), -1),
         ignore=bool(d.get("ig", False)),
-        staff=int(d.get("stf", -1)),
+        staff=_wire_int_optional(d.get("stf"), -1),
     )
 
 
