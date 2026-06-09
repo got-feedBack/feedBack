@@ -77,6 +77,69 @@ test('approved enqueue queues and starts with redaction-safe public job fields',
     assert.doesNotMatch(JSON.stringify(diagnosticsSnapshot(window)), /Secret\.sloppak|token|secret/);
 });
 
+test('provider-private enqueue payload reaches only the provider callback', async () => {
+    const window = loadJobs();
+    let privatePayload = null;
+    const { provider } = makeProvider({
+        operationHandlers: {
+            'job.enqueue': request => {
+                privatePayload = request.providerPayload;
+                return { outcome: 'handled' };
+            },
+        },
+    });
+    await dispatch(window, 'register-provider', { provider });
+
+    const result = await dispatch(window, 'enqueue', enqueuePayload({
+        providerPayload: { filename: '/Users/example/DLC/Secret Song.psarc', token: 'abc123' },
+        target: { safeRef: 'target-secret-song' },
+        inputs: { safeFingerprint: 'input-secret-song' },
+    }));
+
+    assert.equal(result.status, 'applied');
+    assert.deepEqual(privatePayload, { filename: '/Users/example/DLC/Secret Song.psarc', token: 'abc123' });
+    assert.doesNotMatch(JSON.stringify(result.payload.job), /Secret Song|abc123|filename/);
+    assert.doesNotMatch(JSON.stringify(diagnosticsSnapshot(window)), /Secret Song|abc123|filename/);
+});
+
+test('adopted provider-owned jobs do not invoke enqueue handlers', async () => {
+    const window = loadJobs();
+    const { calls, provider } = makeProvider({ providerId: 'provider.backend', capacity: { maxRunning: 1, maxQueued: 10 } });
+    await dispatch(window, 'register-provider', { provider });
+
+    const adopted = await dispatch(window, 'adopt', enqueuePayload({
+        providerId: 'provider.backend',
+        jobId: 'backend-job-1',
+        state: 'queued',
+        logicalJobKey: 'legacy-backend-job-1',
+        safeLabel: 'Convert existing backend row',
+    }));
+    const native = await dispatch(window, 'enqueue', enqueuePayload({ providerId: 'provider.backend', logicalJobKey: 'native-after-adopt' }));
+
+    assert.equal(adopted.status, 'applied');
+    assert.equal(adopted.payload.job.externallyManaged, true);
+    assert.equal(adopted.payload.job.state, 'queued');
+    assert.equal(native.status, 'applied');
+    assert.equal(native.payload.job.state, 'running');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][1].job.jobId, native.payload.job.jobId);
+});
+
+test('provider can report a running job as cancelled', async () => {
+    const window = loadJobs();
+    const { provider } = makeProvider({ providerId: 'provider.cancelled' });
+    await dispatch(window, 'register-provider', { provider });
+    const enqueued = await dispatch(window, 'enqueue', enqueuePayload({ providerId: provider.providerId }));
+
+    const result = window.slopsmith.jobs.cancelled(provider.providerId, enqueued.payload.job.jobId, { safeReason: 'User stopped backend conversion' });
+    const snapshot = diagnosticsSnapshot(window);
+
+    assert.equal(result.outcome, 'cancelled');
+    assert.equal(snapshot.jobs.active.length, 0);
+    assert.equal(snapshot.jobs.recentTerminal[0].state, 'cancelled');
+    assert.equal(snapshot.jobs.recentTerminal[0].terminalOutcome.category, 'cancellation');
+});
+
 test('list and inspect are prompt-free and do not invoke provider callbacks', async () => {
     const window = loadJobs();
     const { calls, provider } = makeProvider();

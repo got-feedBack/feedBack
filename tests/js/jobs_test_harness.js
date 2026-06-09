@@ -100,8 +100,13 @@ function enqueuePayload(overrides = {}) {
         target: overrides.target || { targetRef: 'song-1' },
         inputs: overrides.inputs || { safeFingerprint: 'input-1' },
         safeLabel: overrides.safeLabel || 'Build playable cache',
+        jobId: overrides.jobId,
         logicalJobKey: overrides.logicalJobKey,
         providerId: overrides.providerId,
+        state: overrides.state,
+        status: overrides.status,
+        providerPayload: overrides.providerPayload,
+        privatePayload: overrides.privatePayload,
         privileged: overrides.privileged,
         approvalScopeKey: overrides.approvalScopeKey,
     };

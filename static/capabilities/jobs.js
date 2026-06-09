@@ -54,6 +54,7 @@
     const outcomes = [];
     const bridgeHits = [];
     const pendingRecoverableRefs = new Map();
+    const providerPrivatePayloads = new Map();
     const memoryStorage = new Map();
 
     function _now() { return new Date().toISOString(); }
@@ -355,6 +356,7 @@
             state: STATES.QUEUED,
             progress: { mode: 'indeterminate', percent: null, step: '', message: '', updatedAt: now },
             attempts: [],
+            externallyManaged: !!args.externallyManaged,
             history: [],
             retryable: false,
             safeReason: null,
@@ -384,6 +386,7 @@
             progress: _clone(job.progress),
             actionsAvailable: _actionsAvailable(job),
             retryable: !!job.retryable,
+            externallyManaged: !!job.externallyManaged,
             attempts: job.attempts.map(attempt => ({
                 attemptId: attempt.attemptId,
                 attemptNumber: attempt.attemptNumber,
@@ -463,12 +466,14 @@
 
     function _handled(payload = {}) { return _result('handled', payload); }
 
-    function _callProvider(provider, operation, payload) {
+    function _callProvider(provider, operation, payload, options = {}) {
         const handlers = provider && provider.operationHandlers ? provider.operationHandlers : {};
         const handler = handlers[operation] || handlers[operation.replace(/^job\./, '')];
         if (typeof handler !== 'function') return null;
         try {
-            return handler(_safeValue(payload));
+            const request = _safeValue(payload) || {};
+            if (Object.prototype.hasOwnProperty.call(options, 'providerPayload')) request.providerPayload = options.providerPayload;
+            return handler(request);
         } catch (err) {
             return _providerException(operation, err);
         }
@@ -604,6 +609,7 @@
             priority: job.priority,
             safeLabel: job.safeLabel,
             state: recoveryState,
+            externallyManaged: !!job.externallyManaged,
             persistedAt: _now(),
         };
     }
@@ -645,6 +651,7 @@
             state,
             progress: { mode: 'indeterminate', percent: null, step: 'recovered', message: 'Recovered after reload', updatedAt: now },
             attempts: [],
+            externallyManaged: !!ref.externallyManaged,
             history: [],
             retryable: false,
             safeReason: state === STATES.PROVIDER_UNAVAILABLE || state === STATES.ORPHANED ? 'Provider recovery unavailable after reload' : 'Recovered after reload',
@@ -678,6 +685,17 @@
                 jobs.set(job.jobId, job);
                 _terminal(job, 'provider-unavailable', 'provider-unavailable', recoveryResult.safeReason || recoveryResult.reason || 'Provider recovery callback failed', false);
                 _emitJobs('provider-unavailable', { job: _jobSummary(job, { includeHistory: false }) });
+                pendingRecoverableRefs.delete(jobId);
+                continue;
+            }
+            const recoveryOutcome = recoveryResult && recoveryResult.outcome;
+            const recoveryState = recoveryResult && (recoveryResult.terminalStatus || recoveryResult.status || recoveryResult.state);
+            const terminalStatus = ['completed', 'cancelled', 'failed', 'timeout', 'provider-unavailable', 'orphaned'].includes(recoveryState) ? recoveryState : recoveryOutcome;
+            if (['completed', 'cancelled', 'failed', 'timeout', 'provider-unavailable', 'orphaned'].includes(terminalStatus)) {
+                const job = _jobFromRecoveryRef(ref, STATES.QUEUED);
+                jobs.set(job.jobId, job);
+                _terminal(job, terminalStatus, recoveryResult.category, recoveryResult.safeReason || recoveryResult.reason || 'Recovered terminal job', !!recoveryResult.retryable, recoveryResult.resultSummary || recoveryResult.summary || 'Recovered terminal job');
+                _emitJobs(terminalStatus === 'completed' ? 'completed' : (terminalStatus === 'cancelled' ? 'cancelled' : (terminalStatus === 'provider-unavailable' ? 'provider-unavailable' : (terminalStatus === 'orphaned' ? 'orphaned' : 'failed'))), { job: _jobSummary(job, { includeHistory: false }) });
                 pendingRecoverableRefs.delete(jobId);
                 continue;
             }
@@ -752,6 +770,8 @@
         }
         const job = _newJob(args, provider.providerId);
         jobs.set(job.jobId, job);
+        if (Object.prototype.hasOwnProperty.call(args, 'providerPayload')) providerPrivatePayloads.set(job.jobId, args.providerPayload);
+        else if (Object.prototype.hasOwnProperty.call(args, 'privatePayload')) providerPrivatePayloads.set(job.jobId, args.privatePayload);
         _history(job, 'event', 'Job queued');
         _rememberOutcome('enqueue', 'queued', { jobId: job.jobId, providerId: provider.providerId, requesterId: job.requesterId });
         _emitJobs('queued', { job: _jobSummary(job, { includeHistory: false }) });
@@ -762,6 +782,66 @@
         return _result(job.state, { job: _jobSummary(job) });
     }
 
+    function _adoptCommand(ctx) {
+        const args = _plainObject(ctx.payload);
+        const providerId = _safeId(args.providerId, '');
+        const jobType = _safeId(args.jobType, '');
+        if (!providerId || !jobType) return _result('validation-failed', {}, 'providerId and jobType are required');
+        const provider = providers.get(providerId);
+        if (!provider) return _result('no-owner', {}, `Provider ${providerId} is not registered`);
+        if (!provider.jobTypes.includes(jobType)) return _result('no-handler', {}, `Provider ${providerId} does not handle ${jobType}`);
+        if (!args.requester && !args.requesterId && !ctx.requester) args.requester = provider.pluginId || providerId;
+        const jobId = _safeId(args.jobId, '') || _id('job');
+        let job = jobs.get(jobId);
+        const desiredState = _safeId(args.state || args.status || 'running', 'running');
+        const activeState = [STATES.QUEUED, STATES.RUNNING, STATES.PAUSED, STATES.CANCELLATION_REQUESTED].includes(desiredState) ? desiredState : STATES.RUNNING;
+        const isTerminal = ['completed', 'cancelled', 'failed', 'timeout', 'provider-unavailable', 'orphaned'].includes(desiredState);
+        if (job && TERMINAL_STATES.has(job.state)) return _result('stale', { job: _jobSummary(job) }, 'job is terminal');
+        if (!job) {
+            job = _newJob({ ...args, jobId, externallyManaged: true }, providerId);
+            jobs.set(job.jobId, job);
+            _history(job, 'event', 'Job adopted from provider-owned work');
+        } else {
+            job.externallyManaged = true;
+            job.safeLabel = _safeText(args.safeLabel || args.label || job.safeLabel, job.safeLabel, MAX_LABEL);
+            job.updatedAt = _now();
+        }
+        if (args.progress) {
+            const source = _plainObject(args.progress);
+            const mode = source.mode === 'determinate' || source.mode === 'indeterminate' || source.mode === 'step-only' ? source.mode : (source.percent == null ? 'indeterminate' : 'determinate');
+            job.progress = {
+                mode,
+                percent: mode === 'determinate' ? Math.max(0, Math.min(100, _number(source.percent, 0) || 0)) : null,
+                step: _safeText(source.step || source.currentStep || '', '', 80),
+                message: _safeText(source.message || source.safeMessage || '', '', MAX_REASON),
+                updatedAt: _now(),
+            };
+        }
+        if (isTerminal) {
+            _terminal(job, desiredState, args.category, args.safeReason || args.reason || 'Provider reported terminal state', !!args.retryable, args.resultSummary || args.summary || 'Provider job settled');
+            _rememberOutcome('adopt', desiredState === 'timeout' ? 'timeout' : desiredState, { jobId: job.jobId, providerId, requesterId: job.requesterId, category: args.category, safeReason: job.safeReason });
+            _emitJobs(desiredState === 'completed' ? 'completed' : (desiredState === 'cancelled' ? 'cancelled' : (desiredState === 'provider-unavailable' ? 'provider-unavailable' : (desiredState === 'orphaned' ? 'orphaned' : 'failed'))), { job: _jobSummary(job, { includeHistory: false }) });
+            _scheduleProvider(providerId);
+            return _result(desiredState === 'timeout' ? 'timeout' : desiredState, { job: _jobSummary(job) });
+        }
+        job.state = activeState;
+        job.safeReason = args.safeReason || args.reason ? _safeText(args.safeReason || args.reason) : null;
+        if (activeState === STATES.RUNNING) job.startedAt = job.startedAt || _now();
+        if (activeState === STATES.QUEUED) job.queuedAt = job.queuedAt || _now();
+        job.updatedAt = _now();
+        const attempt = job.attempts[job.attempts.length - 1];
+        if (attempt) {
+            attempt.state = activeState;
+            attempt.updatedAt = job.updatedAt;
+            if (activeState === STATES.RUNNING) attempt.startedAt = attempt.startedAt || job.updatedAt;
+        }
+        _history(job, 'event', `Job adopted as ${activeState}`);
+        _rememberOutcome('adopt', 'handled', { jobId: job.jobId, providerId, requesterId: job.requesterId, safeReason: job.safeReason });
+        _emitJobs(activeState === STATES.PAUSED ? 'paused' : (activeState === STATES.RUNNING || activeState === STATES.CANCELLATION_REQUESTED ? 'started' : 'queued'), { job: _jobSummary(job, { includeHistory: false }) });
+        _persistRecoverableRefs();
+        return _handled({ job: _jobSummary(job) });
+    }
+
     function _listCommand(ctx) {
         const filters = _plainObject(ctx.payload);
         const includeTerminal = filters.includeTerminal !== false;
@@ -770,6 +850,7 @@
             if (filters.jobType && job.jobType !== filters.jobType) return false;
             if (filters.state && job.state !== filters.state) return false;
             if (filters.requesterId && job.requesterId !== filters.requesterId) return false;
+            if (filters.externallyManaged != null && !!job.externallyManaged !== !!filters.externallyManaged) return false;
             if (!includeTerminal && TERMINAL_STATES.has(job.state)) return false;
             return true;
         }).map(job => _jobSummary(job, { includeHistory: false }));
@@ -934,7 +1015,7 @@
         if (!provider || !_providerCanRun(provider)) return;
         let load = _providerLoad(providerId);
         const queued = Array.from(jobs.values())
-            .filter(job => job.providerId === providerId && job.state === STATES.QUEUED)
+            .filter(job => job.providerId === providerId && job.state === STATES.QUEUED && !job.externallyManaged)
             .sort((a, b) => _priorityRank(a) - _priorityRank(b) || String(a.queuedAt || '').localeCompare(String(b.queuedAt || '')) || a.jobId.localeCompare(b.jobId));
         for (const job of queued) {
             if (load.running >= provider.capacity.maxRunning) {
@@ -960,7 +1041,9 @@
             attempt.updatedAt = _now();
         }
         _history(job, 'event', 'Job started');
-        const result = _callProvider(provider, 'job.enqueue', { job: _jobSummary(job, { includeHistory: false }) });
+        const hasProviderPayload = providerPrivatePayloads.has(job.jobId);
+        const result = _callProvider(provider, 'job.enqueue', { job: _jobSummary(job, { includeHistory: false }) }, hasProviderPayload ? { providerPayload: providerPrivatePayloads.get(job.jobId) } : {});
+        providerPrivatePayloads.delete(job.jobId);
         if (_providerCallFailed(result)) {
             _terminalProviderFailure(job, 'enqueue', result);
             return;
@@ -993,6 +1076,7 @@
             attempt.terminalAt = job.terminalAt;
             attempt.terminalOutcome = _clone(job.terminalOutcome);
         }
+        providerPrivatePayloads.delete(job.jobId);
         if (!terminalJobIds.includes(job.jobId)) terminalJobIds.push(job.jobId);
         while (terminalJobIds.length > MAX_TERMINAL_JOBS) terminalJobIds.shift();
         _history(job, 'event', `Job ${outcomeStatus}`);
@@ -1046,6 +1130,17 @@
         _emitJobs('completed', { job: _jobSummary(job, { includeHistory: false }) });
         _scheduleProvider(providerId);
         return _result('completed', { job: _jobSummary(job) });
+    }
+
+    function cancelled(providerId, jobId, result = {}) {
+        const job = jobs.get(_safeId(jobId, ''));
+        if (!job || job.providerId !== providerId) return _result('no-target', {}, 'job not found');
+        if (TERMINAL_STATES.has(job.state)) return _result('stale', { job: _jobSummary(job) }, 'job is terminal');
+        _terminal(job, 'cancelled', 'cancellation', result.safeReason || result.reason || 'Provider reported cancellation', !!result.retryable, result.resultSummary || result.summary || 'Cancelled');
+        _rememberOutcome('cancelled', 'cancelled', { jobId: job.jobId, providerId: job.providerId, requesterId: job.requesterId, category: 'cancellation', safeReason: job.safeReason });
+        _emitJobs('cancelled', { job: _jobSummary(job, { includeHistory: false }) });
+        _scheduleProvider(providerId);
+        return _result('cancelled', { job: _jobSummary(job) });
     }
 
     function fail(providerId, jobId, result = {}) {
@@ -1171,6 +1266,7 @@
         outcomes.length = 0;
         bridgeHits.length = 0;
         pendingRecoverableRefs.clear();
+        providerPrivatePayloads.clear();
         if (options.clearStorage !== false) {
             _storageRemove(SELECTED_PROVIDER_STORAGE_KEY);
             _storageRemove(RECOVERY_STORAGE_KEY);
@@ -1189,8 +1285,8 @@
         compatibility: 'shim-allowed',
         ownership: 'multi-provider',
         safety: 'privileged',
-        commands: ['register-provider', 'unregister-provider', 'list-providers', 'enqueue', 'list', 'inspect', 'cancel', 'pause', 'resume', 'retry', 'record-bridge-hit'],
-        operations: ['job.enqueue', 'job.status', 'job.cancel', 'job.pause', 'job.resume', 'job.retry', 'job.recover'],
+        commands: ['register-provider', 'unregister-provider', 'list-providers', 'enqueue', 'adopt', 'list', 'inspect', 'cancel', 'pause', 'resume', 'retry', 'record-bridge-hit'],
+        operations: ['job.enqueue', 'job.status', 'job.cancel', 'job.pause', 'job.resume', 'job.retry', 'job.recover', 'job.adopt'],
         events: ['provider-registered', 'provider-unregistered', 'provider-unavailable', 'queued', 'started', 'progress', 'log', 'paused', 'resumed', 'cancellation-requested', 'cancelled', 'completed', 'failed', 'retried', 'orphaned', 'bridge-hit'],
         description: 'Owns the privileged jobs provider registry, scheduling, lifecycle state, recovery, bridge hits, and redaction-safe diagnostics.',
         provider_policy: { providerId: 'jobs', kind: 'core', safety: 'privileged' },
@@ -1199,6 +1295,7 @@
             'unregister-provider': _unregisterProviderCommand,
             'list-providers': _listProvidersCommand,
             enqueue: _enqueueCommand,
+            adopt: _adoptCommand,
             list: _listCommand,
             inspect: _inspectCommand,
             cancel: _cancelCommand,
@@ -1221,11 +1318,13 @@
         reportProgress: updateProgress,
         log,
         complete,
+        cancelled,
         fail,
         markProviderUnavailable,
         simulateReload,
         resetForTests,
-        _test: { reset: resetForTests, providers, jobs, selectedProviders, pendingRecoverableRefs, storage: memoryStorage },
+        adopt(args) { return _adoptCommand({ payload: args || {}, requester: 'api' }); },
+        _test: { reset: resetForTests, providers, jobs, selectedProviders, pendingRecoverableRefs, providerPrivatePayloads, storage: memoryStorage },
     };
 
     window.slopsmith.jobs = api;

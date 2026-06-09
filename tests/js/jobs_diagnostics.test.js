@@ -115,6 +115,30 @@ test('async recovery rejections become provider-unavailable terminal jobs', asyn
     assert.doesNotMatch(JSON.stringify(snapshot), /Users\/example|recovery\.db/);
 });
 
+test('recovery handlers can restore terminal provider-owned jobs', async () => {
+    const window = loadJobs();
+    const initial = makeProvider({ providerId: 'provider.recover-terminal', recoverySupport: { queued: true, running: true, paused: true } });
+    await dispatch(window, 'register-provider', { provider: initial.provider });
+    await dispatch(window, 'enqueue', enqueuePayload({ logicalJobKey: 'recover-terminal', safeLabel: 'Terminal Recover' }));
+
+    window.slopsmith.jobs.resetForTests({ clearStorage: false });
+    const recovered = makeProvider({
+        providerId: 'provider.recover-terminal',
+        recoverySupport: { queued: true, running: true, paused: true },
+        operationHandlers: {
+            'job.recover': async () => ({ outcome: 'handled', state: 'completed', resultSummary: 'Backend finished while reloading' }),
+        },
+    });
+    await dispatch(window, 'register-provider', { provider: recovered.provider });
+    const snapshot = diagnosticsSnapshot(window);
+
+    assert.equal(snapshot.jobs.active.length, 0);
+    assert.equal(snapshot.jobs.queued.length, 0);
+    assert.equal(snapshot.jobs.recentTerminal.length, 1);
+    assert.equal(snapshot.jobs.recentTerminal[0].state, 'completed');
+    assert.equal(snapshot.jobs.recentTerminal[0].terminalOutcome.resultSummary, 'Backend finished while reloading');
+});
+
 test('reload marks non-recoverable jobs orphaned or provider-unavailable without restoring raw payloads', async () => {
     const window = loadJobs();
     const { provider } = makeProvider({ providerId: 'provider.no-recover', recoverySupport: { queued: false, running: false, paused: false } });
