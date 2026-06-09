@@ -6328,29 +6328,25 @@ def api_jobs_inspect(job_id: str):
 
 
 @app.post("/api/jobs/{job_id}/cancel")
-def api_jobs_cancel(job_id: str):
+async def api_jobs_cancel(job_id: str, data: dict | None = Body(default=None)):
     result = backend_jobs.inspect(job_id)
     if result.get("outcome") == "no-target":
         raise HTTPException(status_code=404, detail=result.get("reason") or "job not found")
-    return {
-        "outcome": "unsupported-operation",
-        "status": "rejected",
-        "reason": "Backend job cancellation must be handled by the owning provider route in this slice",
-        "payload": result.get("payload", {}),
-    }
+    request = data if isinstance(data, dict) else {}
+    request.setdefault("authorization", "user-action")
+    request.setdefault("requesterId", "api.jobs")
+    return await backend_jobs.dispatch_action(job_id, "job.cancel", request)
 
 
 @app.post("/api/jobs/{job_id}/retry")
-def api_jobs_retry(job_id: str):
+async def api_jobs_retry(job_id: str, data: dict | None = Body(default=None)):
     result = backend_jobs.inspect(job_id)
     if result.get("outcome") == "no-target":
         raise HTTPException(status_code=404, detail=result.get("reason") or "job not found")
-    return {
-        "outcome": "unsupported-operation",
-        "status": "rejected",
-        "reason": "Backend job retry must be handled by the owning provider route in this slice",
-        "payload": result.get("payload", {}),
-    }
+    request = data if isinstance(data, dict) else {}
+    request.setdefault("authorization", "user-action")
+    request.setdefault("requesterId", "api.jobs")
+    return await backend_jobs.dispatch_action(job_id, "job.retry", request)
 
 
 @app.websocket("/ws/jobs")

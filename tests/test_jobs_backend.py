@@ -1,4 +1,5 @@
 from jobs_backend import BackendJobs
+import asyncio
 
 
 def test_backend_jobs_adopt_progress_and_complete_redacts_raw_payloads():
@@ -57,3 +58,51 @@ def test_backend_jobs_provider_unavailable_settles_active_jobs():
     assert result["outcome"] == "provider-unavailable"
     assert snapshot["jobs"]["active"] == []
     assert snapshot["jobs"]["recentTerminal"][0]["state"] == "provider-unavailable"
+
+
+def test_backend_jobs_dispatches_private_provider_action_and_redacts_payload():
+    calls = []
+    jobs = BackendJobs()
+
+    def cancel_handler(request):
+        calls.append(request)
+        return {
+            "outcome": "cancelled",
+            "payload": {
+                "jobId": request["job"]["jobId"],
+                "rawPath": "/Users/example/Secret.psarc",
+            },
+        }
+
+    jobs.register_provider({
+        "providerId": "provider.test",
+        "jobTypes": ["test.convert"],
+        "actions": ["job.status"],
+        "callbacks": {"job.cancel": cancel_handler},
+    })
+    jobs.adopt(provider_id="provider.test", job_type="test.convert", job_id="backend-3", state="queued")
+
+    result = asyncio.run(jobs.dispatch_action("backend-3", "cancel", {"requesterId": "test"}))
+
+    assert result["outcome"] == "cancelled"
+    assert result["payload"] == {"jobId": "backend-3"}
+    assert calls[0]["job"]["jobId"] == "backend-3"
+    assert "rawPath" not in str(result)
+
+
+def test_backend_jobs_retry_requires_user_action_and_retryable_failed_job():
+    jobs = BackendJobs()
+    jobs.register_provider({
+        "providerId": "provider.test",
+        "jobTypes": ["test.convert"],
+        "callbacks": {"job.retry": lambda request: {"outcome": "retry-started", "payload": {"jobId": "backend-4b", "sourceJobId": request["job"]["jobId"]}}},
+    })
+    jobs.adopt(provider_id="provider.test", job_type="test.convert", job_id="backend-4", state="queued")
+    jobs.fail("provider.test", "backend-4", {"retryable": True, "safeReason": "failed"})
+
+    denied = asyncio.run(jobs.dispatch_action("backend-4", "retry", {"requesterId": "test"}))
+    allowed = asyncio.run(jobs.dispatch_action("backend-4", "retry", {"requesterId": "test", "authorization": "user-action"}))
+
+    assert denied["outcome"] == "user-action-required"
+    assert allowed["outcome"] == "retry-started"
+    assert allowed["payload"] == {"jobId": "backend-4b", "sourceJobId": "backend-4"}

@@ -9,6 +9,7 @@ artifact paths.
 from __future__ import annotations
 
 import datetime as _dt
+import inspect as _inspect
 import re
 import threading
 import uuid
@@ -53,6 +54,26 @@ _MAX_HISTORY_PER_JOB = 50
 _MAX_TERMINAL_JOBS = 50
 _MAX_OUTCOMES = 100
 _MAX_BRIDGE_HITS = 100
+_ACTION_ALIASES = {
+    "cancel": "job.cancel",
+    "retry": "job.retry",
+    "pause": "job.pause",
+    "resume": "job.resume",
+    "recover": "job.recover",
+    "status": "job.status",
+}
+_SAFE_ACTION_PAYLOAD_KEYS = {
+    "action",
+    "backendJobId",
+    "bulkJobId",
+    "jobId",
+    "logicalJobKey",
+    "newJobId",
+    "providerId",
+    "safeRef",
+    "sourceJobId",
+    "state",
+}
 
 
 def _now() -> str:
@@ -116,6 +137,32 @@ def _result(outcome: str, payload: dict | None = None, reason: str = "") -> dict
     if reason:
         out["reason"] = _safe_text(reason)
     return out
+
+
+def _canonical_action(action: Any) -> str:
+    raw = _safe_id(action, "")
+    return _ACTION_ALIASES.get(raw, raw)
+
+
+def _action_names(action: Any) -> tuple[str, ...]:
+    canonical = _canonical_action(action)
+    names = [canonical]
+    for alias, target in _ACTION_ALIASES.items():
+        if target == canonical:
+            names.append(alias)
+    return tuple(dict.fromkeys(n for n in names if n))
+
+
+def _safe_action_payload(payload: Any) -> dict:
+    if not isinstance(payload, dict):
+        return {}
+    out = {}
+    for key, value in payload.items():
+        safe_key = _safe_id(key, "")
+        if safe_key not in _SAFE_ACTION_PAYLOAD_KEYS:
+            continue
+        out[safe_key] = _safe_id(value, "")
+    return {k: v for k, v in out.items() if v}
 
 
 class BackendJobs:
@@ -214,7 +261,16 @@ class BackendJobs:
         job_types = [_safe_id(j, "") for j in provider.get("jobTypes", []) if _safe_id(j, "")]
         if not job_types:
             return _result("validation-failed", reason="jobTypes are required")
-        actions = [_safe_id(a, "") for a in provider.get("actions", []) if _safe_id(a, "")]
+        actions = [_canonical_action(a) for a in provider.get("actions", []) if _canonical_action(a)]
+        callbacks = provider.get("callbacks") or provider.get("actionHandlers") or provider.get("operationHandlers")
+        action_handlers = {}
+        if isinstance(callbacks, dict):
+            for action, callback in callbacks.items():
+                canonical = _canonical_action(action)
+                if canonical and callable(callback):
+                    action_handlers[canonical] = callback
+                    if canonical not in actions:
+                        actions.append(canonical)
         now = _now()
         normalized = {
             "providerId": provider_id,
@@ -222,6 +278,7 @@ class BackendJobs:
             "label": _safe_text(provider.get("label") or provider_id, provider_id, _MAX_LABEL),
             "jobTypes": job_types,
             "actions": actions,
+            "actionHandlers": action_handlers,
             "capacity": provider.get("capacity") if isinstance(provider.get("capacity"), dict) else {},
             "available": bool(provider.get("available", True)),
             "recoverySupport": provider.get("recoverySupport") if isinstance(provider.get("recoverySupport"), dict) else {},
@@ -232,6 +289,78 @@ class BackendJobs:
             self._remember_outcome("register-provider", "handled", {"providerId": provider_id})
         self._emit("provider-registered", {"provider": self._provider_summary(normalized)})
         return _result("handled", {"provider": self._provider_summary(normalized)})
+
+    async def dispatch_action(self, job_id: str, action: str, request: dict | None = None) -> dict:
+        canonical = _canonical_action(action)
+        if not canonical:
+            return _result("validation-failed", reason="action is required")
+        request = request if isinstance(request, dict) else {}
+        authorization = _safe_id(request.get("authorization"), "")
+        requester_id = _safe_id(request.get("requesterId") or request.get("requester_id"), "api.jobs")
+        with self._lock:
+            job = self._jobs.get(_safe_id(job_id, ""))
+            if not job:
+                self._remember_outcome(canonical, "no-target", {"requesterId": requester_id})
+                return _result("no-target", reason="job not found")
+            provider = self._providers.get(job.get("providerId"))
+            if not provider:
+                self._remember_outcome(canonical, "no-owner", {"jobId": job.get("jobId"), "providerId": job.get("providerId"), "requesterId": requester_id})
+                return _result("no-owner", {"job": self._job_summary(job)}, "provider not found")
+            if not provider.get("available", True):
+                self._remember_outcome(canonical, "unavailable", {"jobId": job.get("jobId"), "providerId": provider.get("providerId"), "requesterId": requester_id})
+                return _result("unavailable", {"job": self._job_summary(job), "provider": self._provider_summary(provider)}, "provider unavailable")
+            provider_actions = set(provider.get("actions") or [])
+            if canonical not in provider_actions:
+                self._remember_outcome(canonical, "unsupported-operation", {"jobId": job.get("jobId"), "providerId": provider.get("providerId"), "requesterId": requester_id})
+                return _result("unsupported-operation", {"job": self._job_summary(job), "provider": self._provider_summary(provider)}, "provider does not advertise this action")
+            handlers = provider.get("actionHandlers") or {}
+            handler = None
+            for name in _action_names(canonical):
+                if callable(handlers.get(name)):
+                    handler = handlers[name]
+                    break
+            if handler is None:
+                self._remember_outcome(canonical, "no-handler", {"jobId": job.get("jobId"), "providerId": provider.get("providerId"), "requesterId": requester_id})
+                return _result("no-handler", {"job": self._job_summary(job), "provider": self._provider_summary(provider)}, "provider action handler not registered")
+            state = job.get("state")
+            if state in _TERMINAL_STATES and canonical != "job.retry":
+                self._remember_outcome(canonical, "stale", {"jobId": job.get("jobId"), "providerId": provider.get("providerId"), "requesterId": requester_id, "safeReason": "job is terminal"})
+                return _result("stale", {"job": self._job_summary(job)}, "job is terminal")
+            if canonical == "job.retry" and (state != "failed" or not job.get("retryable")):
+                self._remember_outcome(canonical, "stale", {"jobId": job.get("jobId"), "providerId": provider.get("providerId"), "requesterId": requester_id, "safeReason": "job is not retryable"})
+                return _result("stale", {"job": self._job_summary(job)}, "job is not retryable")
+            if canonical in {"job.enqueue", "job.retry"} and authorization != "user-action":
+                self._remember_outcome(canonical, "user-action-required", {"jobId": job.get("jobId"), "providerId": provider.get("providerId"), "requesterId": requester_id})
+                return _result("user-action-required", {"job": self._job_summary(job)}, "user action authorization required")
+            call_payload = {
+                "action": canonical,
+                "authorization": authorization,
+                "requesterId": requester_id,
+                "job": self._job_summary(job),
+                "provider": self._provider_summary(provider),
+            }
+        try:
+            provider_result = handler(call_payload)
+            if _inspect.isawaitable(provider_result):
+                provider_result = await provider_result
+        except Exception as exc:  # noqa: BLE001
+            safe_reason = _safe_text(str(exc), "provider action failed")
+            with self._lock:
+                self._remember_outcome(canonical, "failed", {"jobId": job_id, "providerId": provider.get("providerId"), "requesterId": requester_id, "safeReason": safe_reason})
+            return _result("failed", reason=safe_reason)
+
+        if not isinstance(provider_result, dict):
+            provider_result = {"outcome": "handled"}
+        outcome = _safe_id(provider_result.get("outcome"), "handled")
+        status = provider_result.get("status")
+        reason = _safe_text(provider_result.get("reason"), "")
+        payload = _safe_action_payload(provider_result.get("payload"))
+        with self._lock:
+            self._remember_outcome(canonical, outcome, {"jobId": job_id, "providerId": provider.get("providerId"), "requesterId": requester_id, "safeReason": reason})
+        result = _result(outcome, payload or None, reason)
+        if status in {"applied", "rejected"}:
+            result["status"] = status
+        return result
 
     def unregister_provider(self, provider_id: str) -> dict:
         provider_id = _safe_id(provider_id, "")
