@@ -6352,6 +6352,11 @@ async def api_jobs_retry(job_id: str, data: dict | None = Body(default=None)):
 @app.websocket("/ws/jobs")
 async def jobs_ws(websocket: WebSocket):
     """Stream backend job snapshots and lifecycle updates."""
+    if os.environ.get("SLOPSMITH_DEMO_MODE") == "1":
+        await websocket.accept()
+        await websocket.send_json({"error": "demo mode: read-only"})
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue(maxsize=200)

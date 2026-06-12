@@ -131,7 +131,7 @@ def _progress(source: Any = None) -> dict:
 
 
 def _result(outcome: str, payload: dict | None = None, reason: str = "") -> dict:
-    out = {"outcome": outcome, "status": "applied" if outcome in {"handled", "queued", "completed", "cancelled", "failed", "timeout", "retry-started"} else "rejected"}
+    out = {"outcome": outcome, "status": "applied" if outcome in {"handled", "queued", "completed", "cancelled", "failed", "timeout", "retry-started", "provider-unavailable", "orphaned"} else "rejected"}
     if payload:
         out["payload"] = payload
     if reason:
@@ -364,13 +364,33 @@ class BackendJobs:
 
     def unregister_provider(self, provider_id: str) -> dict:
         provider_id = _safe_id(provider_id, "")
+        orphaned: list[dict] = []
         with self._lock:
             provider = self._providers.pop(provider_id, None)
             if not provider:
                 return _result("no-owner", reason="provider not found")
+            for job in self._jobs.values():
+                if job.get("providerId") == provider_id and job.get("state") in _ACTIVE_STATES:
+                    self._settle_locked(
+                        job,
+                        "orphaned",
+                        category="provider-failure",
+                        safe_reason="Provider unregistered",
+                        result_summary="Provider unregistered",
+                    )
+                    orphaned.append(self._job_summary(job, include_history=False))
             self._remember_outcome("unregister-provider", "handled", {"providerId": provider_id})
+            if orphaned:
+                self._remember_outcome(
+                    "orphaned",
+                    "orphaned",
+                    {"providerId": provider_id, "safeReason": "Provider unregistered"},
+                )
+        for job in orphaned:
+            self._emit("orphaned", {"job": job})
         self._emit("provider-unregistered", {"providerId": provider_id})
-        return _result("handled")
+        payload = {"orphanedJobs": orphaned} if orphaned else None
+        return _result("handled", payload)
 
     def adopt(self, *, provider_id: str, job_type: str, job_id: str | None = None, state: str = "running", requester_id: str | None = None, safe_label: str | None = None, target: dict | None = None, inputs: dict | None = None, priority: str = "user-approved-interactive", progress: dict | None = None, category: str | None = None, safe_reason: str | None = None, result_summary: str | None = None, retryable: bool = False, externally_managed: bool = True) -> dict:
         provider_id = _safe_id(provider_id, "")
@@ -441,7 +461,7 @@ class BackendJobs:
                     job["queuedAt"] = job.get("queuedAt") or job["updatedAt"]
                 self._history(job, "event", f"Job adopted as {desired_state}")
                 self._remember_outcome("adopt", "handled", {"jobId": job_id, "providerId": provider_id, "requesterId": job.get("requesterId")})
-                event = "started" if desired_state in {"running", "cancellation-requested"} else desired_state
+                event = "started" if desired_state == "running" else desired_state
                 outcome = "handled"
             summary = self._job_summary(job)
         self._emit(event, {"job": self._job_summary(job, include_history=False)})

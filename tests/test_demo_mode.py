@@ -112,6 +112,17 @@ def test_demo_on_read_routes_not_blocked(tmp_path, monkeypatch):
         _cleanup(server, client)
 
 
+def test_demo_on_ws_jobs_blocked(tmp_path, monkeypatch):
+    """Jobs WebSocket should not expose control-plane state in demo mode."""
+    server, client = _make_client(tmp_path, monkeypatch, demo=True)
+    try:
+        with client.websocket_connect("/ws/jobs") as ws:
+            msg = ws.receive_json()
+            assert msg == {"error": "demo mode: read-only"}
+    finally:
+        _cleanup(server, client)
+
+
 # ── Demo cookie: set on first GET /, not on subsequent requests ───────────────
 
 def test_demo_cookie_set_on_first_get_root(tmp_path, monkeypatch):

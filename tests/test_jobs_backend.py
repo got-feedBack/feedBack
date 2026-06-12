@@ -106,3 +106,55 @@ def test_backend_jobs_retry_requires_user_action_and_retryable_failed_job():
     assert denied["outcome"] == "user-action-required"
     assert allowed["outcome"] == "retry-started"
     assert allowed["payload"] == {"jobId": "backend-4b", "sourceJobId": "backend-4"}
+
+
+def test_backend_jobs_provider_unavailable_and_orphaned_are_applied_outcomes():
+    jobs = BackendJobs()
+    jobs.register_provider({
+        "providerId": "provider.test",
+        "jobTypes": ["test.convert"],
+    })
+    jobs.adopt(provider_id="provider.test", job_type="test.convert", job_id="backend-5", state="running")
+    unavailable = jobs.mark_provider_unavailable("provider.test", "offline")
+
+    assert unavailable["outcome"] == "provider-unavailable"
+    assert unavailable["status"] == "applied"
+
+
+def test_backend_jobs_unregister_provider_orphans_active_jobs():
+    jobs = BackendJobs()
+    jobs.register_provider({
+        "providerId": "provider.test",
+        "jobTypes": ["test.convert"],
+    })
+    jobs.adopt(provider_id="provider.test", job_type="test.convert", job_id="backend-6", state="queued")
+
+    removed = jobs.unregister_provider("provider.test")
+    inspect = jobs.inspect("backend-6")
+
+    assert removed["outcome"] == "handled"
+    assert removed["status"] == "applied"
+    assert removed["payload"]["orphanedJobs"][0]["jobId"] == "backend-6"
+    assert inspect["payload"]["job"]["state"] == "orphaned"
+
+
+def test_backend_jobs_adopt_emits_cancellation_requested_event():
+    jobs = BackendJobs()
+    jobs.register_provider({
+        "providerId": "provider.test",
+        "jobTypes": ["test.convert"],
+    })
+    seen = []
+    unsubscribe = jobs.subscribe(lambda event: seen.append(event.get("type")))
+    try:
+        jobs.adopt(
+            provider_id="provider.test",
+            job_type="test.convert",
+            job_id="backend-7",
+            state="cancellation-requested",
+        )
+    finally:
+        unsubscribe()
+
+    assert "cancellation-requested" in seen
+    assert "started" not in seen
