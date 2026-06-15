@@ -1,0 +1,32 @@
+{
+    "id": "keys_highway_3d",
+    "name": "Keys Highway 3D",
+    "version": "0.1.0",
+    "description": "RS+-style 3D falling-note piano highway fed by the Sloppak Notation Format, with Web MIDI input scoring.",
+    "type": "visualization",
+    "script": "screen.js",
+    "standards": ["capability-pipelines.v1", "plugin-runtime-idempotent.v1"],
+    "capabilities": {
+        "visualization": {
+            "roles": ["provider"],
+            "operations": ["renderer.create", "renderer.destroy"],
+            "emits": ["renderer-ready", "renderer-failed"],
+            "mode": "active",
+            "safety": "safe"
+        },
+        "note-detection": {
+            "roles": ["provider"],
+            "operations": ["verify.target"],
+            "emits": ["hit", "miss"],
+            "mode": "active",
+            "safety": "sensitive"
+        },
+        "audio-input": {
+            "roles": ["provider"],
+            "operations": ["source.enumerate", "source.describe", "source.open", "source.close"],
+            "emits": [],
+            "mode": "active",
+            "safety": "sensitive"
+        }
+    }
+}
