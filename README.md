@@ -53,7 +53,7 @@ All settings persist in `localStorage` under the `drum_h3d_*` prefix.
 
 - Reading `bundle.notes` / `bundle.chords` / `bundle.currentTime`
 - Hit detection / scoring / note_detect integration
-- Real drum chart parsing (Rocksmith doesn't ship drum charts; this
+- Real drum chart parsing (the chart doesn't ship drum charts; this
   would need a new arrangement format or a Guitar Pro/MIDI source)
 - Sustain trails (drums don't sustain meaningfully)
 - Sticking labels, double kick, foot hi-hat, cross-stick, rolls — see
