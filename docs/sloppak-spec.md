@@ -78,14 +78,14 @@ Full set of currently-recognized top-level keys:
 | `duration` | float | yes | Song length in seconds |
 | `arrangements` | list | yes | Playable arrangements (see §2.1) |
 | `stems` | list | yes | Audio stems (see §2.2) |
-| `stem_separation` | object | no | Structured metadata when stems were produced by an automated separation engine (currently `demucs`). Shape: `{engine, model, version}`. See §2.2 for fields + semver semantics per [slopsmith#357](https://github.com/byrongamatos/slopsmith/issues/357). Omitted for single-stem sloppaks (`stems: [{id: full, ...}]`) and for hand-edited / user-recorded stems |
+| `stem_separation` | object | no | Structured metadata when stems were produced by an automated separation engine (currently `demucs`). Shape: `{engine, model, version}`. See §2.2 for fields + semver semantics per [slopsmith#357](https://github.com/got-feedback/feedback/issues/357). Omitted for single-stem sloppaks (`stems: [{id: full, ...}]`) and for hand-edited / user-recorded stems |
 | `lyrics` | string | no | Path to lyrics JSON |
 | `lyrics_source` | string | no | Where the lyrics came from: `xml` (vocals XML from the chart source), `whisperx` (auto-transcribed), or `user` (hand-edited). Absent on legacy sloppaks — readers should treat missing as `xml` |
-| `lyric_transcription` | object | no | Structured metadata when lyrics came from an automated engine (currently `whisperx`). Same shape as the parent `stem_separation` block defined by [slopsmith#357](https://github.com/byrongamatos/slopsmith/issues/357) — see §2.3 for fields and semver semantics. Omitted for authored lyrics (`xml`/`user`) |
-| `vocal_pitch` | string | no | Path to per-syllable pitch JSON (`{"version": 1, "notes": [{t, d, midi}, ...]}`). Consumed by [slopsmith-plugin-lyrics-karaoke](https://github.com/byrongamatos/slopsmith-plugin-lyrics-karaoke) to render karaoke note bars. See §2.4 |
+| `lyric_transcription` | object | no | Structured metadata when lyrics came from an automated engine (currently `whisperx`). Same shape as the parent `stem_separation` block defined by [slopsmith#357](https://github.com/got-feedback/feedback/issues/357) — see §2.3 for fields and semver semantics. Omitted for authored lyrics (`xml`/`user`) |
+| `vocal_pitch` | string | no | Path to per-syllable pitch JSON (`{"version": 1, "notes": [{t, d, midi}, ...]}`). Consumed by [slopsmith-plugin-lyrics-karaoke](https://github.com/got-feedback/feedback-plugin-lyrics-karaoke) to render karaoke note bars. See §2.4 |
 | `pitch_extraction` | object | no | Structured metadata when pitch was extracted by an automated engine (currently `crepe` via the demucs server's `/pitch` endpoint). Same shape as `stem_separation` / `lyric_transcription`. Omitted for hand-edited pitch tracks |
 | `cover` | string | no | Path to cover image |
-| `preview` | string | no | Path to a short preview audio clip (OGG) at the sloppak root. Populated when the source carries a separate short browser-preview clip (decoded to `preview.ogg`); absent otherwise. Consumed by [`slopsmith-plugin-song-preview`](https://github.com/byrongamatos/slopsmith-plugin-song-preview) for hover-to-listen previews in the library |
+| `preview` | string | no | Path to a short preview audio clip (OGG) at the sloppak root. Populated when the source carries a separate short browser-preview clip (decoded to `preview.ogg`); absent otherwise. Consumed by [`slopsmith-plugin-song-preview`](https://github.com/got-feedback/feedback-plugin-song-preview) for hover-to-listen previews in the library |
 | `song_timeline` | string | no | Path to a `song_timeline.json` file carrying song-wide beats and sections (see §5.3). When present, its data takes priority over any beats/sections embedded in arrangement JSONs. Older readers ignore the key and fall back to reading beats/sections from the first arrangement JSON as before |
 | `drum_tab` | string | no | Path to `drum_tab.json` — per-piece drum hits (see §5.3). Implemented end-to-end as of slopsmith#344 |
 
@@ -130,7 +130,7 @@ stems:
 - `default` accepts `true`/`false`, or strings (`"on"`/`"off"`/`"true"`/etc.) for hand-edited manifests.
 - A freshly converted sloppak from `lib/sloppak_convert.py` starts with a single `{id: full, file: stems/full.ogg, ...}` entry. After stem-splitting (Demucs), `full.ogg` is removed and the manifest is rewritten with per-instrument entries (`guitar`, `bass`, `drums`, `vocals`, `other`). The format requires only that `stems` is non-empty — there's no specific filename or id that must always be present.
 
-When stems were produced by an automated separation engine (Demucs), an optional `stem_separation` block records which engine + model produced them. Per [slopsmith#357](https://github.com/byrongamatos/slopsmith/issues/357):
+When stems were produced by an automated separation engine (Demucs), an optional `stem_separation` block records which engine + model produced them. Per [slopsmith#357](https://github.com/got-feedback/feedback/issues/357):
 
 ```yaml
 stem_separation:
@@ -168,7 +168,7 @@ If present, points at a JSON file containing a flat list of syllable objects:
 
 When lyrics are present, the optional top-level `lyrics_source` key records where they came from. The assembler sets it to `xml` when the lyrics were parsed from the source chart's vocals XML; the WhisperX auto-transcription fallback (`scripts/transcribe_lyrics.py`, or `--auto-lyrics` on the split scripts) sets it to `whisperx`. Hand-edited lyrics should bump it to `user` so UI consumers can render a different badge (or no badge) than for machine-generated lyrics. The key is absent on sloppaks produced before this field existed — readers should treat missing as `xml` for backward compatibility.
 
-When `lyrics_source` is `whisperx` (or any future automated engine), an optional `lyric_transcription` block records which engine + model produced the file. Shape mirrors the parent `stem_separation` RFC ([slopsmith#357](https://github.com/byrongamatos/slopsmith/issues/357)):
+When `lyrics_source` is `whisperx` (or any future automated engine), an optional `lyric_transcription` block records which engine + model produced the file. Shape mirrors the parent `stem_separation` RFC ([slopsmith#357](https://github.com/got-feedback/feedback/issues/357)):
 
 ```yaml
 lyric_transcription:
@@ -186,7 +186,7 @@ Omitted for authored lyrics (`xml` / `user`). A remote WhisperX server can use t
 
 ### 2.4. `vocal_pitch`
 
-If present, points at a JSON file holding per-syllable pitch data — the karaoke companion to `lyrics`. Consumed by [slopsmith-plugin-lyrics-karaoke](https://github.com/byrongamatos/slopsmith-plugin-lyrics-karaoke) to render karaoke-style note bars over the lyric text. Shape:
+If present, points at a JSON file holding per-syllable pitch data — the karaoke companion to `lyrics`. Consumed by [slopsmith-plugin-lyrics-karaoke](https://github.com/got-feedback/feedback-plugin-lyrics-karaoke) to render karaoke-style note bars over the lyric text. Shape:
 
 ```json
 {

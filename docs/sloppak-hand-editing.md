@@ -262,5 +262,5 @@ For your own use, you can skip this entirely — Slopsmith reads the directory f
 ## Out of scope (for now)
 
 - **Authoring a sloppak from scratch** (no Guitar Pro / MusicXML source file) — that's a developer task. Start at [sloppak-spec.md §4.2](sloppak-spec.md#42-writing-python-server-side).
-- **Editing notes / chords in `arrangements/*.json`** — technically possible but extremely tedious by hand: hundreds of objects with short field names per song. The fields are documented in [sloppak-spec.md §3](sloppak-spec.md#3-arrangement-json--the-wire-format), but for any real chart edit you want the [Arrangement Editor plugin](https://github.com/byrongamatos/slopsmith-plugin-editor).
+- **Editing notes / chords in `arrangements/*.json`** — technically possible but extremely tedious by hand: hundreds of objects with short field names per song. The fields are documented in [sloppak-spec.md §3](sloppak-spec.md#3-arrangement-json--the-wire-format), but for any real chart edit you want the [Arrangement Editor plugin](https://github.com/got-feedback/feedback-plugin-editor).
 - **Loudness normalization / advanced stem processing** — out of scope here; standard Audacity or ffmpeg workflows apply to any OGG file before you drop it into `stems/`.

@@ -1,6 +1,6 @@
 # slopsmith-plugin-minigames
 
-The minigame framework for [Slopsmith](https://github.com/byrongamatos/slopsmith).
+The minigame framework for [Slopsmith](https://github.com/got-feedback/feedback).
 
 This plugin provides:
 
@@ -60,7 +60,7 @@ A minigame is a standard Slopsmith plugin that:
 
 3. Calls `window.slopsmithMinigames.end({ score, durationMs, modifiers, meta })` when the run ends.
 
-See [`slopsmith-plugin-flappy-bend`](https://github.com/byrongamatos/slopsmith-plugin-flappy-bend) for a working example.
+See [`slopsmith-plugin-flappy-bend`](https://github.com/got-feedback/feedback-plugin-flappy-bend) for a working example.
 
 ## SDK reference
 

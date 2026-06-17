@@ -64,7 +64,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/slopsmith/slopsmith:nightly
-            ghcr.io/slopsmith/slopsmith:nightly-${{ needs.setup.outputs.date }}
+            ghcr.io/got-feedback/feedback:nightly
+            ghcr.io/got-feedback/feedback:nightly-${{ needs.setup.outputs.date }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
