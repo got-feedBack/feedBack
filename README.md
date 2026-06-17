@@ -1,6 +1,6 @@
 # Keys Highway 3D
 
-RS+-style falling-note 3D piano highway for [Slopsmith](https://github.com/slopsmith/slopsmith), fed by the **Sloppak Notation Format** (sloppak-spec §5.3) — part of the piano/keys first-class epic (slopsmith#828, plugin workstream slopsmith#824).
+RS+-style falling-note 3D piano highway for [Slopsmith](https://github.com/got-feedback/feedback), fed by the **Sloppak Notation Format** (sloppak-spec §5.3) — part of the piano/keys first-class epic (slopsmith#828, plugin workstream slopsmith#824).
 
 - Consumes the `notation_info` / `notation_measures` highway-WS stream over a private per-instance socket and flattens measure → staff → voice → beat → note into `{midi, t, durSec, hand}` (durations derived from written `dur`/`dot`/`tu` at the running tempo; ties extend; overlap-clamped).
 - 3D perspective highway to a vanishing point with a real white/black-key keyboard; per-key **pitch-class colours** (Synthesia convention — C red, D yellow, E blue, …) with hand (rh/lh) as a secondary brightness cue.
