@@ -41,11 +41,11 @@ Answer each gate with PASS / FAIL / N/A and a short justification:
   serve-path build step? If plugin CSS is needed, does it ship through
   `styles`?
 - **Plugin and capability boundary**: If the feature is outside browse +
-  play CDLC, is it plugin-shaped? Does every Slopsmith-facing plugin
+  play custom DLC, is it plugin-shaped? Does every Slopsmith-facing plugin
   behavior declare `capability-pipelines.v1` metadata (`capabilities`,
   `ui`, or `ui_contributions`) and use `load_sibling` for backend
   siblings?
-- **CDLC compatibility**: Are PSARC scanning, sloppak manifests,
+- **Song format compatibility**: Are legacy archive scanning, sloppak manifests,
   arrangement IDs, and highway WebSocket messages kept backward-
   compatible, or is a migration note planned?
 - **Pure/testable core**: Are new `lib/` helpers flat-importable,

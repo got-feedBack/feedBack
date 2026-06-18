@@ -2,7 +2,7 @@
 
 Project orientation for AI coding assistants (Cursor, GitHub Copilot, OpenAI Codex, Aider, Claude Code, Cline, Continue, Cody, Devin, …) and human contributors.
 
-Slopsmith is a self-hosted web app for browsing, playing, and practicing Rocksmith 2014 Custom DLC. It runs as a Docker container with a FastAPI backend (`server.py`), vanilla JavaScript frontend (`static/`), shared Python libraries (`lib/`), and an extensive plugin system (`plugins/`). No frontend frameworks — plain JS, HTML, Tailwind CSS. AGPL-3.0-only.
+Slopsmith is a self-hosted web app for browsing, playing, and practicing interactive music notation, built around its own open `.sloppak` chart format. Charts come from importing Guitar Pro (GP5/GP8) or MusicXML, or from authoring in the built-in editor. It runs as a Docker container with a FastAPI backend (`server.py`), vanilla JavaScript frontend (`static/`), shared Python libraries (`lib/`), and an extensive plugin system (`plugins/`). No frontend frameworks — plain JS, HTML, Tailwind CSS. AGPL-3.0-only.
 
 This file is the canonical orientation. Tool-specific automation (Claude skills/subagents/rules, Copilot instructions, etc.) lives in [`.claude/`](.claude/) and [`.github/copilot-instructions.md`](.github/copilot-instructions.md); both point back here. For plugin work, start at [`docs/PLUGIN_AUTHORING.md`](docs/PLUGIN_AUTHORING.md).
 
@@ -19,13 +19,13 @@ static/
   index.html           Single-page app shell
 lib/
   song.py              Core data models (Note, Chord, Arrangement, Song)
-  psarc.py             PSARC archive reading and extraction
   sloppak.py           Sloppak format support
-  sloppak_convert.py   PSARC → sloppak conversion + Demucs stem split
+  sloppak_convert.py   Import conversion + Demucs stem split
+  loosefolder.py       Loose-folder XML chart support
   audio.py             WEM/OGG/MP3 audio handling
   retune.py            Pitch-shifting logic
   tunings.py           Tuning name/offset utilities
-  gp2rs.py             Guitar Pro to Rocksmith XML conversion
+  gp2rs.py             Guitar Pro to arrangement XML conversion
   gp2midi.py           Guitar Pro to MIDI
 plugins/
   __init__.py          Plugin discovery, loading, requirements install, load_sibling
@@ -95,7 +95,7 @@ Pytest config in `pyproject.toml` sets `pythonpath = [".", "lib"]` and `testpath
 
 Slopsmith supports two:
 
-- **PSARC** (Rocksmith native) — encrypted archive. Read-only. Fast metadata scan via `lib/psarc.py` (`read_psarc_entries`); full unpack via `unpack_psarc()` for playback. Audio via `vgmstream-cli` + `ffmpeg`.
+- **Legacy archive** (encrypted, read-only) — fast metadata scan via `lib/sloppak.py`; full unpack for playback. Audio via `vgmstream-cli` + `ffmpeg`.
 - **Sloppak** (open format) — hand-editable, two interchangeable forms: `.sloppak` zip or `.sloppak/` directory. Preferred for new features. Full spec: [`docs/sloppak-spec.md`](docs/sloppak-spec.md). Key code: `lib/sloppak.py`, `lib/sloppak_convert.py`, `lib/song.py`.
 
 ## Frontend conventions

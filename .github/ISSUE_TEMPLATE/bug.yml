@@ -51,7 +51,7 @@ body:
     id: repro
     attributes:
       label: Reproduction steps
-      description: "Numbered steps. Include song format (PSARC / sloppak / loose) and arrangement type if relevant."
+      description: "Numbered steps. Include song format (legacy archive / sloppak / loose) and arrangement type if relevant."
       placeholder: |
         1. ...
         2. ...

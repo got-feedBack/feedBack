@@ -13,7 +13,7 @@ The plugin loader inserts each plugin's directory onto `sys.path` so `from extra
 ```python
 def setup(app, context):
     extractor = context["load_sibling"]("extractor")
-    PsarcReader = extractor.PsarcReader
+    ArchiveReader = extractor.ArchiveReader
     # …
 ```
 
