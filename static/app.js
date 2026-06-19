@@ -4152,10 +4152,10 @@ async function uploadSongs(fileList) {
     const files = [];
     for (const f of all) {
         const lower = f.name.toLowerCase();
-        if (lower.endsWith('.sloppak')) {
+        if (lower.endsWith('.feedpak') || lower.endsWith('.sloppak')) {
             files.push(f);
         } else {
-            failures.push(`${f.name}: only .sloppak accepted`);
+            failures.push(`${f.name}: only .feedpak (or legacy .sloppak) accepted`);
         }
     }
     if (files.length === 0) {

@@ -1,14 +1,23 @@
-"""Sloppak — open song format loader.
+"""Open song-package format loader (feedpak; legacy name: sloppak).
 
-A `.sloppak` is an open, hand-editable song package. It exists in two
+A pack is an open, hand-editable song package. It exists in two
 interchangeable forms:
 
-1. **Zip archive** — a `.sloppak` file containing a `manifest.yaml`,
-   arrangement JSONs, stem OGGs, optional cover/lyrics. Distribution form.
-2. **Directory** — a directory whose name ends in `.sloppak/` containing the
-   same files. Authoring form.
+1. **Zip archive** — a `.feedpak` (or legacy `.sloppak`) file containing a
+   `manifest.yaml`, arrangement JSONs, stem OGGs, optional cover/lyrics.
+   Distribution form.
+2. **Directory** — a directory whose name ends in `.feedpak/` (or legacy
+   `.sloppak/`) containing the same files. Authoring form.
 
-See the format spec in the project's sloppak plan for the full layout.
+The format is now published as **feedpak** at
+https://github.com/got-feedback/feedback-feedpak-spec — that spec is the
+authoritative reference for the on-disk layout.
+
+**Naming / deprecation.** The format was renamed `sloppak` → `feedpak`. This
+module keeps the `sloppak` names as **permanent deprecated aliases** so existing
+libraries and importers never break: both `.feedpak` and `.sloppak` are accepted
+everywhere, and `lib/feedpak.py` re-exports this module's public API under the
+canonical name. Prefer `feedpak` in new code.
 """
 
 from __future__ import annotations
@@ -40,9 +49,28 @@ import notation as notation_mod
 
 # ── Format detection ──────────────────────────────────────────────────────────
 
+# Accepted pack extensions. `.feedpak` is canonical; `.sloppak` is the permanent
+# legacy alias (see module docstring). Both forms are byte-identical packs.
+PACK_SUFFIXES = (".feedpak", ".sloppak")
+
+
+def is_pack(path: Path) -> bool:
+    """True if path looks like a feedpak/sloppak pack (zip file or directory)."""
+    return path.name.lower().endswith(PACK_SUFFIXES)
+
+
+def is_feedpak(path: Path) -> bool:
+    """Canonical name for :func:`is_pack` — accepts both `.feedpak` and `.sloppak`."""
+    return is_pack(path)
+
+
 def is_sloppak(path: Path) -> bool:
-    """True if path looks like a sloppak (zip file or directory)."""
-    return path.name.lower().endswith(".sloppak")
+    """Deprecated alias for :func:`is_pack`, kept so existing callers keep working.
+
+    Despite the name it accepts **both** `.feedpak` and `.sloppak` (the format
+    was renamed; the legacy extension is still read). Prefer :func:`is_feedpak`.
+    """
+    return is_pack(path)
 
 
 # ── Source resolution (zip unpack cache + directory passthrough) ──────────────
@@ -173,10 +201,27 @@ def _read_manifest_from_zip(zip_path: Path) -> dict:
 
 
 def load_manifest(path: Path) -> dict:
-    """Return the parsed manifest dict for a sloppak (dir or zip)."""
+    """Return the parsed manifest dict for a pack (dir or zip)."""
     if path.is_dir():
         return _read_manifest(path)
     return _read_manifest_from_zip(path)
+
+
+def read_feedpak_version(manifest: dict) -> str | None:
+    """Return the manifest's declared `feedpak_version` (a semver string), or None.
+
+    The feedpak spec (§4.1) makes the key optional and says an absent value is
+    treated as ``"1.0.0"``; callers that want that default can apply it. We return
+    the declared value verbatim (or None) so the distinction "declared vs implicit"
+    is preserved. Non-string values are ignored with a warning.
+    """
+    raw = manifest.get("feedpak_version")
+    if raw is None:
+        return None
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    log.warning("feedpak: ignoring non-string feedpak_version %r", raw)
+    return None
 
 
 @dataclass
@@ -207,6 +252,9 @@ class LoadedSloppak:
     # song.arrangements (not to manifest["arrangements"]) — skipped entries are
     # absent so indexing by song.arrangements index is safe.
     arrangement_ids: list[str | None] = field(default_factory=list)
+    # Declared `feedpak_version` from the manifest (semver string), or None when
+    # absent. Per the feedpak spec §4.1 an absent value is treated as "1.0.0".
+    feedpak_version: str | None = None
 
 
 def load_song(
@@ -586,6 +634,7 @@ def load_song(
         song_timeline=song_timeline_data,
         notation_by_id=notation_by_id_data,
         arrangement_ids=arrangement_ids_acc,
+        feedpak_version=read_feedpak_version(manifest),
     )
 
 
@@ -659,4 +708,13 @@ def extract_meta(path: Path) -> dict:
         "stem_count": stem_count,
         # slopsmith#129: per-stem filter needs the id list, not just count.
         "stem_ids": stem_ids,
+        # Declared feedpak format version (semver string) or None when absent.
+        "feedpak_version": read_feedpak_version(manifest),
     }
+
+
+# ── Canonical-name aliases ────────────────────────────────────────────────────
+# The format was renamed sloppak → feedpak. `LoadedFeedpak` is the canonical
+# name for the loaded-pack dataclass; the `LoadedSloppak` name above stays as a
+# permanent deprecated alias. `lib/feedpak.py` re-exports the public API.
+LoadedFeedpak = LoadedSloppak

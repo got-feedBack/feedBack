@@ -3355,6 +3355,10 @@ async def startup_events():
         "unregister_library_provider": unregister_library_provider,
         "register_tuning_provider": register_tuning_provider,
         "unregister_tuning_provider": unregister_tuning_provider,
+        # `get_feedpak_cache_dir` is the canonical name (format renamed
+        # sloppak → feedpak); `get_sloppak_cache_dir` stays as a permanent
+        # deprecated alias so existing plugins keep working. Same cache dir.
+        "get_feedpak_cache_dir": lambda: SLOPPAK_CACHE_DIR,
         "get_sloppak_cache_dir": lambda: SLOPPAK_CACHE_DIR,
         "register_demo_janitor_hook": register_demo_janitor_hook,
         # Unified XP service (fee[dB]ack v0.3.0). Plugins that award XP
@@ -3827,7 +3831,7 @@ def trigger_full_rescan():
 
 # ── Song upload ───────────────────────────────────────────────────────────────
 
-_ALLOWED_SONG_EXTS = {".sloppak"}
+_ALLOWED_SONG_EXTS = {".feedpak", ".sloppak"}  # .sloppak is the legacy alias
 _MAX_UPLOAD_BYTES = 1024 * 1024 * 1024  # 1 GB — covers sloppaks bundled with stems
 # Per-request batch cap. Lets a user drop a whole album of sloppaks at once
 # without giving a hostile client a 1000-file DoS surface via Starlette's
@@ -4058,7 +4062,7 @@ async def _save_uploaded_song(upload: UploadFile, dlc: Path, overwrite: bool) ->
     suffix = Path(base).suffix.lower()
     if suffix not in _ALLOWED_SONG_EXTS:
         return {"status": "error", "filename": base,
-                "error": "Only .sloppak files are accepted"}
+                "error": "Only .feedpak (or legacy .sloppak) files are accepted"}
 
     dest = dlc / base
     if dest.exists():
@@ -4271,7 +4275,7 @@ def _library_filter_args(q: str = "", favorites: int = 0, format: str = "",
                          arrangements_has: str = "", arrangements_lacks: str = "",
                          stems_has: str = "", stems_lacks: str = "",
                          has_lyrics: str = "", tunings: str = "") -> dict:
-    fmt = format if format in ("archive", "sloppak", "loose") else ""
+    fmt = format if format in ("archive", "sloppak", "feedpak", "loose") else ""
     return {
         "q": q,
         "favorites_only": bool(favorites),
