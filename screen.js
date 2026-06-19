@@ -351,17 +351,23 @@
     // a controller behind them.
     const _MIDI_BLOCKLIST_RE = /midi through|^thru\b|^iac\b/i;
 
-    let _midiAccess = null;
-    let _midiInput = null;
+    // MIDI is sourced from the core `midi-input` capability domain
+    // (window.slopsmith.midiInput) rather than a private requestMIDIAccess() —
+    // one device-access boundary shared with piano/drums/keys/onboarding.
+    const _MIDI_REQUESTER = 'drum_highway_3d';
+    let _midiReady = false;      // discover() has run
+    let _midiHandle = null;      // live domain session handle (addListener/removeListener)
+    let _midiListener = null;    // addListener callback wrapping _midiOnMessage
+    let _midiStateSub = false;   // subscribed to midi-input:sources-changed
+    let _midiInput = null;       // selected source descriptor { id, name }
     // Set to true by _midiConnect when a new device is selected. The render
     // loop reads and clears this to skip retroactive miss-counting for notes
     // that elapsed while no device was connected.
     let _midiJustConnected = false;
-    // Gates `_midiInput.onmidimessage` wiring. init() flips true via
-    // _midiResume() and destroy() flips false via _midiPause(). Necessary
-    // because _midiInit is async — its requestMIDIAccess promise can
-    // resolve after the renderer was already destroyed, and without this
-    // gate `_midiAutoConnect` would wire onmidimessage into a dead instance.
+    // Gates the live listener wiring. init() flips true via _midiResume() and
+    // the last destroy() flips false via _midiReleaseSession(). Necessary because _midiConnect is
+    // async — an open() can resolve after the renderer was destroyed, and
+    // without this gate addListener would wire hits into a dead instance.
     let _midiActive = false;
     // Routes incoming MIDI events to the focused renderer (null when no
     // instance is active). Splitscreen support is deferred; for now this
@@ -376,23 +382,65 @@
         try { localStorage.setItem(k, v); } catch (_) {}
     }
 
+    // The core midi-input domain, if present (it ships with core).
+    function _mi() {
+        const m = window.slopsmith && window.slopsmith.midiInput;
+        return (m && m.version === 1) ? m : null;
+    }
+    // Domain sources shaped like the old MIDIInput list: { id, name }.
+    // sourceId == the old MIDIInput.id, so saved picks stay compatible.
+    function _midiSources() {
+        const mi = _mi();
+        if (!mi) return [];
+        return mi.listSources().map(s => ({ id: s.sourceId, name: s.label, key: s.logicalSourceKey }));
+    }
+    // Detach the live listener + release the domain session.
+    function _midiDetach() {
+        // Invalidate any in-flight _midiConnect open: a detach driven by device
+        // removal (sources-changed) or an opt-out must supersede a pending open
+        // so it can't resume and install a handle for a now-gone source.
+        _midiConnectSeq += 1;
+        if (_midiHandle && _midiListener) { try { _midiHandle.removeListener(_midiListener); } catch (_) { /* best-effort */ } }
+        const mi = _mi();
+        if (mi && _midiInput) { try { mi.close({ requester: _MIDI_REQUESTER, logicalSourceKey: _midiInput.key || ('web-midi::' + _midiInput.id) }); } catch (_) { /* best-effort */ } }
+        _midiHandle = null;
+        _midiListener = null;
+        _midiInput = null;
+    }
+
     let _midiInitInFlight = null;
+    let _midiConnectSeq = 0;     // generation guard for async _midiConnect races
     async function _midiInit() {
-        if (_midiAccess) {
-            // Access already granted in a prior init() cycle. Re-run
-            // _midiAutoConnect anyway so a localStorage change between
-            // inits (e.g. settings UI swap, or a manual write) takes
-            // effect on the next viz-pick. Without this, the plugin
-            // keeps the device from the FIRST init forever.
-            _midiAutoConnect();
+        if (_midiReady) {
+            // Only (re)connect when there's no live session. A repeated init
+            // (settings panel open, extra splitscreen instance) must NOT re-enter
+            // _midiConnect on an active handle — that tears down the live session
+            // and releases held pads for no reason. After a full release the
+            // handle is null, so reconnect happens then.
+            if (!_midiHandle) _midiAutoConnect();
             return;
         }
         if (_midiInitInFlight) return _midiInitInFlight;
-        if (!navigator.requestMIDIAccess) return;
+        const mi = _mi();
+        if (!mi) return;
         _midiInitInFlight = (async () => {
             try {
-                _midiAccess = await navigator.requestMIDIAccess({ sysex: false });
-                _midiAccess.onstatechange = () => _midiNotifyDeviceListChanged();
+                const r = await mi.discover();   // permission boundary (requestMIDIAccess, in core)
+                // Only latch ready on a successful discovery — a denied/unavailable
+                // outcome must NOT latch, or reopening never retries the prompt.
+                if (!r || r.outcome !== 'handled') return;
+                _midiReady = true;
+                // Replug/unplug refresh (replaces MIDIAccess.onstatechange).
+                if (!_midiStateSub && window.slopsmith && typeof window.slopsmith.on === 'function') {
+                    _midiStateSub = true;
+                    window.slopsmith.on('midi-input:sources-changed', () => {
+                        _midiNotifyDeviceListChanged();
+                        // Reconnect the saved device when it (re)appears after an
+                        // unplug; recovery only (no fallback) so a transient unplug
+                        // doesn't switch to / persist another input.
+                        if (!_midiInput) _midiAutoConnect(false);
+                    });
+                }
                 _midiAutoConnect();
                 _midiNotifyDeviceListChanged();
             } catch (e) {
@@ -430,10 +478,13 @@
         } catch (_) {}
     }
 
-    function _midiAutoConnect() {
-        if (!_midiAccess) return;
-        const inputs = [];
-        _midiAccess.inputs.forEach(inp => inputs.push(inp));
+    function _midiAutoConnect(allowFallback) {
+        // Recovery (sources-changed after unplug) passes false: never switch to a
+        // fallback input, because _midiConnect persists the pick and that would
+        // overwrite the user's saved device on a transient multi-device unplug
+        // (the original returns on replug and reconnects then).
+        if (allowFallback === undefined) allowFallback = true;
+        const inputs = _midiSources();
         if (!inputs.length) return;
         const saved = _readSavedPick();
         // Explicit None — user opted out, don't auto-connect.
@@ -451,43 +502,94 @@
             target = inputs.find(i => (i.name || '').toLowerCase() === n) || null;
         }
         if (!target) {
-            // No saved pick (or saved pick disappeared) — pick the first
-            // input that isn't a loopback/passthrough. Falls back to
+            // Skip the substitute ONLY when a saved pick exists but is currently
+            // absent (recovery: preserve it, don't clobber on a transient unplug).
+            // With no saved pick at all, a fallback is the intended first-hotplug
+            // auto-connect — allow it even in recovery.
+            const hasSavedPick = !!(saved && (saved.id || saved.name));
+            if (!allowFallback && hasSavedPick) return;
+            // Pick the first input that isn't a loopback/passthrough. Falls back to
             // inputs[0] only if every input is blocklisted.
             target = inputs.find(i => !_MIDI_BLOCKLIST_RE.test(i.name || '')) || inputs[0];
         }
         _midiConnect(target.id, target.name);
     }
 
-    function _midiConnect(id, name) {
-        if (_midiInput) _midiInput.onmidimessage = null;
-        _midiInput = null;
+    async function _midiConnect(id, name) {
+        // Capture our generation AFTER _midiDetach()'s own bump, so a later
+        // detach (device removal / new connect / opt-out) reliably supersedes us.
+        _midiDetach();
+        const myGen = ++_midiConnectSeq;
         // Pass through `name` so a future id-drift can still find this
         // device. Empty id is the explicit-None opt-out.
         _writeSavedPick(id || '', name || '');
-        if (id && _midiAccess) {
-            _midiAccess.inputs.forEach(inp => {
-                if (inp.id === id) {
-                    _midiInput = inp;
-                    _midiJustConnected = true;
-                    if (_midiActive) _midiInput.onmidimessage = _midiOnMessage;
+        const mi = _mi();
+        if (id && mi) {
+            const src = _midiSources().find(s => s.id === id);
+            if (src) {
+                const lkey = src.key || ('web-midi::' + src.id);
+                _midiInput = { id: src.id, name: src.name, key: lkey };
+                _midiJustConnected = true;
+                // No live renderer to consume OR release a session — don't hold one
+                // open (settings-only ensure-init, or the last instance was torn
+                // down during async discovery). The pick is saved; a later renderer
+                // mount re-runs auto-connect and opens for real, releasing on destroy.
+                if (_instances.size === 0) { _midiNotifyDeviceListChanged(); return; }
+                try {
+                    await mi.select(lkey);
+                    const res = await mi.open({ requester: _MIDI_REQUESTER, logicalSourceKey: lkey });
+                    // A newer _midiConnect (device switch / None / replug) ran while
+                    // we awaited open — discard this stale session so we don't wire a
+                    // listener for a device the user already moved off of.
+                    if (myGen !== _midiConnectSeq) {
+                        if (!_midiInput || _midiInput.key !== lkey) { try { mi.close({ requester: _MIDI_REQUESTER, logicalSourceKey: lkey }); } catch (_) { /* best-effort */ } }
+                        return;
+                    }
+                    if (res && res.handle) {
+                        _midiHandle = res.handle;
+                        // The domain handle delivers raw MIDI data; adapt to the
+                        // old MIDIMessageEvent shape so _midiOnMessage is unchanged.
+                        _midiListener = (data) => _midiOnMessage({ data });
+                        if (_midiActive) _midiHandle.addListener(_midiListener);
+                    } else {
+                        // Open yielded no live handle (device vanished post-discovery,
+                        // or denied/unavailable). Clear the selection so the render
+                        // loop's connected-device gate doesn't sweep phantom misses.
+                        _midiInput = null;
+                    }
+                } catch (e) {
+                    console.warn('[Drum-Hwy3D] MIDI open failed:', e);
+                    // Only clear if we're still the current connect — a stale older
+                    // open's rejection must not wipe a newer connect's installed
+                    // _midiInput/_midiHandle (which would also leak the live handle,
+                    // since closes are gated on _midiInput).
+                    if (myGen === _midiConnectSeq) _midiInput = null;
                 }
-            });
+            }
         }
         // Notify on BOTH connect and disconnect/opt-out so any open
         // settings panel re-renders its device dropdown consistently.
-        // The explicit-"none" path used to early-return before reaching
-        // here, leaving other open UIs showing a stale selection.
         _midiNotifyDeviceListChanged();
     }
 
     function _midiResume() {
+        // Idempotent: a second live renderer instance (splitscreen/overlapping
+        // lifetimes) calls this while already active. The domain handle's
+        // addListener is Set-backed, but don't rely on the provider de-duping —
+        // re-adding here could double-deliver one MIDI hit to the focused
+        // instance and score a hit plus duplicate misses.
+        if (_midiActive) return;
         _midiActive = true;
-        if (_midiInput) _midiInput.onmidimessage = _midiOnMessage;
+        if (_midiHandle && _midiListener) { try { _midiHandle.addListener(_midiListener); } catch (_) { /* best-effort */ } }
     }
-    function _midiPause() {
+    // Called when the LAST live instance is torn down: fully release the shared
+    // midi-input domain session (via _midiDetach: close + null + generation bump),
+    // not just the listener, so the device/provider session isn't held open after
+    // the visualization is gone. Re-mount's _midiInit auto-connects from the saved
+    // pick, so _midiReady is intentionally left latched.
+    function _midiReleaseSession() {
         _midiActive = false;
-        if (_midiInput) _midiInput.onmidimessage = null;
+        _midiDetach();
     }
 
     function _midiOnMessage(e) {
@@ -509,12 +611,8 @@
     function _midiNotifyDeviceListChanged() {
         // If the currently-selected input was disconnected, clear the reference
         // so _updateMissed() stops counting and the UI shows "no device".
-        if (_midiInput && _midiAccess) {
-            const stillPresent = _midiAccess.inputs.has(_midiInput.id);
-            if (!stillPresent) {
-                _midiInput.onmidimessage = null;
-                _midiInput = null;
-            }
+        if (_midiInput && !_midiSources().some(s => s.id === _midiInput.id)) {
+            _midiDetach();
         }
         try {
             window.dispatchEvent(new CustomEvent('drum_h3d:midi_devices'));
@@ -523,11 +621,7 @@
 
     // List the currently-known input devices for the settings UI.
     function _midiListInputs() {
-        const out = [];
-        if (_midiAccess) {
-            _midiAccess.inputs.forEach(inp => out.push({ id: inp.id, name: inp.name || inp.id }));
-        }
-        return out;
+        return _midiSources().map(s => ({ id: s.id, name: s.name || s.id }));
     }
     function _midiCurrentInputId() {
         return _midiInput ? _midiInput.id : '';
@@ -620,14 +714,8 @@
         // Empty string = explicit "None" opt-out. Persists by name +
         // id via _midiConnect so a future page reload still finds the
         // device after Chrome regenerates ids.
-        if (!_midiAccess) return false;
-        let name = '';
-        if (id) {
-            _midiAccess.inputs.forEach(inp => {
-                if (inp.id === id) name = inp.name || '';
-            });
-        }
-        _midiConnect(id || '', name);
+        const src = id ? _midiSources().find(s => s.id === id) : null;
+        _midiConnect(id || '', src ? src.name : '');
         return true;
     };
     window.drumH3dGetSynthVolume = function () {
@@ -1630,7 +1718,12 @@
                 // When a device was just connected, reset scoring first so
                 // notes that elapsed while no device was connected are not
                 // retroactively counted as misses.
-                if (_midiInput) {
+                // Gate on _midiHandle (the live wired session), NOT _midiInput: the
+                // latter is set as soon as a device is picked, but the async
+                // mi.open() may still be pending (slow / permission prompt), during
+                // which no events can arrive — counting passes then would bank false
+                // misses. _midiHandle is truthy only after a handle is opened+wired.
+                if (_midiHandle) {
                     if (_midiJustConnected) { _midiJustConnected = false; _resetScoring(); }
                     _updateMissed(t);
                 }
@@ -2002,7 +2095,7 @@
             destroy() {
                 _instances.delete(instance);
                 if (_activeInstance === instance) _activeInstance = null;
-                if (_instances.size === 0) _midiPause();
+                if (_instances.size === 0) _midiReleaseSession();
                 _removeHud();
                 teardown();
                 highwayCanvas = null;
