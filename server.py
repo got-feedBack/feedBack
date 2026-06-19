@@ -6298,13 +6298,72 @@ def diagnostics_hardware():
 
 
 
+def _if_none_match_hits(header: str | None, etag: str) -> bool:
+    """True if an If-None-Match header matches `etag` (weak comparison).
+
+    Handles the `*` wildcard and comma-separated lists, and ignores a weak
+    `W/` prefix on either side — the standard semantics for a conditional GET.
+    """
+    if not header:
+        return False
+    bare = etag.removeprefix("W/")
+    for tok in header.split(","):
+        t = tok.strip()
+        if t == "*" or t.removeprefix("W/") == bare:
+            return True
+    return False
+
+
+# Album art is served with a strong validator (an ETag on the sloppak byte
+# path; FileResponse's own ETag/Last-Modified on the file paths) and revalidated
+# with `no-cache`. That keeps re-scroll cheap — a conditional GET returns a
+# bodyless 304 — without ever serving a stale cover. A long `immutable` max-age
+# was rejected: the frontend's `?v=<mtime>` buster is only second-resolution, so
+# a same-second cover rewrite would keep the URL and pin the old bytes for the
+# cache lifetime. Validation cost is negligible for a localhost backend.
+_ART_CACHE_HEADERS = {"Cache-Control": "no-cache"}
+
+
+def _art_etag(path: Path) -> str | None:
+    """Strong validator for an art file: nanosecond mtime + size (so a
+    same-second rewrite still changes it). None if the file can't be stat'd."""
+    try:
+        st = path.stat()
+        return f'"{st.st_mtime_ns}-{st.st_size}"'
+    except OSError:
+        return None
+
+
+def _art_conditional(etag: str | None, request: Request | None):
+    """Return (headers, not_modified) for an art response. `not_modified` is
+    True when the client's If-None-Match already matches `etag` → caller should
+    return a bodyless 304. Starlette's FileResponse emits an ETag but does NOT
+    itself evaluate If-None-Match, so every art path routes through here to get
+    real conditional handling."""
+    headers = dict(_ART_CACHE_HEADERS)
+    if etag:
+        headers["ETag"] = etag
+    inm = request.headers.get("if-none-match") if request is not None else None
+    return headers, bool(etag) and _if_none_match_hits(inm, etag)
+
+
+def _file_art_response(path: Path, media_type: str, request: Request | None):
+    """FileResponse for an on-disk art file, with no-cache + ETag and a bodyless
+    304 when the client's validator still matches."""
+    headers, not_modified = _art_conditional(_art_etag(path), request)
+    if not_modified:
+        return Response(status_code=304, headers=headers)
+    return FileResponse(str(path), media_type=media_type, headers=headers)
+
+
 @app.get("/api/song/{filename:path}/art")
-async def get_song_art(filename: str):
+async def get_song_art(filename: str, request: Request = None):
     """Serve album art for a song.
 
     Dispatches by format and returns the appropriate media type:
-      - Sloppak: serves `cover.jpg` (or manifest-declared cover) from
-        the source dir as JPEG/PNG/WebP.
+      - Sloppak: serves `cover.jpg` (or manifest-declared cover) read directly
+        from the package (the single cover member for zip-form sloppaks — no
+        full unpack) as JPEG/PNG/WebP.
       - Loose folder: serves the discovered art file directly as
         JPEG/PNG/WebP.
     """
@@ -6318,27 +6377,29 @@ async def get_song_art(filename: str):
     if not song_path.exists():
         return JSONResponse({"error": "not found"}, 404)
 
-    # Sloppak path: pull cover.jpg from the source dir (manifest-declared or default).
+    # Sloppak path: read the cover (manifest-declared or default) straight from
+    # the package. For a zip-form sloppak this opens just the cover member —
+    # NOT the whole archive — so the library grid never triggers a full unpack
+    # of stems just to paint a thumbnail.
     if sloppak_mod.is_sloppak(song_path):
+        # Read the cover (cheap — single member, no full unpack) and validate by
+        # its CONTENT. A stat-based ETag would be wrong for directory-form
+        # sloppaks: editing cover.jpg in place changes the file's mtime, not the
+        # directory's, so a dir-stat ETag could emit a stale 304. Content hashing
+        # is correct for both dir- and zip-form. Raw byte Response lacks
+        # FileResponse's validators, so we attach the ETag + honor If-None-Match.
         try:
-            src = sloppak_mod.resolve_source_dir(filename, dlc, SLOPPAK_CACHE_DIR)
-            manifest = sloppak_mod.load_manifest(song_path)
-            cover_rel = str(manifest.get("cover") or "cover.jpg")
-            cover_path = (src / cover_rel).resolve()
-            # Prevent escape and fall back to default name if missing.
-            try:
-                cover_path.relative_to(src.resolve())
-            except ValueError:
-                return JSONResponse({"error": "forbidden"}, 403)
-            if cover_path.exists() and cover_path.is_file():
-                mt = {
-                    ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-                    ".png": "image/png", ".webp": "image/webp",
-                }.get(cover_path.suffix.lower(), "image/jpeg")
-                return FileResponse(str(cover_path), media_type=mt)
+            art = await asyncio.to_thread(sloppak_mod.read_cover_bytes, song_path)
         except Exception:
-            pass
-        return JSONResponse({"error": "no art"}, 404)
+            art = None
+        if art is None:
+            return JSONResponse({"error": "no art"}, 404)
+        data, mt = art
+        etag = f'"{hashlib.sha1(data).hexdigest()}"'
+        headers, not_modified = _art_conditional(etag, request)
+        if not_modified:
+            return Response(status_code=304, headers=headers)
+        return Response(content=data, media_type=mt, headers=headers)
 
     # Loose folder path: serve art file directly.
     # song_path is already validated against DLC_DIR by _resolve_dlc_path.
@@ -6358,7 +6419,7 @@ async def get_song_art(filename: str):
                     ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                     ".png": "image/png", ".webp": "image/webp",
                 }.get(art_resolved.suffix.lower(), "image/jpeg")
-                return FileResponse(str(art_resolved), media_type=mt)
+                return _file_art_response(art_resolved, mt, request)
         return JSONResponse({"error": "no art"}, 404)
 
     # Custom art uploaded via /art/upload is cached as PNG under ART_CACHE_DIR;
@@ -6367,7 +6428,7 @@ async def get_song_art(filename: str):
     safe_name = filename.replace("/", "_").replace(" ", "_")
     cached = art_cache / f"{safe_name}.png"
     if cached.exists():
-        return FileResponse(str(cached), media_type="image/png")
+        return _file_art_response(cached, "image/png", request)
 
     return JSONResponse({"error": "no art"}, 404)
 

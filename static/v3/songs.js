@@ -383,7 +383,7 @@
             : '';
         return '<div class="group relative" data-fn="' + esc(key) + '" data-library-song="' + esc(songId(song)) + '" data-library-provider="' + esc(state.provider) + '">' +
             '<div class="relative aspect-square rounded-lg overflow-hidden bg-fb-card cursor-pointer" data-v3-play>' +
-            '<img src="' + esc(artUrl(song)) + '" alt="" class="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105" onerror="this.style.visibility=\'hidden\'">' +
+            '<img src="' + esc(artUrl(song)) + '" alt="" loading="lazy" decoding="async" class="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105" onerror="this.style.visibility=\'hidden\'">' +
             tuning + checkbox + accuracyBadge(key) + fmtBadge(song) + overlay +
             '<div class="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition">' +
             inlineBtns +
@@ -645,7 +645,7 @@
                 '<div><div class="text-xs uppercase tracking-wider text-fb-textDim/70 mt-2 mb-1">' + esc(al.name || 'Unknown') + '</div>' +
                 (al.songs || []).map((s) => { const k = cardKey(s); const fl = fmtLabel(s); return (
                     '<div class="flex items-center gap-2 py-1 group" data-fn="' + esc(k) + '" data-library-song="' + esc(songId(s)) + '" data-library-provider="' + esc(state.provider) + '">' +
-                    '<img src="' + esc(artUrl(s)) + '" alt="" class="w-8 h-8 rounded object-cover bg-fb-card cursor-pointer" data-v3-play onerror="this.style.visibility=\'hidden\'">' +
+                    '<img src="' + esc(artUrl(s)) + '" alt="" loading="lazy" decoding="async" class="w-8 h-8 rounded object-cover bg-fb-card cursor-pointer" data-v3-play onerror="this.style.visibility=\'hidden\'">' +
                     '<span class="flex-1 min-w-0 cursor-pointer" data-v3-play><span class="block text-sm text-fb-text truncate">' + esc(s.title) + '</span></span>' +
                     (fl ? '<span class="text-[9px] font-bold px-1 py-0.5 rounded shrink-0 ' + (fl === 'SLOPPAK' ? 'bg-fb-primary/20 text-fb-primary' : 'bg-fb-card text-fb-textDim') + '">' + fl + '</span>' : '') +
                     (state.accuracy[k] != null ? '<span class="text-xs font-bold ' + (state.accuracy[k] >= 0.9 ? 'text-fb-good' : state.accuracy[k] >= 0.5 ? 'text-fb-mid' : 'text-fb-low') + '">' + Math.round(state.accuracy[k] * 100) + '%</span>' : '') +
