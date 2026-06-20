@@ -14,7 +14,7 @@ links keep resolving.
 
 The published format is named **feedpak** (extension `.feedpak`, manifest key `feedpak_version`).
 This codebase still uses the legacy **sloppak** name internally — `lib/sloppak.py`, the
-`.sloppak` extension, `SLOPSMITH_*` env vars, etc. **They describe the same on-disk format.** The
+`.sloppak` extension, `FEEDBACK_*` env vars, etc. **They describe the same on-disk format.** The
 rename is repo/public-facing only for now (see the top-level workspace `CLAUDE.md`), so when the
 spec says `feedpak` / `feedpak_version`, the packs this server reads and writes today are the same
 structure under the `.sloppak` name. The internal rename is a separate, later effort.

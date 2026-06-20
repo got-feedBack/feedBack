@@ -70,7 +70,7 @@ RUN apk add --no-cache curl xz \
 # ── Stage 1d: Build the Tailwind stylesheet over the FULL plugin set ──────
 # The committed static/tailwind.min.css is generated against only the in-tree
 # plugins. Rather than ship it as-is (leaving baked-in plugins' classes
-# unstyled now that the Play CDN's runtime JIT is gone — slopsmith#411),
+# unstyled now that the Play CDN's runtime JIT is gone — feedBack#411),
 # rebuild it here, after static/ + plugins/ are present, so the sheet covers
 # whatever plugins are baked into the image. Runs in a throwaway node stage so
 # this build-time toolchain never lands in the final image; the runtime node
@@ -112,7 +112,7 @@ RUN apt-get update \
 # package drags in the full codec + TLS + graphics dependency tree
 # (mbedtls, gnutls28, mesa, x264, tiff, openjpeg2, libcaca, harfbuzz,
 # cairo, openldap, libcdio…), almost all of which has unfixed CVEs and
-# none of which Slopsmith uses. We pull a static ffmpeg binary further
+# none of which FeedBack uses. We pull a static ffmpeg binary further
 # down instead.
 #
 # vgmstream-cli is also built with -DUSE_FFMPEG=OFF (see stage 1b), so
@@ -142,7 +142,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 # Node + the pinned Tailwind CLI for RUNTIME stylesheet regeneration. When a
-# plugin is installed into SLOPSMITH_PLUGINS_DIR at runtime (or discovered
+# plugin is installed into FEEDBACK_PLUGINS_DIR at runtime (or discovered
 # there on startup), the server rebuilds static/tailwind.min.css so the
 # plugin's classes are styled — the image-baked sheet only covered in-tree
 # plugins (see lib/tailwind_rebuild.py). tailwindcss is installed globally so
@@ -176,10 +176,10 @@ COPY --from=ffmpeg-fetcher /out/LICENSE.txt /usr/share/doc/ffmpeg/LICENSE.txt
 RUN chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe
 # Record provenance so the exact BtbN source can be located for GPL compliance
 # or debugging. Inspect with: docker inspect <image> | grep -A5 ffmpeg
-LABEL org.slopsmith.ffmpeg.release="${FFMPEG_RELEASE}" \
-      org.slopsmith.ffmpeg.source.amd64="${FFMPEG_BUILD_AMD64}" \
-      org.slopsmith.ffmpeg.source.arm64="${FFMPEG_BUILD_ARM64}" \
-      org.slopsmith.ffmpeg.upstream="https://github.com/BtbN/FFmpeg-Builds"
+LABEL org.feedBack.ffmpeg.release="${FFMPEG_RELEASE}" \
+      org.feedBack.ffmpeg.source.amd64="${FFMPEG_BUILD_AMD64}" \
+      org.feedBack.ffmpeg.source.arm64="${FFMPEG_BUILD_ARM64}" \
+      org.feedBack.ffmpeg.upstream="https://github.com/BtbN/FFmpeg-Builds"
 
 # Native vgmstream-cli built against the image's own libraries
 COPY --from=vgmstream-builder /out/vgmstream-cli /usr/local/bin/vgmstream-cli

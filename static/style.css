@@ -570,7 +570,7 @@ html { scroll-behavior: smooth; }
     #player-controls button { padding: 4px 8px; font-size: 11px; }
 }
 
-/* Library filter drawer (slopsmith#129/#69) */
+/* Library filter drawer (feedBack#129/#69) */
 #lib-filter-drawer.open { transform: translateX(0); }
 #lib-filter-drawer .filter-pill {
     display: inline-flex;

@@ -41,7 +41,7 @@ def detect_runtime() -> dict:
     nvidia-smi / psutil CPU probes.
     """
     out: dict = {"kind": "bare", "in_docker": False, "in_kubernetes": False}
-    env_runtime = os.environ.get("SLOPSMITH_RUNTIME", "").strip().lower()
+    env_runtime = os.environ.get("FEEDBACK_RUNTIME", "").strip().lower()
     if env_runtime in ("electron", "docker", "bare"):
         out["kind"] = env_runtime
     if Path("/.dockerenv").exists():
@@ -65,7 +65,7 @@ def detect_runtime() -> dict:
             import psutil  # type: ignore
 
             parent = psutil.Process(os.getppid()).name().lower()
-            if "electron" in parent or "slopsmith" in parent:
+            if "electron" in parent or "feedBack" in parent:
                 out["kind"] = "electron"
         except Exception:
             pass

@@ -29,12 +29,12 @@ pYIN run when the server isn't reachable.
 Cache key parity with stem_separation / lyric_transcription
 ───────────────────────────────────────────────────────────
 A `pitch_extraction` manifest block mirrors the shape introduced by
-slopsmith#357: `{engine, model, version}`. Today engine is fixed at
+feedBack#357: `{engine, model, version}`. Today engine is fixed at
 `"crepe"` (the server's choice) and model at `"v1"` (server doesn't
 yet expose the CREPE capacity dial it uses internally; this is the
 requested value, same caveat as `lyric_transcription.model`). The
 schema version is independent of the upstream CREPE version and bumps
-per slopsmith's contract:
+per feedBack's contract:
    * patch — metadata-only or implementation fixes
    * minor — backward-compatible additions
    * major — output shape / semantics changed; existing
@@ -50,7 +50,7 @@ import math
 from pathlib import Path
 from typing import Callable, Optional
 
-log = logging.getLogger("slopsmith.lib.vocal_pitch")
+log = logging.getLogger("feedBack.lib.vocal_pitch")
 
 ProgressCB = Optional[Callable[[float, str, str], None]]
 
@@ -72,7 +72,7 @@ def extract_pitch_remote(
 ) -> list[dict]:
     """POST the vocal stem + lyric timings to `{server_url}/pitch`.
 
-    `lyrics` is the same `[{t, d, w}, ...]` list slopsmith writes to
+    `lyrics` is the same `[{t, d, w}, ...]` list feedBack writes to
     `lyrics.json`. The endpoint only consumes `t` + `d` (it doesn't
     need the word text), but we pass the full payload through —
     slimmer to forward what we already have than to project.

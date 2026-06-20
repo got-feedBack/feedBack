@@ -17,7 +17,7 @@
  */
 (function () {
     'use strict';
-    const sm = window.slopsmith;
+    const sm = window.feedBack;
     const PLUGIN_ID = 'tutorials';
     const API = '/api/plugins/' + PLUGIN_ID;
     const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (

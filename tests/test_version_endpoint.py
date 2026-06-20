@@ -28,7 +28,7 @@ def client(tmp_path, monkeypatch):
     added) don't leak between tests.
     """
     monkeypatch.setenv("CONFIG_DIR", str(tmp_path))
-    monkeypatch.setenv("SLOPSMITH_SYNC_STARTUP", "1")
+    monkeypatch.setenv("FEEDBACK_SYNC_STARTUP", "1")
     # Clear ambient overrides so the default-URL assertions are deterministic
     # regardless of the caller's shell / CI environment. Individual tests
     # re-set these via their own monkeypatch calls as needed.
