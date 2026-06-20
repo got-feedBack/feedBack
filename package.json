@@ -8,9 +8,11 @@
     "test:headed": "playwright test --headed",
     "test:debug": "playwright test --debug",
     "test:js": "node --test tests/js/*.test.js 'tests/plugins/*/js/*.test.js'",
-    "install:playwright": "playwright install chromium"
+    "install:playwright": "playwright install chromium",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@playwright/test": "^1.59.1"
+    "@playwright/test": "^1.59.1",
+    "typescript": "^5.4"
   }
 }
