@@ -1444,7 +1444,8 @@ function createHighway() {
         const isPinchHarmonic = opts?.hp || false;
         const isChord = opts?.chord || false;
         const bend = opts?.bn || 0;
-        const slide = opts?.sl || -1;
+        const slide = opts?.sl ?? -1;  // pitched slide-to fret (-1 = none; 0 = slide to open)
+        const slu = opts?.slu ?? -1;   // unpitched slide-to fret (-1 = none)
         const hammerOn = opts?.ho || false;
         const pullOff = opts?.po || false;
         const tap = opts?.tp || false;
@@ -1637,20 +1638,29 @@ function createHighway() {
 
         if (sz < 14) return;  // Skip small technique labels
 
-        // Slide indicator (diagonal arrow)
-        if (slide >= 0) {
-            const dir = slide > fret ? -1 : 1;  // arrow direction (up or down the neck); mirror handles lefty
+        // Slide indicator (diagonal arrow). Pitched (sl) draws a solid arrow to
+        // the target fret; unpitched (slu) draws a dashed diagonal with no
+        // arrowhead (no definite target pitch). The two are mutually exclusive
+        // in the data; the 3D highway makes the same pitched/unpitched split.
+        if (slide >= 0 || slu >= 0) {
+            const pitched = slide >= 0;
+            const target = pitched ? slide : slu;
+            const dir = target > fret ? -1 : 1;  // up or down the neck; mirror handles lefty
             ctx.strokeStyle = '#fff';
             ctx.lineWidth = Math.max(2, sz / 10);
+            if (!pitched) ctx.setLineDash([Math.max(2, sz / 8), Math.max(2, sz / 8)]);
             ctx.beginPath();
             ctx.moveTo(x - sz * 0.3, y + dir * sz * 0.3);
             ctx.lineTo(x + sz * 0.3, y - dir * sz * 0.3);
             ctx.stroke();
-            // Arrowhead
-            ctx.beginPath();
-            ctx.moveTo(x + sz * 0.3, y - dir * sz * 0.3);
-            ctx.lineTo(x + sz * 0.15, y - dir * sz * 0.15);
-            ctx.stroke();
+            if (!pitched) ctx.setLineDash([]);
+            // Arrowhead only for a pitched slide (definite target pitch).
+            if (pitched) {
+                ctx.beginPath();
+                ctx.moveTo(x + sz * 0.3, y - dir * sz * 0.3);
+                ctx.lineTo(x + sz * 0.15, y - dir * sz * 0.15);
+                ctx.stroke();
+            }
         }
 
         // H/P/T label above note
