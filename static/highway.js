@@ -468,6 +468,16 @@ function createHighway() {
         return w / 2 - hw + margin + t * usable;
     }
 
+    /** Map a bend curve [{t, v}] (§6.2.1) to [{x, v}] with x normalized to
+     * 0..1 across the curve's time span (0 when the span is degenerate).
+     * Pure — drives the 2D bend-shape glyph. */
+    function bnvNormalizedPoints(bnv) {
+        if (!Array.isArray(bnv) || bnv.length === 0) return [];
+        const t0 = bnv[0].t;
+        const span = bnv[bnv.length - 1].t - t0;
+        return bnv.map(p => ({ x: span > 0 ? (p.t - t0) / span : 0, v: p.v }));
+    }
+
     /** Call while lefty mirror transform is active; keeps glyphs readable. */
     function fillTextReadable(text, x, y) {
         // ctx may be null when the 2D context was never acquired
@@ -1601,27 +1611,59 @@ function createHighway() {
         // Bend notation
         if (bend && bend > 0 && sz >= 12) {
             const lw = Math.max(2, sz / 10);
-            const arrowH = sz * 0.55 * Math.min(bend, 2);  // taller for bigger bends
             const ay = y - half - 4;
-            const tipY = ay - arrowH;
+            // px above the gem for a bend of `v` semitones (shared by the
+            // curve contour and the scalar-arrow fallback).
+            const hOf = (v) => sz * 0.55 * Math.min(Math.max(v, 0), 2);
+            const bnv = Array.isArray(opts?.bnv) ? opts.bnv : null;
 
             ctx.strokeStyle = '#fff';
             ctx.lineWidth = lw;
 
-            // Curved arrow
-            ctx.beginPath();
-            ctx.moveTo(x, ay);
-            ctx.quadraticCurveTo(x + sz * 0.2, ay - arrowH * 0.5, x, tipY);
-            ctx.stroke();
+            let labelTopY;  // y of the highest drawn point, for the label
+            if (bnv && bnv.length >= 2) {
+                // Bend curve (§6.2.1): trace the real shape as a contour above
+                // the gem (round-trip rises then falls, pre-bend starts high,
+                // release descends, …) — `bt` is implicit in the point shape.
+                const pts = bnvNormalizedPoints(bnv);
+                const gw = sz * 0.6;
+                const x0 = x - gw / 2;
+                ctx.beginPath();
+                pts.forEach((pt, i) => {
+                    const px = x0 + pt.x * gw;
+                    const py = ay - hOf(pt.v);
+                    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+                });
+                ctx.stroke();
+                // Arrowhead only when the gesture ends rising (plain bend /
+                // pre-bend); round-trip and release finish heading down.
+                const a = pts[pts.length - 2], b = pts[pts.length - 1];
+                if (b.v > a.v + 0.05) {
+                    const tipX = x0 + b.x * gw, tipY = ay - hOf(b.v);
+                    ctx.beginPath();
+                    ctx.moveTo(tipX - sz * 0.1, tipY + sz * 0.12);
+                    ctx.lineTo(tipX, tipY);
+                    ctx.lineTo(tipX + sz * 0.1, tipY + sz * 0.12);
+                    ctx.stroke();
+                }
+                labelTopY = ay - hOf(Math.max(...pts.map(p => p.v)));
+            } else {
+                // Fallback: single curved arrow up to the scalar peak.
+                const arrowH = hOf(bend);  // taller for bigger bends
+                const tipY = ay - arrowH;
+                ctx.beginPath();
+                ctx.moveTo(x, ay);
+                ctx.quadraticCurveTo(x + sz * 0.2, ay - arrowH * 0.5, x, tipY);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(x - sz * 0.12, tipY + sz * 0.12);
+                ctx.lineTo(x, tipY);
+                ctx.lineTo(x + sz * 0.12, tipY + sz * 0.12);
+                ctx.stroke();
+                labelTopY = tipY;
+            }
 
-            // Arrowhead
-            ctx.beginPath();
-            ctx.moveTo(x - sz * 0.12, tipY + sz * 0.12);
-            ctx.lineTo(x, tipY);
-            ctx.lineTo(x + sz * 0.12, tipY + sz * 0.12);
-            ctx.stroke();
-
-            // Bend label: "full", "1/2", "1 1/2", "2"
+            // Bend label: peak magnitude — "full", "1/2", "1 1/2", "2"
             let label;
             if (bend === 0.5) label = '½';
             else if (bend === 1) label = 'full';
@@ -1633,7 +1675,7 @@ function createHighway() {
             ctx.font = `bold ${Math.max(9, sz * 0.28) | 0}px sans-serif`;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'bottom';
-            fillTextReadable(label, x, tipY - 2);
+            fillTextReadable(label, x, labelTopY - 2);
         }
 
         if (sz < 14) return;  // Skip small technique labels
