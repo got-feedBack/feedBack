@@ -709,6 +709,14 @@
                     </select>
                 </div>
                 <div class="v3-pop-row">
+                    <span class="v3-pop-label" id="scoreboard-label">Scoreboard</span>
+                    <select id="scoreboard-select" onchange="setScoreboard(this.value)" class="v3-pop-select" aria-labelledby="scoreboard-label" title="Highway scoreboard">
+                        <option value="core" selected>Streak</option>
+                        <option value="detailed">Detailed</option>
+                        <option value="off">Off</option>
+                    </select>
+                </div>
+                <div class="v3-pop-row">
                     <span class="v3-pop-label" id="venue-motion-label">Venue Motion</span>
                     <select id="venue-motion-select" class="v3-pop-select" aria-labelledby="venue-motion-label" title="Venue Motion">
                         <option value="off">Off</option>
@@ -858,6 +866,7 @@
     <script src="/static/v3/badges.js"></script>
     <script src="/static/v3/stats-recorder.js"></script>
     <script src="/static/v3/live-performance-hud.js"></script>
+    <script src="/static/v3/scoreboard-pref.js"></script>
     <script src="/static/v3/venue-viz.js"></script>
     <script src="/static/v3/venue-instrument-pov.js"></script>
     <!-- venue-mood-fx must load before venue-scene-3d: the scene bridge reads

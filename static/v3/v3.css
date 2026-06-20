@@ -313,6 +313,19 @@
     transition: border-color .35s ease, box-shadow .35s ease, background .35s ease;
 }
 .v3-live-performance-hud.hidden { display: none; }
+
+/* Highway scoreboard preference (static/v3/scoreboard-pref.js).
+   One note-detection scoreboard at a time on the highway:
+     core (default) → core live-performance HUD; hide the note_detect plugin HUD
+     detailed       → note_detect .nd-hud; hide the core HUD
+     off            → hide both
+   The default rule keys off "not detailed and not off" so it's correct even
+   before the pref script sets data-scoreboard (avoids a flash of both). */
+html:not([data-scoreboard="detailed"]):not([data-scoreboard="off"]) .nd-hud { display: none !important; }
+html[data-scoreboard="detailed"] #v3-live-performance-hud { display: none !important; }
+html[data-scoreboard="off"] .nd-hud,
+html[data-scoreboard="off"] #v3-live-performance-hud { display: none !important; }
+
 .v3-live-performance-heading {
     display: flex;
     align-items: baseline;
