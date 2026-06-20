@@ -1147,6 +1147,59 @@ def _gpx_bend_scale(root: ET.Element) -> float:
     return 50.0 if peak <= 400 else 2500.0
 
 
+def _gpx_bend_float(tp: dict, name: str):
+    """Read a GPIF bend `<Property><Float>` value from the property map, or None."""
+    el = tp.get(name)
+    if el is None:
+        return None
+    try:
+        return float(el.findtext('Float') or 0)
+    except (ValueError, TypeError):
+        return None
+
+
+def _gpx_bend_shape(tp: dict, divisor: float, sustain: float):
+    """Build ``(peak, intent, curve)`` from a GPIF note's bend Properties (§6.2.1).
+
+    GPIF describes a bend as origin / middle / destination value+offset pairs;
+    `value / divisor` is semitones (divisor auto-detected per file) and the
+    `*Offset` Properties are 0..100 (percent of the note's duration). Produces a
+    bnv curve of up to three points (mapping each offset to seconds-from-onset),
+    or ``None`` when there's no usable shape (no points, flat-zero, or a
+    zero-length note). When an offset Property is absent the stage falls back to
+    an evenly-spaced default (origin 0%, middle 50%, destination 100%).
+
+    NOTE: offset Property names should be confirmed against a real GP8 export;
+    the value path matches the existing scalar-bend extraction either way."""
+    from gp2rs import _bend_intent_from_values  # lazy: gp2rs<->gpx circular
+    stages = (
+        ('BendOriginValue', 'BendOriginOffset', 0.0),
+        ('BendMiddleValue', 'BendMiddleOffset1', 50.0),
+        ('BendDestinationValue', 'BendDestinationOffset', 100.0),
+    )
+    pts = []
+    for vkey, okey, default_off in stages:
+        v = _gpx_bend_float(tp, vkey)
+        if v is None:
+            continue
+        off = _gpx_bend_float(tp, okey)
+        if off is None:
+            off = default_off
+        off = max(0.0, min(100.0, off))
+        pts.append((off, round(v / divisor, 1)))
+    if not pts:
+        return 0.0, 0, None
+    pts.sort(key=lambda p: p[0])
+    values = [v for _, v in pts]
+    peak = round(max(values), 1)
+    intent = _bend_intent_from_values(values)
+    curve = None
+    if peak > 0 and sustain > 0 and len(pts) >= 2:
+        curve = [{"t": round(sustain * (off / 100.0), 3), "v": v}
+                 for off, v in pts]
+    return peak, intent, curve
+
+
 def _resolve_pending_slides(rs_notes, rs_chords, pending_slides):
     """Resolve GP slide flags collected during the beat loop into RS slide
     fields, now that every note on each string is known.
@@ -1564,21 +1617,16 @@ def convert_file(
                                             rn.pull_off = True
                                         else:
                                             rn.hammer_on = True
-                                    # Bend: peak amount (GPIF bend value → semitones,
-                                    # scale auto-detected per file in _bend_divisor).
+                                    # Bend: `bn` is the peak; `bnv`/`bt` capture
+                                    # the shape over time (§6.2.1). value/divisor
+                                    # = semitones (scale auto-detected per file).
                                     if 'Bended' in _tp:
-                                        _bv = 0.0
-                                        for _bk in ('BendDestinationValue',
-                                                    'BendMiddleValue', 'BendOriginValue'):
-                                            _be = _tp.get(_bk)
-                                            if _be is not None:
-                                                try:
-                                                    _bv = max(_bv, float(
-                                                        _be.findtext('Float') or 0))
-                                                except (ValueError, TypeError):
-                                                    pass
-                                        if _bv > 0:
-                                            rn.bend = round(_bv / _bend_divisor, 1)
+                                        _peak, _intent, _curve = _gpx_bend_shape(
+                                            _tp, _bend_divisor, rn.sustain)
+                                        if _peak > 0:
+                                            rn.bend = _peak
+                                            rn.bend_intent = _intent
+                                            rn.bend_values = _curve
                                     # Slide flags: 1/2 = pitched slide to the next
                                     # note; 4 = slide out down, 8 = out up. Resolved
                                     # post-loop (needs the next note on the string).

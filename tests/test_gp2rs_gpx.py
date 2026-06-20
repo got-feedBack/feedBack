@@ -31,6 +31,7 @@ from gp2rs_gpx import (
     _collect_tone_events,
     _inject_tones,
     _resolve_pending_slides,
+    _gpx_bend_shape,
 )
 from gp2rs import RsNote
 
@@ -53,6 +54,50 @@ def test_safe_filename_stem(name, expected):
     # Never contains a path separator or traversal segment.
     assert "/" not in out and "\\" not in out
     assert ".." not in out
+
+
+# ── _gpx_bend_shape (bn / bt / bnv, §6.2.1) ─────────────────────────────────
+
+def _bend_props(**vals):
+    """Build a GPIF property map {name: <Property> element} for the given
+    bend Float values, e.g. _bend_props(BendOriginValue=0, BendMiddleValue=100)."""
+    tp = {}
+    for name, num in vals.items():
+        tp[name] = ET.fromstring(
+            f'<Property name="{name}"><Float>{num}</Float></Property>')
+    return tp
+
+
+def test_gpx_bend_shape_round_trip_curve():
+    """origin/middle/destination value+offset → 3-point bnv; value/divisor=semis."""
+    tp = _bend_props(
+        BendOriginValue=0, BendOriginOffset=0,
+        BendMiddleValue=100, BendMiddleOffset1=50,   # 100/50 = 2 semitones
+        BendDestinationValue=0, BendDestinationOffset=100,
+    )
+    peak, intent, curve = _gpx_bend_shape(tp, divisor=50.0, sustain=1.0)
+    assert peak == 2.0
+    assert intent == 4   # round-trip (up then back down)
+    assert curve == [
+        {"t": 0.0, "v": 0.0}, {"t": 0.5, "v": 2.0}, {"t": 1.0, "v": 0.0}]
+
+
+def test_gpx_bend_shape_falls_back_to_even_spacing_without_offsets():
+    tp = _bend_props(BendOriginValue=0, BendDestinationValue=100)  # no offsets
+    peak, intent, curve = _gpx_bend_shape(tp, divisor=50.0, sustain=1.0)
+    assert peak == 2.0
+    assert intent == 0   # plain up
+    # origin defaults to 0%, destination to 100%.
+    assert curve == [{"t": 0.0, "v": 0.0}, {"t": 1.0, "v": 2.0}]
+
+
+def test_gpx_bend_shape_no_props_and_zero_length():
+    assert _gpx_bend_shape({}, divisor=50.0, sustain=1.0) == (0.0, 0, None)
+    # Peak + intent still derived for a zero-length note, but no curve.
+    peak, intent, curve = _gpx_bend_shape(
+        _bend_props(BendOriginValue=0, BendDestinationValue=100),
+        divisor=50.0, sustain=0.0)
+    assert peak == 2.0 and intent == 0 and curve is None
 
 
 # ── _decompress_bcfz / _parse_bcfs input guards ─────────────────────────────

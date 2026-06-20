@@ -169,6 +169,85 @@ def test_note_bend_nonzero_rounded_to_one_decimal():
     assert note_to_wire(n)["bn"] == 1.8
 
 
+# ── Bend shape (bt / bnv, §6.2.1) ────────────────────────────────────────────
+
+def test_note_bend_shape_round_trip():
+    """A note with bend intent + a time-stamped curve survives the wire."""
+    n = Note(
+        time=0.5, string=0, fret=7, sustain=1.0,
+        bend=2.0,
+        bend_intent=4,  # round-trip
+        bend_values=[
+            {"t": 0.0, "v": 0.0},
+            {"t": 0.25, "v": 2.0},
+            {"t": 0.5, "v": 0.0},
+        ],
+    )
+    wire = note_to_wire(n)
+    assert wire["bt"] == 4
+    assert wire["bnv"] == [
+        {"t": 0.0, "v": 0.0},
+        {"t": 0.25, "v": 2.0},
+        {"t": 0.5, "v": 0.0},
+    ]
+    assert note_from_wire(wire) == n
+
+
+def test_note_bend_shape_omitted_when_default():
+    """`bt`/`bnv` are default-omitted; absence decodes to 0 / None (not 0-present
+    / not [])."""
+    wire = note_to_wire(Note(time=0.0, string=0, fret=0, bend=1.0))
+    assert "bt" not in wire
+    assert "bnv" not in wire
+    decoded = note_from_wire(wire)
+    assert decoded.bend_intent == 0
+    assert decoded.bend_values is None
+
+
+def test_note_bend_values_rounded_on_wire():
+    """`bnv` rounds `t` to 3 and `v` to 1, matching the scalar `bn` precision."""
+    n = Note(
+        time=0.0, string=0, fret=0, bend=1.0, bend_intent=1,
+        bend_values=[{"t": 0.123456, "v": 1.749}],
+    )
+    assert note_to_wire(n)["bnv"] == [{"t": 0.123, "v": 1.7}]
+
+
+def test_note_bend_values_sanitized_from_wire():
+    """Malformed `bnv` entries are dropped; bad/empty -> None; result sorted by t."""
+    # NaN / non-dict / non-numeric entries dropped, remaining sorted by t.
+    n = note_from_wire({
+        "t": 0.0, "s": 0, "f": 0, "bn": 2.0,
+        "bnv": [
+            {"t": 0.5, "v": 2.0},
+            {"t": 0.0, "v": 0.0},
+            {"t": "x", "v": 1.0},     # non-numeric t -> dropped
+            {"t": 0.25, "v": float("nan")},  # non-finite v -> dropped
+            "garbage",                # non-dict -> dropped
+        ],
+    })
+    assert n.bend_values == [{"t": 0.0, "v": 0.0}, {"t": 0.5, "v": 2.0}]
+    # Empty / non-list / all-invalid collapse to None (never []).
+    for bad in (None, [], "nope", [{"t": "a", "v": "b"}], [42]):
+        assert note_from_wire(
+            {"t": 0.0, "s": 0, "f": 0, "bnv": bad}).bend_values is None
+
+
+def test_chord_note_carries_bend_shape():
+    """Chord member notes inherit bt/bnv through chord_note_to_wire/chord_from_wire."""
+    c = Chord(
+        time=2.0, chord_id=0,
+        notes=[Note(
+            time=2.0, string=1, fret=5, bend=1.0, bend_intent=2,
+            bend_values=[{"t": 0.0, "v": 1.0}, {"t": 0.3, "v": 0.0}],
+        )],
+    )
+    decoded = chord_from_wire(chord_to_wire(c))
+    cn = decoded.notes[0]
+    assert cn.bend_intent == 2
+    assert cn.bend_values == [{"t": 0.0, "v": 1.0}, {"t": 0.3, "v": 0.0}]
+
+
 # ── Chord round-trip ─────────────────────────────────────────────────────────
 
 def test_chord_with_multiple_notes_round_trip():

@@ -1,5 +1,6 @@
 """Convert Guitar Pro files (.gp5/.gp4/.gp3) to arrangement XML."""
 
+import json
 import logging
 import re
 import xml.etree.ElementTree as ET
@@ -56,6 +57,8 @@ class RsNote:
     fret: int
     sustain: float = 0.0
     bend: float = 0.0
+    bend_intent: int = 0
+    bend_values: list | None = None
     slide_to: int = -1
     slide_unpitch_to: int = -1
     hammer_on: bool = False
@@ -189,6 +192,67 @@ def _duration_to_seconds(duration: guitarpro.Duration, tempo: float) -> float:
     if duration.tuplet.enters > 0 and duration.tuplet.times > 0:
         beats *= duration.tuplet.times / duration.tuplet.enters
     return beats * (60.0 / tempo)
+
+
+# pyguitarpro models bend-point x-positions on 0..BendEffect.maxPosition (12)
+# across the note's duration; y-values are half-quarter-tone units where 12 = 6
+# semitones, so semitones = value / 2.0 (matches the scalar `bend` derivation).
+_GP_BEND_MAX_POSITION = 12
+
+
+def _bend_intent_from_values(values: list[float]) -> int:
+    """Classify a bend gesture (§6.2.1) from its time-ordered semitone values:
+    0 up, 1 release, 2 pre-bend, 3 pre-bend-and-release, 4 round-trip."""
+    if not values:
+        return 0
+    eps = 0.05
+    first, last, peak = values[0], values[-1], max(values)
+    if first > eps:
+        if last <= eps:
+            return 3                      # pre-bent, then released to pitch
+        if last < first - eps:
+            return 1                      # held bend let down
+        return 2                          # pre-bend held
+    if peak > eps and last <= eps:
+        return 4                          # bend up and back down
+    return 0                              # plain bend up
+
+
+def _gp_bend_shape(bend, duration_secs: float):
+    """From a pyguitarpro ``BendEffect``, return ``(peak, intent, curve)``.
+
+    ``peak`` is the bend's peak in semitones (the scalar ``bn``); ``intent`` is
+    the §6.2.1 ``bt`` code; ``curve`` is the time-stamped ``bnv`` list
+    (``[{t: seconds-from-onset, v: semitones}]``) or ``None`` when there's no
+    usable shape (no points, or a zero-length note collapsing every point to
+    ``t=0``)."""
+    pts = sorted(bend.points or [], key=lambda p: p.position)
+    if not pts:
+        return 0.0, 0, None
+    values = [round(p.value / 2.0, 1) for p in pts]
+    peak = round(max(values), 1)
+    intent = _bend_intent_from_values(values)
+    curve = None
+    if duration_secs > 0 and len(pts) >= 2:
+        curve = [
+            {"t": round(duration_secs * (p.position / _GP_BEND_MAX_POSITION), 3),
+             "v": v}
+            for p, v in zip(pts, values)
+        ]
+    return peak, intent, curve
+
+
+def _bend_shape_xml_attrs(n: "RsNote") -> dict:
+    """Optional bend-shape XML attributes for a <note>/<chordNote>, default-
+    omitted: `bendIntent` only when non-zero, `bendValues` (a JSON-encoded
+    [{t,v}] curve) only when present. `_parse_note` (lib/song.py) reads these
+    back so a GP-imported bend curve survives import → wire → highway."""
+    attrs: dict = {}
+    if n.bend_intent:
+        attrs["bendIntent"] = str(int(n.bend_intent))
+    if n.bend_values:
+        attrs["bendValues"] = json.dumps(n.bend_values, separators=(",", ":"))
+    return attrs
 
 
 def _tempo_at_tick(tick: int, tempo_map: list[TempoEvent]) -> float:
@@ -735,12 +799,13 @@ def convert_track(
                     # Techniques
                     eff = note.effect
                     if eff.bend and eff.bend.points:
-                        # pyguitarpro bend point values are in quarter-tones
-                        # (maxValue 12 = 3 whole tones = 6 semitones), so
-                        # semitones = value / 2. The old /100.0 made every bend
-                        # round to 0 (a whole-tone bend is value 4 -> 0.04).
-                        max_bend = max(p.value for p in eff.bend.points)
-                        rn.bend = round(max_bend / 2.0, 1)
+                        # `bn` is the peak; `bnv`/`bt` describe the shape over
+                        # time (§6.2.1). semitones = value / 2 (maxValue 12 = 6
+                        # semitones); the old /100.0 made every bend round to 0.
+                        peak, intent, curve = _gp_bend_shape(eff.bend, dur)
+                        rn.bend = peak
+                        rn.bend_intent = intent
+                        rn.bend_values = curve
 
                     if eff.hammer:
                         # HO vs PO from pitch direction off the prior note on the
@@ -1098,6 +1163,7 @@ def _build_xml(
             "tap": "1" if n.tap else "0",
             "ignore": "0",
         }
+        attrs.update(_bend_shape_xml_attrs(n))
         ET.SubElement(notes_el, "note", **attrs)
 
     # Chords
@@ -1108,25 +1174,29 @@ def _build_xml(
                                  chordId=str(ch.template_idx),
                                  highDensity="0", strum="down")
         for cn in ch.notes:
-            ET.SubElement(chord_el, "chordNote",
-                          time=f"{cn.time:.3f}",
-                          string=str(cn.string),
-                          fret=str(cn.fret),
-                          sustain=f"{cn.sustain:.3f}",
-                          bend=f"{cn.bend:.1f}" if cn.bend else "0",
-                          hammerOn="1" if cn.hammer_on else "0",
-                          pullOff="1" if cn.pull_off else "0",
-                          slideTo=str(cn.slide_to),
-                          slideUnpitchTo=str(cn.slide_unpitch_to),
-                          harmonic="1" if cn.harmonic else "0",
-                          harmonicPinch="1" if cn.harmonic_pinch else "0",
-                          palmMute="1" if cn.palm_mute else "0",
-                          mute="1" if cn.mute else "0",
-                          vibrato="1" if cn.vibrato else "0",
-                          tremolo="1" if cn.tremolo else "0",
-                          accent="1" if cn.accent else "0",
-                          linkNext="1" if cn.link_next else "0",
-                          tap="1" if cn.tap else "0", ignore="0")
+            cn_attrs = {
+                "time": f"{cn.time:.3f}",
+                "string": str(cn.string),
+                "fret": str(cn.fret),
+                "sustain": f"{cn.sustain:.3f}",
+                "bend": f"{cn.bend:.1f}" if cn.bend else "0",
+                "hammerOn": "1" if cn.hammer_on else "0",
+                "pullOff": "1" if cn.pull_off else "0",
+                "slideTo": str(cn.slide_to),
+                "slideUnpitchTo": str(cn.slide_unpitch_to),
+                "harmonic": "1" if cn.harmonic else "0",
+                "harmonicPinch": "1" if cn.harmonic_pinch else "0",
+                "palmMute": "1" if cn.palm_mute else "0",
+                "mute": "1" if cn.mute else "0",
+                "vibrato": "1" if cn.vibrato else "0",
+                "tremolo": "1" if cn.tremolo else "0",
+                "accent": "1" if cn.accent else "0",
+                "linkNext": "1" if cn.link_next else "0",
+                "tap": "1" if cn.tap else "0",
+                "ignore": "0",
+            }
+            cn_attrs.update(_bend_shape_xml_attrs(cn))
+            ET.SubElement(chord_el, "chordNote", **cn_attrs)
 
     # Anchors
     anchors_el = ET.SubElement(level, "anchors", count=str(len(anchors)))

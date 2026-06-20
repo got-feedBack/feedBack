@@ -20,6 +20,13 @@ class Note:
     slide_to: int = -1
     slide_unpitch_to: int = -1
     bend: float = 0.0
+    # Bend shape (§6.2.1, feedpak 1.4.0). `bend` stays the peak magnitude;
+    # `bend_intent` is the gesture (0 up, 1 release, 2 pre-bend,
+    # 3 pre-bend-release, 4 round-trip) and `bend_values` is the optional
+    # time-stamped curve [{t: seconds-from-onset, v: semitones}], authoritative
+    # when present. Both default-omitted on the wire; older readers ignore them.
+    bend_intent: int = 0
+    bend_values: list | None = None
     hammer_on: bool = False
     pull_off: bool = False
     harmonic: bool = False
@@ -221,6 +228,16 @@ def note_to_wire(n: Note) -> dict:
         out["pkd"] = n.pick_direction
     if n.ignore:
         out["ig"] = True
+    # Bend shape (§6.2.1) — default-omitted: `bt` only when non-zero, `bnv`
+    # only when a curve is present. Mirrors the spec's "omit fields equal to
+    # their default" so a plain bend stays a single `bn` scalar on the wire.
+    if n.bend_intent:
+        out["bt"] = int(n.bend_intent)
+    if n.bend_values:
+        out["bnv"] = [
+            {"t": round(p["t"], 3), "v": round(p["v"], 1)}
+            for p in n.bend_values
+        ]
     return out
 
 
@@ -283,6 +300,33 @@ def _wire_int_optional(v, default=-1):
             return default
 
 
+def _sanitize_bend_curve(raw):
+    """Clean a time-stamped bend curve (``[{t, v}]``, §6.2.1): keep entries with
+    a finite, non-bool numeric ``t`` and ``v``, coerced to float and sorted by
+    ``t``. Non-list / absent / all-invalid input -> ``None`` so an empty curve
+    round-trips as *omitted*, never ``[]``. ``t`` is seconds from the note
+    onset; ``v`` is semitones (same scale as the scalar ``bn`` peak)."""
+    if not isinstance(raw, list):
+        return None
+    out: list[dict] = []
+    for p in raw:
+        if not isinstance(p, dict):
+            continue
+        t = p.get("t")
+        v = p.get("v")
+        if (not isinstance(t, (int, float)) or isinstance(t, bool)
+                or not math.isfinite(t)):
+            continue
+        if (not isinstance(v, (int, float)) or isinstance(v, bool)
+                or not math.isfinite(v)):
+            continue
+        out.append({"t": float(t), "v": float(v)})
+    if not out:
+        return None
+    out.sort(key=lambda e: e["t"])
+    return out
+
+
 def note_from_wire(d: dict, time: float | None = None) -> Note:
     return Note(
         time=float(d.get("t", time if time is not None else 0.0)),
@@ -292,6 +336,8 @@ def note_from_wire(d: dict, time: float | None = None) -> Note:
         slide_to=int(d.get("sl", -1)),
         slide_unpitch_to=int(d.get("slu", -1)),
         bend=float(d.get("bn", 0.0)),
+        bend_intent=_wire_int_optional(d.get("bt"), 0),
+        bend_values=_sanitize_bend_curve(d.get("bnv")),
         hammer_on=bool(d.get("ho", False)),
         pull_off=bool(d.get("po", False)),
         harmonic=bool(d.get("hm", False)),
@@ -768,6 +814,18 @@ def _chord_high_density(elem: ET.Element) -> bool:
     return False
 
 
+def _parse_bend_values(n):
+    """Read a `bendValues` JSON attribute (GP import emits it; §6.2.1) and
+    sanitize it into a [{t,v}] curve, or None when absent/malformed."""
+    raw = n.get("bendValues")
+    if not raw:
+        return None
+    try:
+        return _sanitize_bend_curve(json.loads(raw))
+    except (ValueError, TypeError):
+        return None
+
+
 def _parse_note(n) -> Note:
     return Note(
         time=_float(n, "time"),
@@ -777,6 +835,8 @@ def _parse_note(n) -> Note:
         slide_to=_int(n, "slideTo", -1),
         slide_unpitch_to=_int(n, "slideUnpitchTo", -1),
         bend=_float(n, "bend"),
+        bend_intent=_int(n, "bendIntent", 0),
+        bend_values=_parse_bend_values(n),
         hammer_on=_bool(n, "hammerOn"),
         pull_off=_bool(n, "pullOff"),
         harmonic=_bool(n, "harmonic"),

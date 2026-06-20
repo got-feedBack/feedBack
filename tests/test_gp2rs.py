@@ -20,9 +20,11 @@ import pytest
 from gp2rs import (
     GP_TICKS_PER_QUARTER,
     TempoEvent,
+    _bend_intent_from_values,
     _build_playback_schedule,
     _compute_tuning,
     _extract_year,
+    _gp_bend_shape,
     _gp_string_to_rs,
     _is_bass_track,
     _standard_tuning_for,
@@ -862,6 +864,80 @@ def test_tied_note_without_predecessor_is_silently_dropped():
     root = ET.fromstring(xml_str)  # noqa: S314
     notes = root.findall(".//notes/note")
     assert len(notes) == 0
+
+
+# ── convert_track: bend shape (bn / bt / bnv, §6.2.1) ────────────────────────
+
+def _ct_bend(points):
+    """A pyguitarpro-shaped BendEffect: points are (position 0..12, value)
+    pairs where value is half-quarter-tone units (12 = 6 semitones)."""
+    return SimpleNamespace(
+        points=[SimpleNamespace(position=p, value=v) for p, v in points],
+    )
+
+
+def test_bend_intent_classifier():
+    assert _bend_intent_from_values([0.0, 1.0, 2.0]) == 0       # up
+    assert _bend_intent_from_values([2.0, 1.0, 0.0]) == 3       # pre-bend+release
+    assert _bend_intent_from_values([2.0, 2.0]) == 2            # pre-bend held
+    assert _bend_intent_from_values([2.0, 1.0]) == 1            # release (let down)
+    assert _bend_intent_from_values([0.0, 2.0, 0.0]) == 4       # round-trip
+    assert _bend_intent_from_values([]) == 0
+
+
+def test_gp_bend_shape_units_and_time():
+    """value/2 = semitones; position/12 * duration = seconds-from-onset."""
+    # 0.5 s note, up-bend 0 → value 4 (2 semitones) at the end.
+    peak, intent, curve = _gp_bend_shape(_ct_bend([(0, 0), (12, 4)]), 0.5)
+    assert peak == 2.0
+    assert intent == 0
+    assert curve == [{"t": 0.0, "v": 0.0}, {"t": 0.5, "v": 2.0}]
+    # Zero-length note collapses every point to t=0 → no usable curve.
+    _, _, curve0 = _gp_bend_shape(_ct_bend([(0, 0), (12, 4)]), 0.0)
+    assert curve0 is None
+    # A single point carries only the peak, no curve.
+    _, _, curve1 = _gp_bend_shape(_ct_bend([(6, 4)]), 0.5)
+    assert curve1 is None
+
+
+def test_bent_note_imports_with_curve_through_wire():
+    """A GP up-bend imports with bn (peak) + bt + bnv, and survives
+    convert_track XML → _parse_note → note_to_wire."""
+    from song import _parse_note, note_to_wire
+    note = _ct_note(guitarpro.NoteType.normal, gp_string=1, fret=7)
+    # quarter @ 120 BPM = 0.5 s; round-trip bend 0 → 2 → 0 semitones.
+    note.effect.bend = _ct_bend([(0, 0), (6, 4), (12, 0)])
+    beat = _ct_beat(tick=0, dur_value=4, notes=[note])
+
+    root = ET.fromstring(convert_track(_ct_song([beat]), track_index=0))  # noqa: S314
+    xn = root.findall(".//notes/note")[0]
+    assert xn.get("bend") == "2.0"
+    assert xn.get("bendIntent") == "4"        # round-trip
+    import json
+    assert json.loads(xn.get("bendValues")) == [
+        {"t": 0.0, "v": 0.0}, {"t": 0.25, "v": 2.0}, {"t": 0.5, "v": 0.0}]
+
+    wire = note_to_wire(_parse_note(xn))
+    assert wire["bn"] == 2.0
+    assert wire["bt"] == 4
+    assert wire["bnv"] == [
+        {"t": 0.0, "v": 0.0}, {"t": 0.25, "v": 2.0}, {"t": 0.5, "v": 0.0}]
+
+
+def test_non_bent_note_has_no_curve():
+    note = _ct_note(guitarpro.NoteType.normal, gp_string=1, fret=5)  # bend=None
+    beat = _ct_beat(tick=0, dur_value=4, notes=[note])
+    root = ET.fromstring(convert_track(_ct_song([beat]), track_index=0))  # noqa: S314
+    xn = root.findall(".//notes/note")[0]
+    assert xn.get("bend") == "0"
+    assert xn.get("bendIntent") is None
+    assert xn.get("bendValues") is None
+
+    from song import _parse_note
+    n = _parse_note(xn)
+    assert n.bend == 0.0
+    assert n.bend_intent == 0
+    assert n.bend_values is None
 
 
 def _ct_multivoice_song(voices_beats):
