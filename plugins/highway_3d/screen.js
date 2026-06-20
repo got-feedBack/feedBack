@@ -2534,6 +2534,9 @@
         let _drawRecentByString = null;
         /** Snapshotted in update() — drawNote() is a sibling of update(), not nested in its closure. */
         let _drawChordTemplates = null;
+        /** Teaching marks sd/ch overlay pref (§6.2.2), mirrored from the 2D
+         * highway's `teachingMarksVisible` bundle flag. fg renders regardless. */
+        let _drawTeachingMarks = false;
         let _laneTargetColor = null;
         let _renderScale = 1;
         let lyricsCanvas = null, lyricsCtx = null;
@@ -3017,6 +3020,7 @@
         let gPMXLines = null, pMuteXLines = null; // PM X lines combined geometry (8 segs as quads)
         let gFHXLines = null, pFHXLines = null;   // FH X lines combined geometry
         let pNoteFretLabel, pConnectorLine, pDropLine, pTapChevron, pAccentHalo;
+        let pTeachMarkLbl;  // teaching marks fg/sd label sprites (§6.2.2)
         let pHaloBar = null, gHaloBar = null; // gradient halo bar geometry — replaces per-shell pChordAccentHalo
         let gArpBracket = null; // shared 1×1×1 box geometry for pArpBracket; built once, disposed in teardown
         let pSusRibbon = null, pSusRibbonOl = null;
@@ -6095,6 +6099,14 @@
                 _nfl.material.depthTest = false;
                 return _nfl;
             });
+            // Teaching marks fg/sd labels (§6.2.2). One pool, two get()s per note
+            // (finger + degree); the texture is swapped per draw via material.map.
+            pTeachMarkLbl = pool(lblG, () => {
+                const _tml = new T.Sprite(txtMat('0', '#7fd1ff', false, 'teachMark').clone());
+                _tml.material.fog = false;
+                _tml.material.depthTest = false;
+                return _tml;
+            });
             pConnectorLine = pool(noteG, () => new T.Line(
                 new T.BufferGeometry().setFromPoints([new T.Vector3(0, 0, 0), new T.Vector3(0, 1, 0)]),
                 new T.LineBasicMaterial({ color: 0xaaaaaa, transparent: true, opacity: 0.5, depthTest: false }),
@@ -6153,6 +6165,7 @@
             pSusRailBloom.warm(_WARM_CHORD);
             pTechPlane.warm(_WARM_CHORD);
             pNoteFretLabel.warm(_WARM_NOTE);
+            pTeachMarkLbl.warm(_WARM_NOTE);
             pChordFrameFill.warm(_WARM_CHORD);
             pChordBox.warm(_WARM_CHORD);
             pChordLbl.warm(_WARM_CHORD);
@@ -8353,6 +8366,7 @@
             if (pMuteXLines) pMuteXLines.reset();
             if (pFHXLines) pFHXLines.reset();
             pNoteFretLabel.reset(); pConnectorLine.reset(); pDropLine.reset();
+            pTeachMarkLbl.reset();
             pFretColMarker.reset(); pSusRail.reset(); pSusRailBloom.reset(); pTechPlane.reset();
             // Clear per-frame queues in-place (avoid reallocating the array object).
             _ndLabels.length = 0;
@@ -8816,6 +8830,7 @@
 
             _drawNextByString = nextNoteByString;
             _drawChordTemplates = bundle.chordTemplates ?? null;
+            _drawTeachingMarks = !!bundle.teachingMarksVisible;
 
             // ── Recent-past event per string (for _nextAnyT deadline) ─────
             // Once a note/chord passes `now` it leaves _drawNextByString,
@@ -9830,6 +9845,12 @@
                             // apply the wrong contour). Reset explicitly.
                             _scrChordNote.bnv = Array.isArray(cn.bnv) ? cn.bnv : undefined;
                             _scrChordNote.bt  = cn.bt || 0;
+                            // Same stale-scratch hazard for the teaching marks
+                            // (§6.2.2): fg/sd are omit-when-default on the wire,
+                            // so a chord note without them must reset to -1 or it
+                            // inherits the previous note's finger/degree label.
+                            _scrChordNote.fg  = Number.isInteger(cn.fg) ? cn.fg : -1;
+                            _scrChordNote.sd  = Number.isInteger(cn.sd) ? cn.sd : -1;
                             drawNote(
                                 _scrChordNote,
                                 now,
@@ -11316,6 +11337,22 @@
             return visualIdx >= (nStr - 1) * 0.5 ? -1 : 1;
         }
 
+        // Teaching marks (§6.2.2) — display only, never grading. Pure label
+        // helpers, mirroring static/highway.js so the two highways agree;
+        // node-tested via tests/js/highway_teaching_marks.test.js.
+        function teachingFingerLabel(fg) {
+            // fret-hand finger: '' when unset/out of range; 0 -> 'T' (thumb),
+            // 1..4 -> '1'..'4'.
+            if (!Number.isInteger(fg) || fg < 0 || fg > 4) return '';
+            return fg === 0 ? 'T' : String(fg);
+        }
+        function teachingDegreeLabel(sd) {
+            // scale degree: chromatic 0..11 above the active key tonic; '' when
+            // unset/out of range.
+            if (!Number.isInteger(sd) || sd < 0 || sd > 11) return '';
+            return String(sd);
+        }
+
         function bnvSampleAt(bnv, t) {
             // Linear interpolation of a bend curve [{t, v}] (§6.2.1; t is
             // seconds from the note onset) at elapsed time t. Clamps to the
@@ -12260,6 +12297,32 @@
                         fretLabel.scale.set(flS, flS, 1);
                         fretLabel.material.opacity = alpha;
                     }
+
+                    // Teaching marks (§6.2.2) — display only, never grading. The
+                    // fret-hand finger (fg) renders by default to the right of the
+                    // fret label; the scale degree (sd) is opt-in (mirrors the 2D
+                    // `teachingMarksVisible` toggle) and renders to the left.
+                    if (alpha > 0 && n.f > 0) {
+                        const _tmS = 5.0 * K * _textSizeMul * fretLabelScaleForFret(n.f);
+                        const _drawTeachMark = (text, colorHex, dx, cacheKey) => {
+                            if (!text) return;
+                            const spr = pTeachMarkLbl.get();
+                            const m = txtMat(text, colorHex, false, cacheKey);
+                            if (spr.material.map !== m.map) {
+                                spr.material.map = m.map;
+                                spr.material.needsUpdate = true;
+                            }
+                            spr.position.set(x + dx, labelY, noteZ);
+                            spr.renderOrder = renderOrderForLayerAtZ(noteZ,
+                                _isArpNote ? 'ARP_NOTE_FRET_LABEL' : 'NOTE_FRET_LABEL');
+                            spr.scale.set(_tmS, _tmS, 1);
+                            spr.material.opacity = alpha;
+                        };
+                        _drawTeachMark(teachingFingerLabel(n.fg), '#7fd1ff', NW * 0.95, 'teachFg');
+                        if (_drawTeachingMarks) {
+                            _drawTeachMark(teachingDegreeLabel(n.sd), '#ffcc66', -NW * 0.95, 'teachSd');
+                        }
+                    }
                 }
             }
 
@@ -12973,7 +13036,7 @@
             _renderScale = 1;
             mBeatM = mBeatQ = null;
             pNote = pNoteEdge = pSus = pSusOutline = pSusRibbon = pSusRibbonOl = pLbl = pBeat = pSec = null;
-            pFretLbl = pLane = pLaneDivider = pGhostFretLbl = pChordBox = pChordFrameFill = pChordLbl = pBarreLine = pArpBracket = pNoteFretLabel = pConnectorLine = pDropLine = pTapChevron = pAccentHalo = pHaloBar = pPMXFill = pFHXFill = pMuteXLines = pFHXLines = null;
+            pFretLbl = pLane = pLaneDivider = pGhostFretLbl = pChordBox = pChordFrameFill = pChordLbl = pBarreLine = pArpBracket = pNoteFretLabel = pConnectorLine = pDropLine = pTapChevron = pAccentHalo = pHaloBar = pPMXFill = pFHXFill = pMuteXLines = pFHXLines = pTeachMarkLbl = null;
             if (gPMXFill) { gPMXFill.dispose(); gPMXFill = null; }
             if (gFHXFill) { gFHXFill.dispose(); gFHXFill = null; }
             if (gPMXLines) { gPMXLines.dispose(); gPMXLines = null; }

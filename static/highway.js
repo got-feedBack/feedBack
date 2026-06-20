@@ -205,6 +205,11 @@ function createHighway() {
     // have any.
     let _phrasesHaveHandShapes = false;
     let showLyrics = localStorage.getItem('showLyrics') !== 'false';
+    // Teaching marks (§6.2.2): the fret-hand finger numeral (fg) renders by
+    // default (small, on the gem), but the scale-degree (sd) + strum-group (ch)
+    // overlays are opt-in so the default highway stays uncluttered. Display only
+    // — never used for grading.
+    let _showTeachingMarks = localStorage.getItem('showTeachingMarks') === 'true';
     let _drawHooks = [];  // plugin draw callbacks: fn(ctx, W, H)
     // slopsmith#254 — per-note judgment overlay. A plugin (note_detect)
     // registers fn(note, chartTime) -> 'hit' | 'active' | 'miss' | null
@@ -485,6 +490,37 @@ function createHighway() {
         return bnv.map(p => ({ x: span > 0 ? (p.t - t0) / span : 0, v: p.v }));
     }
 
+    /** Teaching mark (§6.2.2): fret-hand-finger label for a note's `fg`.
+     * '' when unset/out of range; 0 → 'T' (thumb), 1..4 → '1'..'4'. Pure. */
+    function teachingFingerLabel(fg) {
+        if (!Number.isInteger(fg) || fg < 0 || fg > 4) return '';
+        return fg === 0 ? 'T' : String(fg);
+    }
+
+    /** Teaching mark (§6.2.2): scale-degree label for a note's `sd` (chromatic
+     * 0..11 above the active key tonic). '' when unset/out of range. Pure. */
+    function teachingDegreeLabel(sd) {
+        if (!Number.isInteger(sd) || sd < 0 || sd > 11) return '';
+        return String(sd);
+    }
+
+    /** Teaching mark (§6.2.2): bucket drawn notes by their strum-group key `ch`.
+     * Returns the groups (in first-seen order) for each ch value >= 0 that has
+     * at least two members — a lone note is not a strum gesture. Pure; drives
+     * the strum-bracket overlay and is node-tested. */
+    function strumGroupBuckets(items) {
+        if (!Array.isArray(items)) return [];
+        const order = [];
+        const byKey = new Map();
+        for (const it of items) {
+            const ch = it && Number.isInteger(it.ch) ? it.ch : -1;
+            if (ch < 0) continue;
+            if (!byKey.has(ch)) { byKey.set(ch, []); order.push(ch); }
+            byKey.get(ch).push(it);
+        }
+        return order.map(k => byKey.get(k)).filter(g => g.length >= 2);
+    }
+
     /** Call while lefty mirror transform is active; keeps glyphs readable. */
     function fillTextReadable(text, x, y) {
         // ctx may be null when the 2D context was never acquired
@@ -737,6 +773,9 @@ function createHighway() {
             lefty: _lefty,
             renderScale: _effectiveRenderScale(),
             lyricsVisible: showLyrics,
+            // Teaching marks sd/ch overlay pref (§6.2.2) so custom renderers
+            // (e.g. the 3D highway) can mirror the 2D opt-in toggle.
+            teachingMarksVisible: _showTeachingMarks,
 
             // 2D-style helpers (renderers that don't need these can ignore).
             // `fillTextUnmirrored` is deliberately NOT exposed here —
@@ -1687,6 +1726,29 @@ function createHighway() {
 
         if (sz < 14) return;  // Skip small technique labels
 
+        // Teaching marks (§6.2.2) — display only, never grading. The fret-hand
+        // finger (fg) renders by default as a small numeral hugging the gem's
+        // right edge (T = thumb, 1..4); the scale degree (sd) is opt-in and sits
+        // on the left edge so the two never collide with the centred fret number.
+        const fgLabel = teachingFingerLabel(opts?.fg);
+        if (fgLabel) {
+            ctx.fillStyle = '#7fd1ff';
+            ctx.font = `bold ${Math.max(8, sz * 0.26) | 0}px sans-serif`;
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            fillTextReadable(fgLabel, x + half + 2, y + half * 0.5);
+        }
+        if (_showTeachingMarks) {
+            const sdLabel = teachingDegreeLabel(opts?.sd);
+            if (sdLabel) {
+                ctx.fillStyle = '#ffcc66';
+                ctx.font = `bold ${Math.max(8, sz * 0.26) | 0}px sans-serif`;
+                ctx.textAlign = 'right';
+                ctx.textBaseline = 'middle';
+                fillTextReadable(sdLabel, x - half - 2, y + half * 0.5);
+            }
+        }
+
         // Slide indicator (diagonal arrow). Pitched (sl) draws a solid arrow to
         // the target fret; unpitched (slu) draws a dashed diagonal with no
         // arrowhead (no definite target pitch). The two are mutually exclusive
@@ -1879,11 +1941,56 @@ function createHighway() {
 
             const x = fretX(n.f, p.scale, W);
             drawNote(W, H, x, p.y * H, p.scale, n.s, n.f, n, _noteStateProvider ? _noteState(n, n.t) : null);
-            drawnNotes.push({ t: n.t, s: n.s, f: n.f, bn: n.bn || 0, x, y: p.y * H, scale: p.scale });
+            drawnNotes.push({
+                t: n.t, s: n.s, f: n.f, bn: n.bn || 0, x, y: p.y * H, scale: p.scale,
+                ch: Number.isInteger(n.ch) ? n.ch : -1,
+                pkd: Number.isInteger(n.pkd) ? n.pkd : -1,
+            });
         }
 
         // Draw unison bend connectors
         drawUnisonBends(W, H, drawnNotes);
+        // Strum-group brackets (teaching mark ch, §6.2.2) — opt-in overlay.
+        // Scoped to standalone notes (the stream drawNotes renders); chord-note
+        // strum groups aren't bracketed (the editor authors ch over single-note
+        // selections, and chord notes already read as one simultaneous gesture).
+        if (_showTeachingMarks) drawStrumGroups(W, H, drawnNotes);
+    }
+
+    function drawStrumGroups(W, H, drawnNotes) {
+        // Teaching mark (§6.2.2): notes sharing a `ch` key >= 0 are one
+        // strum/rake gesture. Connect each group's gems with a bracket and a
+        // single arrowhead whose direction comes from `pkd` (0 = down-strum,
+        // 1 = up-strum). Display only — never grading.
+        for (const group of strumGroupBuckets(drawnNotes)) {
+            const pts = group.slice().sort((a, b) => a.y - b.y || a.x - b.x);
+            const scale = pts[0].scale;
+            const sz = Math.max(12, 80 * scale * (H / 900));
+            if (sz < 14) continue;
+            const pkd = (group.find(p => p.pkd === 0 || p.pkd === 1) || {}).pkd;
+
+            ctx.save();
+            ctx.strokeStyle = '#c89bff';
+            ctx.lineWidth = Math.max(2, sz / 12);
+            ctx.lineJoin = 'round';
+            ctx.beginPath();
+            pts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+            ctx.stroke();
+            // Arrowhead at the gesture start: down-strum (pkd 0) points toward
+            // the last gem, up-strum (pkd 1) toward the first.
+            if (pkd === 0 || pkd === 1) {
+                const head = pkd === 1 ? pts[0] : pts[pts.length - 1];
+                const from = pkd === 1 ? pts[1] : pts[pts.length - 2];
+                const dy = Math.sign(head.y - from.y) || 1;
+                const a = sz * 0.18;
+                ctx.beginPath();
+                ctx.moveTo(head.x - a, head.y - dy * a);
+                ctx.lineTo(head.x, head.y);
+                ctx.lineTo(head.x + a, head.y - dy * a);
+                ctx.stroke();
+            }
+            ctx.restore();
+        }
     }
 
     function drawUnisonBends(W, H, drawnNotes) {
@@ -3674,6 +3781,18 @@ function createHighway() {
             if (_onLyricsChange) _onLyricsChange(showLyrics);
         },
         setOnLyricsChange(fn) { _onLyricsChange = fn; },
+
+        // Teaching marks (§6.2.2): toggle the opt-in sd/ch overlays. The fg
+        // numeral is unaffected (always on). Persisted to localStorage.
+        getTeachingMarksVisible() { return _showTeachingMarks; },
+        toggleTeachingMarks() {
+            _showTeachingMarks = !_showTeachingMarks;
+            localStorage.setItem('showTeachingMarks', String(_showTeachingMarks));
+        },
+        setTeachingMarksVisible(v) {
+            _showTeachingMarks = !!v;
+            localStorage.setItem('showTeachingMarks', String(_showTeachingMarks));
+        },
 
         reconnect(filename, arrangement) {
             // Close old WS but keep audio + animation running
