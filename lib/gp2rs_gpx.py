@@ -1621,8 +1621,13 @@ def convert_file(
                                     # the shape over time (§6.2.1). value/divisor
                                     # = semitones (scale auto-detected per file).
                                     if 'Bended' in _tp:
+                                        # Use the beat duration `dur`, not
+                                        # `rn.sustain` (zeroed for notes <= 0.2s),
+                                        # so short bends keep their bnv curve —
+                                        # matching the GP5 path, which maps over
+                                        # the raw note duration.
                                         _peak, _intent, _curve = _gpx_bend_shape(
-                                            _tp, _bend_divisor, rn.sustain)
+                                            _tp, _bend_divisor, dur)
                                         if _peak > 0:
                                             rn.bend = _peak
                                             rn.bend_intent = _intent

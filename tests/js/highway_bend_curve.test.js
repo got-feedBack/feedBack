@@ -30,11 +30,24 @@ const bnvSampleAt = loadFn('plugins/highway_3d/screen.js', 'bnvSampleAt');
 
 // ── bnvNormalizedPoints (2D) ─────────────────────────────────────────────────
 
-test('bnvNormalizedPoints normalizes t to 0..1 across the span', () => {
+test('bnvNormalizedPoints normalizes t to 0..1 across the curve span (no sus)', () => {
     const pts = bnvNormalizedPoints([
         { t: 0.5, v: 0 }, { t: 1.0, v: 2 }, { t: 1.5, v: 0 }]);
     assert.deepEqual(pts, [
         { x: 0, v: 0 }, { x: 0.5, v: 2 }, { x: 1, v: 0 }]);
+});
+
+test('bnvNormalizedPoints maps t over the note sus span when given', () => {
+    // A bend that completes at t=0.4 of a 0.5s note draws to x=0.8, not x=1 —
+    // i.e. it stops short of the glyph's right edge (correct timing shape).
+    assert.deepEqual(
+        bnvNormalizedPoints([{ t: 0, v: 0 }, { t: 0.25, v: 1 }, { t: 0.4, v: 0 }], 0.5),
+        [{ x: 0, v: 0 }, { x: 0.5, v: 1 }, { x: 0.8, v: 0 }]);
+    // Points beyond sus clamp to 1; sus<=0 falls back to curve-span mapping.
+    assert.deepEqual(bnvNormalizedPoints([{ t: 0, v: 0 }, { t: 1, v: 2 }], 0.5),
+        [{ x: 0, v: 0 }, { x: 1, v: 2 }]);
+    assert.deepEqual(bnvNormalizedPoints([{ t: 0, v: 0 }, { t: 1, v: 2 }], 0),
+        [{ x: 0, v: 0 }, { x: 1, v: 2 }]);
 });
 
 test('bnvNormalizedPoints handles degenerate/empty input', () => {
