@@ -18,6 +18,7 @@ from song import (
     arrangement_to_wire,
     chord_from_wire,
     chord_to_wire,
+    sanitize_tempos,
     compute_smart_names,
     note_from_wire,
     note_to_wire,
@@ -927,3 +928,35 @@ def test_smart_names_arrangement_properties_defaults():
     assert arr.path_bass is False
     assert arr.bonus_arr is False
     assert arr.represent == 0
+
+
+# ── tempos (per-chart §6.10 + shared sanitizer) ──────────────────────────────
+
+def test_sanitize_tempos_filters_sorts_and_coerces():
+    assert sanitize_tempos([
+        {"time": 2.0, "bpm": 90},
+        {"time": 0.0, "bpm": 120},
+        {"time": 1.0, "bpm": 0},              # bpm <= 0 -> dropped
+        {"time": float("nan"), "bpm": 100},   # non-finite time -> dropped
+        {"bpm": 100},                         # missing time -> dropped
+        {"time": 3.0, "bpm": float("inf")},   # non-finite bpm -> dropped
+        "x",                                  # non-dict -> dropped
+    ]) == [{"time": 0.0, "bpm": 120.0}, {"time": 2.0, "bpm": 90.0}]
+    assert sanitize_tempos(None) == []
+    assert sanitize_tempos("nope") == []
+
+
+def test_arrangement_tempos_round_trip_and_omitted_when_absent():
+    arr = arrangement_from_wire({
+        "name": "Bass", "tuning": [0, 0, 0, 0, 0, 0], "capo": 0,
+        "tempos": [{"time": 0.0, "bpm": 60}, {"time": 2.0, "bpm": 120}],
+    })
+    assert arr.tempos == [{"time": 0.0, "bpm": 60.0}, {"time": 2.0, "bpm": 120.0}]
+    assert arrangement_to_wire(arr)["tempos"] == \
+        [{"time": 0.0, "bpm": 60.0}, {"time": 2.0, "bpm": 120.0}]
+
+    # Absent per-chart tempos -> None, and the wire key is OMITTED (not []),
+    # so the chart follows the song-level tempo (spec §6.10).
+    arr2 = arrangement_from_wire({"name": "Lead", "tuning": [0] * 6, "capo": 0})
+    assert arr2.tempos is None
+    assert "tempos" not in arrangement_to_wire(arr2)

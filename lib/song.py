@@ -151,6 +151,10 @@ class Arrangement:
     # RS2014 custom song pitch-shift field (cents). Commonly -1200.0 (one octave
     # down) for extended-range bass arrangements. 0.0 when absent or zero.
     cent_offset: float = 0.0
+    # Per-chart tempo override (§6.10): [{time, bpm}]. None when the chart
+    # follows the song-level tempo; when present a Reader uses it for this
+    # chart and ignores the song-level tempo.
+    tempos: list | None = None
 
 
 @dataclass
@@ -585,6 +589,29 @@ def _finite_float(value, default: float = 0.0) -> float:
     return v if math.isfinite(v) else default
 
 
+def sanitize_tempos(events) -> list[dict]:
+    """Clean a tempo-event list (``[{time, bpm}]``): keep entries with a finite
+    non-bool ``time`` and a finite ``bpm > 0``, coerced to float and sorted by
+    time. Non-list / all-invalid input -> ``[]``. Shared by the per-chart
+    arrangement ``tempos`` (§6.10) and the song-level ``song_timeline.tempos``."""
+    out: list[dict] = []
+    if isinstance(events, list):
+        for ev in events:
+            if not isinstance(ev, dict):
+                continue
+            t = ev.get("time")
+            bpm = ev.get("bpm")
+            if (not isinstance(t, (int, float)) or isinstance(t, bool)
+                    or not math.isfinite(t)):
+                continue
+            if (not isinstance(bpm, (int, float)) or isinstance(bpm, bool)
+                    or not math.isfinite(bpm) or bpm <= 0):
+                continue
+            out.append({"time": float(t), "bpm": float(bpm)})
+        out.sort(key=lambda e: e["time"])
+    return out
+
+
 def arrangement_to_wire(arr: Arrangement) -> dict:
     """Serialize an Arrangement into a JSON-ready dict matching the wire format."""
     out = {
@@ -612,6 +639,10 @@ def arrangement_to_wire(arr: Arrangement) -> dict:
     # "no tones".
     if arr.tones:
         out["tones"] = arr.tones
+    # Per-chart tempo override (§6.10) — additive; omit when the chart follows
+    # the song-level tempo (empty/None).
+    if arr.tempos:
+        out["tempos"] = list(arr.tempos)
     return out
 
 
@@ -622,6 +653,7 @@ def arrangement_from_wire(d: dict) -> Arrangement:
         tuning=list(d.get("tuning", [0] * 6)),
         capo=int(d.get("capo", 0)),
         cent_offset=_finite_float(d.get("centOffset", 0.0)),
+        tempos=(sanitize_tempos(d.get("tempos")) or None),
         notes=[note_from_wire(n) for n in d.get("notes", [])],
         chords=[chord_from_wire(c) for c in d.get("chords", [])],
         anchors=[

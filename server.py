@@ -7032,6 +7032,20 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
                 "data": loaded_slop.keys.get("events") or [],
             })
 
+        # Song-level tempo + time-signature maps (song_timeline, feedpak 1.2.0),
+        # plus the per-chart tempo override (§6.10): the active arrangement's own
+        # `tempos` wins over the song-level map for this chart. Both are
+        # pre-sanitized by the loader / arrangement_from_wire, so they stream
+        # directly. Consumers read these rather than the file.
+        _song_tempos = loaded_slop.tempos if (is_slop and loaded_slop is not None) else None
+        _tempos_out = getattr(arr, "tempos", None) or _song_tempos
+        if _tempos_out:
+            await websocket.send_json({"type": "tempos", "data": _tempos_out})
+        _time_sigs = (loaded_slop.time_signatures
+                      if (is_slop and loaded_slop is not None) else None)
+        if _time_sigs:
+            await websocket.send_json({"type": "time_signatures", "data": _time_sigs})
+
         # Send notation data when the sloppak ships it for the active arrangement.
         # Slots after sections (cursor sync depends on beats, which precede sections)
         # and before anchors — per docs/sloppak-spec.md §5.3.

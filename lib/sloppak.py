@@ -34,6 +34,7 @@ from song import (
     Arrangement,
     arrangement_from_wire,
     _finite_float,
+    sanitize_tempos,
 )
 import drums as drums_mod
 import notation as notation_mod
@@ -284,6 +285,30 @@ def read_cover_bytes(
         return None
 
 
+def _sanitize_time_signatures(events) -> list[dict]:
+    """Clean a time-signature event list (``[{time, ts:[num, den]}]``): keep
+    entries with a finite non-bool ``time`` and a ``ts`` of two integers >= 1,
+    sorted by time. Non-list / all-invalid input -> ``[]``."""
+    out: list[dict] = []
+    if isinstance(events, list):
+        for ev in events:
+            if not isinstance(ev, dict):
+                continue
+            t = ev.get("time")
+            ts = ev.get("ts")
+            if (not isinstance(t, (int, float)) or isinstance(t, bool)
+                    or not math.isfinite(t)):
+                continue
+            if not isinstance(ts, list) or len(ts) != 2:
+                continue
+            if not all(isinstance(x, int) and not isinstance(x, bool) and x >= 1
+                       for x in ts):
+                continue
+            out.append({"time": float(t), "ts": [int(ts[0]), int(ts[1])]})
+        out.sort(key=lambda e: e["time"])
+    return out
+
+
 @dataclass
 class LoadedSloppak:
     """Result of loading a sloppak: the Song object plus stem descriptors."""
@@ -307,6 +332,13 @@ class LoadedSloppak:
     # absent / unreadable / malformed. Streamed over the highway WS as a
     # `keys` message; consumers (renderers, plugins) read it from there.
     keys: dict | None = None
+    # Sanitized song-level tempo + time-signature maps from `song_timeline.json`
+    # (feedpak 1.2.0). `tempos`: [{time, bpm}]; `time_signatures`: [{time, ts}].
+    # None when absent/empty. Streamed over the highway WS (`tempos` /
+    # `time_signatures` messages); a per-chart arrangement `tempos` overrides
+    # `tempos` for that chart (spec §6.10).
+    tempos: list | None = None
+    time_signatures: list | None = None
     # Maps arrangement id → validated notation payload.  None when no
     # arrangement passed schema validation; a non-empty dict only when at least
     # one arrangement carried a `notation:` sub-key whose file loaded and passed
@@ -515,6 +547,8 @@ def load_song(
     # already loaded onto the song object — song_timeline is the authoritative
     # source for timeline data in sloppaks that carry it.
     song_timeline_data: dict | None = None
+    tempos_data: list | None = None
+    time_sigs_data: list | None = None
     song_timeline_rel = manifest.get("song_timeline")
     if isinstance(song_timeline_rel, str) and song_timeline_rel:
         try:
@@ -597,6 +631,13 @@ def load_song(
                             )
                             continue
                     song_timeline_data = raw
+            # tempos / time_signatures (feedpak 1.2.0) are independent of the
+            # beats/sections validation above — all are optional — so load them
+            # whenever the payload parsed to a dict.
+            if isinstance(raw, dict):
+                tempos_data = sanitize_tempos(raw.get("tempos")) or None
+                time_sigs_data = _sanitize_time_signatures(
+                    raw.get("time_signatures")) or None
 
     # Optional shared lyrics file. Same safety posture as the drum_tab
     # loader above: constrain the manifest-declared path to source_dir
@@ -755,6 +796,8 @@ def load_song(
         manifest=manifest,
         drum_tab=drum_tab_data,
         song_timeline=song_timeline_data,
+        tempos=tempos_data,
+        time_signatures=time_sigs_data,
         keys=keys_data,
         notation_by_id=notation_by_id_data,
         arrangement_ids=arrangement_ids_acc,

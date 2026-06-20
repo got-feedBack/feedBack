@@ -148,6 +148,50 @@ def test_song_timeline_absent_when_path_escapes_sloppak(tmp_path: Path):
     assert loaded.song_timeline is None
 
 
+# ── tempos + time_signatures (feedpak 1.2.0) ─────────────────────────────────
+
+def test_song_timeline_tempos_and_time_signatures_loaded(tmp_path: Path):
+    payload = {
+        "version": 1, "beats": [], "sections": [],
+        "tempos": [{"time": 0.0, "bpm": 120}, {"time": 4.0, "bpm": 90}],
+        "time_signatures": [{"time": 0.0, "ts": [4, 4]}, {"time": 8.0, "ts": [6, 8]}],
+    }
+    pak = _write_dir_sloppak(tmp_path, {"song_timeline": "song_timeline.json"}, payload)
+    loaded = _load(pak, tmp_path)
+    assert loaded.tempos == [{"time": 0.0, "bpm": 120.0}, {"time": 4.0, "bpm": 90.0}]
+    assert loaded.time_signatures == [{"time": 0.0, "ts": [4, 4]},
+                                      {"time": 8.0, "ts": [6, 8]}]
+
+
+def test_song_timeline_maps_absent_when_not_provided(tmp_path: Path):
+    payload = {"version": 1, "beats": [], "sections": []}
+    pak = _write_dir_sloppak(tmp_path, {"song_timeline": "song_timeline.json"}, payload)
+    loaded = _load(pak, tmp_path)
+    assert loaded.tempos is None and loaded.time_signatures is None
+
+
+def test_song_timeline_maps_sanitized(tmp_path: Path):
+    payload = {
+        "version": 1, "beats": [], "sections": [],
+        "tempos": [{"time": 1.0, "bpm": 0}, {"time": 0.0, "bpm": 100}],   # bpm 0 dropped + sorted
+        "time_signatures": [{"time": 0.0, "ts": [4, 4, 4]},                # 3-long dropped
+                            {"time": 2.0, "ts": [3, 4]}],
+    }
+    pak = _write_dir_sloppak(tmp_path, {"song_timeline": "song_timeline.json"}, payload)
+    loaded = _load(pak, tmp_path)
+    assert loaded.tempos == [{"time": 0.0, "bpm": 100.0}]
+    assert loaded.time_signatures == [{"time": 2.0, "ts": [3, 4]}]
+
+
+def test_song_timeline_maps_load_even_without_beats_or_sections(tmp_path: Path):
+    # tempos/time_signatures are independent of beats/sections — a payload that
+    # omits beats (invalid for the override path) must still surface the maps.
+    payload = {"version": 1, "tempos": [{"time": 0.0, "bpm": 100}]}
+    pak = _write_dir_sloppak(tmp_path, {"song_timeline": "song_timeline.json"}, payload)
+    loaded = _load(pak, tmp_path)
+    assert loaded.tempos == [{"time": 0.0, "bpm": 100.0}]
+
+
 def test_song_timeline_absent_when_path_is_absolute(tmp_path: Path):
     pak = _write_dir_sloppak(tmp_path, {"song_timeline": "/etc/passwd"}, None)
     loaded = _load(pak, tmp_path)
