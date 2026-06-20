@@ -9823,6 +9823,13 @@
                             // so Object.assign leaves a stale `true` from a previous
                             // muted chord note untouched. Reset it explicitly here.
                             _scrChordNote.fhm = cn.fhm || false;
+                            // Same stale-scratch hazard for the bend shape:
+                            // `bnv`/`bt` are omit-when-default on the wire, so a
+                            // chord note without them would otherwise inherit the
+                            // previous note's curve (and bendSemisAtTime would
+                            // apply the wrong contour). Reset explicitly.
+                            _scrChordNote.bnv = Array.isArray(cn.bnv) ? cn.bnv : undefined;
+                            _scrChordNote.bt  = cn.bt || 0;
                             drawNote(
                                 _scrChordNote,
                                 now,
@@ -11309,15 +11316,40 @@
             return visualIdx >= (nStr - 1) * 0.5 ? -1 : 1;
         }
 
+        function bnvSampleAt(bnv, t) {
+            // Linear interpolation of a bend curve [{t, v}] (§6.2.1; t is
+            // seconds from the note onset) at elapsed time t. Clamps to the
+            // endpoints; returns 0 for an empty/invalid curve.
+            if (!Array.isArray(bnv) || bnv.length === 0) return 0;
+            if (t <= bnv[0].t) return bnv[0].v;
+            const last = bnv[bnv.length - 1];
+            if (t >= last.t) return last.v;
+            for (let i = 1; i < bnv.length; i++) {
+                const a = bnv[i - 1], b = bnv[i];
+                if (t <= b.t) {
+                    const span = b.t - a.t;
+                    return span > 0 ? a.v + (b.v - a.v) * ((t - a.t) / span) : b.v;
+                }
+            }
+            return last.v;
+        }
+
         function bendSemisAtTime(n, chartTime) {
+            if (!(n?.sus > 0)) return 0;
+            // When the note carries an authoritative bend curve (§6.2.1),
+            // sample its real shape at the elapsed time so the gem's Y gesture
+            // and sustain ribbon follow the actual bend (pre-bend, round-trip,
+            // release, …). Negative samples clamp to 0 (upward-only Y offset).
+            if (Array.isArray(n.bnv) && n.bnv.length) {
+                return Math.max(0, bnvSampleAt(n.bnv, chartTime - n.t));
+            }
             const bn = Number(n?.bn) || 0;
-            if (!(bn > 0) || !(n?.sus > 0)) return 0;
+            if (!(bn > 0)) return 0;
             const p = Math.max(0, Math.min(1, (chartTime - n.t) / Math.max(n.sus, 1e-6)));
-            // rise → hold → release: ramp up over the first ~35 %, hold, then
-            // release back down over the last ~30 %. Depicts the bend gesture
-            // (up and back down) rather than a monotone climb that only ever
-            // showed the bend going up. Drives both the sustain ribbon's Y
-            // contour and the gem's techniqueYNow offset.
+            // Fallback: synthesize rise → hold → release from the scalar peak.
+            // Ramp up over the first ~35 %, hold, then release over the last
+            // ~30 % — the bend gesture rather than a monotone climb. Drives both
+            // the sustain ribbon's Y contour and the gem's techniqueYNow offset.
             const RISE = BEND_ENV_RISE_FRAC, REL = BEND_ENV_RELEASE_FRAC;
             let env;
             if (p < RISE) env = p / RISE;
