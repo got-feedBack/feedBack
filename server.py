@@ -1,6 +1,7 @@
 """Slopsmith — FastAPI backend serving highway viewer + library."""
 
 import asyncio
+import bisect
 import hashlib
 import json
 import logging
@@ -27,13 +28,17 @@ from safepath import safe_join
 from song import (
     anchor_to_wire,
     arrangement_string_count,
+    base_open_string_midis,
     compute_smart_names,
     chord_template_to_wire,
     chord_to_wire,
     hand_shape_to_wire,
+    key_to_tonic_pc,
     load_song,
     note_to_wire,
     phrase_to_wire,
+    pitch_from_base,
+    scale_degree_for_pitch,
 )
 from audio import find_wem_files, convert_wem
 from tunings import tuning_name, DEFAULT_TUNINGS, DEFAULT_REFERENCE_PITCH, apply_reference_pitch
@@ -7362,8 +7367,48 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
                         "data": [],
                     })
 
+        # Teaching mark sd (§6.2.2): derive each note's scale degree from the
+        # active key (keys.json §7.7) + its sounding pitch (tuning[string] +
+        # fret), only when the author didn't author one. Display/teaching only —
+        # NEVER feeds grading. Notes whose string/fret has no tuning entry, or
+        # that have no active key, or whose key name is unparseable, stay unset.
+        _key_events = (
+            (loaded_slop.keys.get("events") or [])
+            if (is_slop and loaded_slop is not None and loaded_slop.keys is not None)
+            else []
+        )
+        _key_times = [e["t"] for e in _key_events]
+        _key_tonics = [key_to_tonic_pc(e.get("key")) for e in _key_events]
+        _tuning = arr.tuning or []
+        # Hoist the open-string base out of the per-note loop: arr.tuning holds
+        # per-string OFFSETS from standard, so the sounding pitch is
+        # base[string] + offset + capo + fret (matches the tuner / open-string
+        # labels). arrangement_string_count is O(notes), so compute once here.
+        _base = base_open_string_midis(
+            arrangement_string_count(arr), "bass" in (arr.name or "").lower())
+        _capo = int(getattr(arr, "capo", 0) or 0)
+
+        def _fill_scale_degree(wire: dict, n, t: float) -> None:
+            # Author-provided sd wins — note_to_wire already emitted it.
+            if "sd" in wire or not _key_times:
+                return
+            idx = bisect.bisect_right(_key_times, t) - 1
+            if idx < 0:
+                return
+            tonic = _key_tonics[idx]
+            if tonic is None:
+                return
+            midi = pitch_from_base(_base, _capo, _tuning, n.string, n.fret)
+            if midi is None:
+                return
+            wire["sd"] = scale_degree_for_pitch(midi, tonic)
+
         # Send notes in chunks
-        notes = [note_to_wire(n) for n in arr.notes]
+        notes = []
+        for n in arr.notes:
+            w = note_to_wire(n)
+            _fill_scale_degree(w, n, n.time)
+            notes.append(w)
         # Send in chunks of 500
         for i in range(0, len(notes), 500):
             await websocket.send_json({
@@ -7373,7 +7418,12 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
             })
 
         # Send chords
-        chords = [chord_to_wire(c) for c in arr.chords]
+        chords = []
+        for c in arr.chords:
+            cw = chord_to_wire(c)
+            for cn, cnw in zip(c.notes, cw.get("notes", [])):
+                _fill_scale_degree(cnw, cn, c.time)
+            chords.append(cw)
         for i in range(0, len(chords), 500):
             await websocket.send_json({
                 "type": "chords",

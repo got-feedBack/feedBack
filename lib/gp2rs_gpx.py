@@ -457,6 +457,31 @@ _GPIF_FINGER_MAP = {
     'pinky': 4, 'little': 4,
 }
 
+# Per-note <LeftFingering> teaching mark (§6.2.2). Unlike the chord-diagram
+# <Position finger=".."> path above, GPIF stores a single note's fret-hand
+# finger as a direct <Note> child element with the classical p-i-m-a-c letter
+# codes (verified against GP8 exports), mapped to the same RS finger integers
+# (open = -1, thumb = 0, index = 1, middle = 2, annular/ring = 3, little = 4).
+_GPIF_LEFT_FINGERING_MAP = {
+    'open': -1, 'none': -1, '': -1,
+    'p': 0, 'thumb': 0,
+    'i': 1, 'index': 1,
+    'm': 2, 'middle': 2,
+    'a': 3, 'annular': 3, 'ring': 3,
+    'c': 4, 'little': 4, 'pinky': 4,
+}
+
+
+def _gpif_left_fingering(note_el) -> int:
+    """Read a GPIF <Note>'s fret-hand finger (<LeftFingering>) -> RS finger int.
+
+    Returns -1 (unset) when absent or unrecognised — never fabricates a finger.
+    Teaching mark only (§6.2.2); never used for grading."""
+    raw = (note_el.findtext('LeftFingering') or '').strip().lower()
+    if not raw:
+        return -1
+    return _GPIF_LEFT_FINGERING_MAP.get(raw, -1)
+
 
 def _rs_string_order(string_pitches: list[int]) -> dict[int, int]:
     """Map each GPIF string index → RS string index (0 = lowest pitch).
@@ -1600,6 +1625,11 @@ def convert_file(
                                         rn.vibrato = True
                                     if 'LeftHandTapping' in _tp or 'Tapped' in _tp:
                                         rn.tap = True
+                                    # Fret-hand fingering -> fg teaching mark
+                                    # (§6.2.2). <LeftFingering> is a direct <Note>
+                                    # child, not a <Property>, so read it off
+                                    # note_el rather than the property map.
+                                    rn.fret_finger = _gpif_left_fingering(note_el)
                                     if 'HarmonicType' in _tp:
                                         _ht = (_tp['HarmonicType'].findtext('HType')
                                                or '').strip().lower()

@@ -1220,6 +1220,33 @@ def test_chord_diagram_fingers_extracted():
     assert [ct.get(f"finger{i}") for i in range(0, 4)] == ["-1"] * 4
 
 
+def test_single_note_left_hand_finger_imports_as_fg():
+    """A GP single note's leftHandFinger imports as the `fg` teaching mark and
+    survives convert_track XML → _parse_note → note_to_wire (§6.2.2)."""
+    from song import _parse_note, note_to_wire
+    note = _ct_note(guitarpro.NoteType.normal, gp_string=2, fret=5)
+    note.effect.leftHandFinger = guitarpro.Fingering.middle  # -> 2
+    beat = _ct_beat(tick=0, dur_value=4, notes=[note])
+
+    root = ET.fromstring(convert_track(_ct_song([beat]), track_index=0))  # noqa: S314
+    xn = root.findall(".//notes/note")[0]
+    assert xn.get("fretFinger") == "2"
+    assert note_to_wire(_parse_note(xn))["fg"] == 2
+
+
+def test_single_note_open_finger_omits_fg():
+    """Open/unset leftHandFinger leaves fg unset — no fabricated finger."""
+    from song import _parse_note, note_to_wire
+    note = _ct_note(guitarpro.NoteType.normal, gp_string=2, fret=5)
+    note.effect.leftHandFinger = guitarpro.Fingering.open  # -1 -> unset
+    beat = _ct_beat(tick=0, dur_value=4, notes=[note])
+
+    root = ET.fromstring(convert_track(_ct_song([beat]), track_index=0))  # noqa: S314
+    xn = root.findall(".//notes/note")[0]
+    assert xn.get("fretFinger") is None
+    assert "fg" not in note_to_wire(_parse_note(xn))
+
+
 def test_chord_without_diagram_has_blank_fingers():
     # A plain two-note chord (effect.chord is None) is unchanged: blank name,
     # all-(-1) fingers — no regression for diagram-less charts.

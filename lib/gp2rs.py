@@ -72,6 +72,9 @@ class RsNote:
     tremolo: bool = False
     tap: bool = False
     link_next: bool = False
+    # Teaching mark (§6.2.2): fret-hand finger (-1 unset, 0 thumb..4 pinky).
+    # Display only — never used for grading.
+    fret_finger: int = -1
 
 
 @dataclass
@@ -253,6 +256,16 @@ def _bend_shape_xml_attrs(n: "RsNote") -> dict:
     if n.bend_values:
         attrs["bendValues"] = json.dumps(n.bend_values, separators=(",", ":"))
     return attrs
+
+
+def _finger_xml_attrs(n: "RsNote") -> dict:
+    """Optional teaching-mark XML attribute for a <note>/<chordNote>: `fretFinger`
+    only when set (!= -1). `_parse_note` (lib/song.py) reads it back so a
+    GP-imported fret-hand finger survives import → wire → highway. Display only;
+    never used for grading (§6.2.2)."""
+    if getattr(n, "fret_finger", -1) != -1:
+        return {"fretFinger": str(int(n.fret_finger))}
+    return {}
 
 
 def _tempo_at_tick(tick: int, tempo_map: list[TempoEvent]) -> float:
@@ -522,6 +535,19 @@ def _build_playback_schedule(
 def _gp_string_to_rs(gp_string: int, num_strings: int) -> int:
     """Convert GP string number (1=high) to RS string index (0=low)."""
     return num_strings - gp_string
+
+
+def _gp_finger_to_rs(fingering) -> int:
+    """Coerce a pyguitarpro ``Fingering`` enum to an RS fret-hand finger int.
+
+    Fingering values are ``unknown=-2, open=-1, thumb=0, index=1, middle=2,
+    annular=3, little=4`` — already the RS finger integers for 0..4. Anything
+    open/unknown/out-of-range collapses to ``-1`` (unset), so we never invent a
+    finger. Teaching mark only (§6.2.2); never used for grading."""
+    val = getattr(fingering, "value", fingering)
+    if not isinstance(val, int) or val < 0 or val > 4:
+        return -1
+    return val
 
 
 def _chord_fingers(chord, frets: list[int], num_strings: int) -> list[int]:
@@ -853,6 +879,11 @@ def convert_track(
                     if eff.tremoloPicking:
                         rn.tremolo = True
 
+                    # Fret-hand fingering -> fg teaching mark (§6.2.2). Same
+                    # Fingering enum + value convention as the chord path.
+                    rn.fret_finger = _gp_finger_to_rs(
+                        getattr(eff, "leftHandFinger", None))
+
                     # Whammy / tremolo bar (beat-level dive/raise). RS has no
                     # whammy attribute, so approximate the pitch movement as an
                     # unpitched slide: a dive slides down, a raise slides up, by
@@ -1164,6 +1195,7 @@ def _build_xml(
             "ignore": "0",
         }
         attrs.update(_bend_shape_xml_attrs(n))
+        attrs.update(_finger_xml_attrs(n))
         ET.SubElement(notes_el, "note", **attrs)
 
     # Chords
@@ -1196,6 +1228,7 @@ def _build_xml(
                 "ignore": "0",
             }
             cn_attrs.update(_bend_shape_xml_attrs(cn))
+            cn_attrs.update(_finger_xml_attrs(cn))
             ET.SubElement(chord_el, "chordNote", **cn_attrs)
 
     # Anchors

@@ -20,10 +20,14 @@ from song import (
     chord_to_wire,
     sanitize_tempos,
     compute_smart_names,
+    base_open_string_midis,
+    key_to_tonic_pc,
     note_from_wire,
     note_to_wire,
+    note_pitch_midi,
     phrase_from_wire,
     phrase_to_wire,
+    scale_degree_for_pitch,
 )
 
 
@@ -202,6 +206,109 @@ def test_note_bend_shape_omitted_when_default():
     decoded = note_from_wire(wire)
     assert decoded.bend_intent == 0
     assert decoded.bend_values is None
+
+
+# ── Teaching marks (§6.2.2) ──────────────────────────────────────────────────
+
+def test_note_teaching_marks_round_trip():
+    """fg/ch/sd survive the wire under their literal keys.
+
+    Pin the public wire keys explicitly (cross-language sloppak readers key
+    off the literal strings), like the rh/pkd test above.
+    """
+    n = Note(
+        time=0.0, string=0, fret=0,
+        fret_finger=2, strum_group=5, scale_degree=7,
+    )
+    wire = note_to_wire(n)
+    assert wire["fg"] == 2
+    assert wire["ch"] == 5
+    assert wire["sd"] == 7
+    assert note_from_wire(wire) == n
+
+
+def test_note_teaching_marks_omitted_when_default():
+    """fg/ch/sd are default-omitted (-1) and decode back to -1."""
+    wire = note_to_wire(Note(time=0.0, string=0, fret=0))
+    for omitted in ("fg", "ch", "sd"):
+        assert omitted not in wire, f"{omitted!r} should be default-omitted"
+    decoded = note_from_wire(wire)
+    assert decoded.fret_finger == -1
+    assert decoded.strum_group == -1
+    assert decoded.scale_degree == -1
+
+
+def test_note_teaching_marks_tolerate_malformed_optional_ints():
+    """fg/ch/sd survive null / empty / non-numeric wire values."""
+    for bad in (None, "", "  ", "x", "inf"):
+        n = note_from_wire({"t": 0.0, "s": 0, "f": 0,
+                            "fg": bad, "ch": bad, "sd": bad})
+        assert n.fret_finger == -1
+        assert n.strum_group == -1
+        assert n.scale_degree == -1
+
+
+# ── Scale-degree derivation helpers (§6.2.2 / §7.7) ──────────────────────────
+
+@pytest.mark.parametrize("key,pc", [
+    ("C", 0), ("c", 0),
+    ("E", 4), ("Em", 4), ("E minor", 4),
+    ("G", 7), ("G major", 7), ("Gmaj", 7),
+    ("A#m", 10), ("Bb", 10),       # enharmonic — same pitch class
+    ("F#", 6), ("F#m", 6),
+    ("Cb", 11), ("B#", 0),         # accidentals wrap mod 12
+])
+def test_key_to_tonic_pc_parses_key_names(key, pc):
+    assert key_to_tonic_pc(key) == pc
+
+
+@pytest.mark.parametrize("bad", [None, "", "  ", "H", "xyz", "7", 5])
+def test_key_to_tonic_pc_rejects_unparseable(bad):
+    assert key_to_tonic_pc(bad) is None
+
+
+def test_scale_degree_for_pitch_standard_tuning_key_of_e():
+    """Tonic E (pc 4), standard tuning: low-E open -> tonic, A-string fret 2 -> fifth."""
+    tonic = key_to_tonic_pc("E")
+    assert tonic == 4
+    low_e_open = 40           # E2
+    a_string_fret2 = 45 + 2   # A2 + 2 = B2
+    assert scale_degree_for_pitch(low_e_open, tonic) == 0    # tonic
+    assert scale_degree_for_pitch(a_string_fret2, tonic) == 7  # perfect fifth
+    assert scale_degree_for_pitch(40 + 3, tonic) == 3        # G2 -> minor third
+
+
+def test_note_pitch_midi_standard_tuning_offsets():
+    """`arr.tuning` holds OFFSETS from standard (0 = standard), padded to 6 on
+    RS-XML; pitch = base + offset + capo + fret. Standard guitar: low-E open ->
+    40 (E2), A-string fret 2 -> 47 (B2)."""
+    arr = Arrangement(name="Lead", tuning=[0, 0, 0, 0, 0, 0])
+    assert note_pitch_midi(arr, Note(time=0, string=0, fret=0)) == 40   # low E open
+    assert note_pitch_midi(arr, Note(time=0, string=1, fret=2)) == 47   # A + 2 = B
+    # Drop-D (low string offset -2): low-E string open sounds D2 = 38.
+    drop_d = Arrangement(name="Lead", tuning=[-2, 0, 0, 0, 0, 0])
+    assert note_pitch_midi(drop_d, Note(time=0, string=0, fret=0)) == 38
+    # Capo 2 raises every sounding pitch by 2 semitones.
+    capo2 = Arrangement(name="Lead", tuning=[0, 0, 0, 0, 0, 0], capo=2)
+    assert note_pitch_midi(capo2, Note(time=0, string=0, fret=0)) == 42
+
+
+def test_note_pitch_midi_bass_uses_bass_base():
+    """A 4-string arrangement named 'Bass' uses the bass base (low E1 = 28),
+    not the guitar base (40)."""
+    bass = Arrangement(name="Bass", tuning=[0, 0, 0, 0])
+    assert note_pitch_midi(bass, Note(time=0, string=0, fret=0)) == 28
+
+
+def test_note_pitch_midi_out_of_range_string_is_none():
+    arr = Arrangement(name="Lead", tuning=[0, 0, 0, 0, 0, 0])
+    assert note_pitch_midi(arr, Note(time=0, string=9, fret=0)) is None
+
+
+def test_base_open_string_midis_bass_vs_guitar():
+    assert base_open_string_midis(6, False)[0] == 40   # guitar low E
+    assert base_open_string_midis(4, True)[0] == 28    # bass low E
+    assert base_open_string_midis(4, False)[0] == 40   # 4-string guitar voicing
 
 
 def test_note_bend_values_rounded_on_wire():

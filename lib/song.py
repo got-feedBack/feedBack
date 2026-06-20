@@ -43,6 +43,18 @@ class Note:
     slap: bool = False
     right_hand: int = -1
     pick_direction: int = -1
+    # Teaching marks (§6.2.2, feedpak 1.5.0) — display/teaching only; a grader
+    # MUST NEVER use these to judge whether a note was played correctly.
+    # `fret_finger` is the fret-hand finger (-1 unset, 0 thumb, 1..4
+    # index/middle/ring/pinky — same convention as a chord template's fingers);
+    # `strum_group` is a strum/rake key (>= -1, default -1; notes sharing a value
+    # >= 0 are one gesture, with `pick_direction` giving its direction);
+    # `scale_degree` is the note's pitch class as a chromatic offset 0..11 above
+    # the active key's tonic (default -1, MAY be derived from keys.json). All
+    # three default-omitted on the wire; older readers ignore them.
+    fret_finger: int = -1
+    strum_group: int = -1
+    scale_degree: int = -1
     ignore: bool = False
 
 
@@ -238,6 +250,13 @@ def note_to_wire(n: Note) -> dict:
             {"t": round(p["t"], 3), "v": round(p["v"], 1)}
             for p in n.bend_values
         ]
+    # Teaching marks (§6.2.2) — default-omitted, mirroring rh/pkd above.
+    if n.fret_finger != -1:
+        out["fg"] = n.fret_finger
+    if n.strum_group != -1:
+        out["ch"] = n.strum_group
+    if n.scale_degree != -1:
+        out["sd"] = n.scale_degree
     return out
 
 
@@ -327,6 +346,102 @@ def _sanitize_bend_curve(raw):
     return out
 
 
+# Natural-note letter -> pitch class (0 = C). Used to parse a keys.json key
+# name's tonic for scale-degree derivation (§6.2.2 / §7.7).
+_KEY_LETTER_PC = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
+
+
+def key_to_tonic_pc(key) -> int | None:
+    """Parse a keys.json key name (§7.7) to its tonic pitch class 0..11.
+
+    Reads only the leading note letter plus optional accidentals — e.g. ``"E"``,
+    ``"Em"``, ``"A#m"``, ``"Bb"``, ``"F#"`` -> 4, 4, 10, 10, 6. The mode/quality
+    suffix (``m``/``maj``/``min``/scale name) is irrelevant to the tonic and is
+    ignored. Returns ``None`` for anything not starting with a valid note letter,
+    so callers can leave ``sd`` unset rather than guess. Used only for teaching
+    marks; never for grading."""
+    if not isinstance(key, str):
+        return None
+    s = key.strip()
+    if not s:
+        return None
+    pc = _KEY_LETTER_PC.get(s[0].upper())
+    if pc is None:
+        return None
+    # Consume any run of accidentals directly after the letter (``#``/``b``/
+    # unicode ♯/♭); stop at the first non-accidental (start of the mode suffix).
+    for ch in s[1:]:
+        if ch in ("#", "♯"):
+            pc += 1
+        elif ch in ("b", "♭"):
+            pc -= 1
+        else:
+            break
+    return pc % 12
+
+
+def scale_degree_for_pitch(midi_pitch: int, tonic_pc: int) -> int:
+    """Chromatic scale degree 0..11 of ``midi_pitch`` above tonic ``tonic_pc``
+    (§6.2.2): the pitch class distance in semitones, 0 = tonic, 7 = fifth.
+    Display/teaching only — MUST NEVER feed a grader."""
+    return (int(midi_pitch) - int(tonic_pc)) % 12
+
+
+# Open-string base MIDI per string count, index 0 = lowest string. Mirrors
+# app.js `_TUNING_BASE_MIDI` / highway_3d `_baseOpenStringMidis` so a derived
+# scale degree agrees with the tuner + open-string labels. `arr.tuning` carries
+# per-string OFFSETS from standard (not absolute pitch), so the sounding open
+# pitch is `base + offset (+ capo)` — see `note_pitch_midi`.
+_TUNING_BASE_MIDI = {
+    4: [28, 33, 38, 43],
+    5: [23, 28, 33, 38, 43],
+    6: [40, 45, 50, 55, 59, 64],
+    7: [35, 40, 45, 50, 55, 59, 64],
+    8: [30, 35, 40, 45, 50, 55, 59, 64],
+}
+
+
+def base_open_string_midis(string_count: int, is_bass: bool) -> list[int]:
+    """Standard open-string base MIDI list for an arrangement, index 0 = lowest.
+
+    Mirrors app.js `_tuningOffsetsToFreqs`: a 4/5-string *bass* uses its own low
+    base, while a 4/5-string non-bass (a guitar voicing) borrows the low strings
+    of the 6-string base; 6/7/8 use their own. Unknown counts fall back to the
+    6-string base."""
+    n = int(string_count)
+    if n in (4, 5):
+        return _TUNING_BASE_MIDI[n] if is_bass else _TUNING_BASE_MIDI[6]
+    return _TUNING_BASE_MIDI.get(n, _TUNING_BASE_MIDI[6])
+
+
+def pitch_from_base(base: list[int], capo: int, tuning: list[int],
+                    string: int, fret: int) -> int | None:
+    """Absolute sounding MIDI for one string+fret, given a precomputed open-string
+    ``base`` (from :func:`base_open_string_midis`) and the arrangement's tuning
+    OFFSETS + capo. None when ``string`` has no tuning entry. Single source of the
+    pitch formula so the per-note hot path can hoist ``base`` out of the loop."""
+    if not (0 <= string < len(tuning)) or not base:
+        return None
+    root = base[string] if string < len(base) else base[-1]
+    return root + int(tuning[string]) + int(capo) + int(fret)
+
+
+def note_pitch_midi(arr: "Arrangement", note: "Note") -> int | None:
+    """Absolute sounding MIDI pitch of ``note`` on arrangement ``arr``, or None
+    when its string index has no tuning entry.
+
+    Pitch = standard base for the string + the arrangement's per-string tuning
+    OFFSET + capo + fret, matching the client's open-string/tuner math. Used to
+    derive the ``sd`` teaching mark (§6.2.2); display only, never grading.
+    O(notes) via ``arrangement_string_count`` — for a whole arrangement, hoist
+    the base with :func:`base_open_string_midis` and call :func:`pitch_from_base`
+    per note instead."""
+    is_bass = "bass" in (arr.name or "").lower()
+    base = base_open_string_midis(arrangement_string_count(arr), is_bass)
+    return pitch_from_base(base, int(getattr(arr, "capo", 0) or 0),
+                           arr.tuning or [], note.string, note.fret)
+
+
 def note_from_wire(d: dict, time: float | None = None) -> Note:
     return Note(
         time=float(d.get("t", time if time is not None else 0.0)),
@@ -356,6 +471,10 @@ def note_from_wire(d: dict, time: float | None = None) -> Note:
         # the XML side's `_int_optional`.
         right_hand=_wire_int_optional(d.get("rh"), -1),
         pick_direction=_wire_int_optional(d.get("pkd"), -1),
+        # Teaching marks (§6.2.2) — display only, never used for grading.
+        fret_finger=_wire_int_optional(d.get("fg"), -1),
+        strum_group=_wire_int_optional(d.get("ch"), -1),
+        scale_degree=_wire_int_optional(d.get("sd"), -1),
         ignore=bool(d.get("ig", False)),
     )
 
@@ -853,6 +972,10 @@ def _parse_note(n) -> Note:
         slap=_bool(n, "slap"),
         right_hand=_int_optional(n, "rightHand", -1),
         pick_direction=_int_optional(n, "pickDirection", -1),
+        # Teaching mark (§6.2.2): GP import writes `fretFinger`; strum_group /
+        # scale_degree are authored downstream (editor / derived), not in chart
+        # XML, so they have no attribute to read here.
+        fret_finger=_int_optional(n, "fretFinger", -1),
         ignore=_bool(n, "ignore"),
     )
 

@@ -32,6 +32,7 @@ from gp2rs_gpx import (
     _inject_tones,
     _resolve_pending_slides,
     _gpx_bend_shape,
+    _gpif_left_fingering,
 )
 from gp2rs import RsNote
 
@@ -729,6 +730,32 @@ def test_note_vibrato_ignores_whammy_trembar_property():
                       '</Properties></Note>')
     tp = {p.get('name'): p for p in n.findall('.//Property')}
     assert _note_has_vibrato(n, tp) is False
+
+
+# ── _gpif_left_fingering (GP7/GP8 per-note fret-hand finger -> fg) ───────────
+# GPIF stores a single note's fret-hand finger as a direct <LeftFingering>
+# child of <Note> (NOT a <Property>), with classical p-i-m-a-c letter codes —
+# verified against real GP8 exports (Open / I / M observed). Maps to the same
+# RS finger integers as the chord-diagram path (§6.2.2). Teaching mark only.
+
+@pytest.mark.parametrize("code, expected", [
+    ("Open", -1), ("P", 0), ("I", 1), ("M", 2), ("A", 3), ("C", 4),
+    ("i", 1), ("m", 2),                # case-insensitive
+    ("index", 1), ("ring", 3),         # word forms also accepted
+])
+def test_gpif_left_fingering_letter_codes(code, expected):
+    n = ET.fromstring(f'<Note id="1"><LeftFingering>{code}</LeftFingering>'
+                      '<Properties></Properties></Note>')
+    assert _gpif_left_fingering(n) == expected
+
+
+def test_gpif_left_fingering_absent_or_unknown_is_unset():
+    # No <LeftFingering> child, or an unrecognised value -> -1 (never fabricate).
+    assert _gpif_left_fingering(ET.fromstring('<Note id="1"/>')) == -1
+    assert _gpif_left_fingering(
+        ET.fromstring('<Note id="1"><LeftFingering>Z</LeftFingering></Note>')) == -1
+    assert _gpif_left_fingering(
+        ET.fromstring('<Note id="1"><LeftFingering></LeftFingering></Note>')) == -1
 
 
 # ── convert_file: GP8 chord-diagram name + fingering extraction (E3) ─────────
