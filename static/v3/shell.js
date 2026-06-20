@@ -24,7 +24,7 @@
     const NAV = [
         { key: 'home',       screen: 'v3-home',          label: 'Home',            group: 'HOME',    icon: 'home' },
         { key: 'progress',   screen: 'v3-progress',      label: 'Progress',        group: 'HOME',    icon: 'trophy' },
-        { key: 'shop',       screen: 'v3-shop',          label: 'Shop',            group: 'HOME',    icon: 'tag' },
+        { key: 'shop',       screen: 'v3-shop',          label: 'Unlockables',     group: 'HOME',    icon: 'tag' },
         { key: 'feedbarcade', screen: 'v3-feedbarcade',   label: 'FeedBarcade',    group: 'HOME',    icon: 'arcade' },
         { key: 'plugins',    screen: 'v3-plugins',       label: 'Plugins',         group: 'HOME',    icon: 'plug' },
         { key: 'settings',   screen: 'settings',         label: 'Settings',        group: 'HOME',    icon: 'gear' },

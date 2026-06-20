@@ -146,7 +146,7 @@
             '<div class="text-xs uppercase tracking-wider text-fb-textDim">Decibels</div>' +
             '<div class="text-3xl font-bold text-fb-gold mt-1">' + fmtDb(wallet.balance) + '</div>' +
             '<div class="text-xs text-fb-textDim mt-1">' + fmtDb(wallet.lifetime_db) + ' earned lifetime</div>' +
-            '<button type="button" data-prog-shop class="mt-2 text-sm text-fb-primary hover:text-fb-primaryHi font-medium">Open Shop →</button>' +
+            '<button type="button" data-prog-shop class="mt-2 text-sm text-fb-primary hover:text-fb-primaryHi font-medium">Open Unlockables →</button>' +
             '</div></div>' +
             calibrationCard(st.onboarding) +
             // Paths
