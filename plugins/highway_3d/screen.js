@@ -11949,6 +11949,7 @@
                         const ribbonSusTrail = !!(
                             (slideSt && n.f > 0 && (n.sus || 0) > 1e-4)
                             || (Number(n.bn) > 0)
+                            || (Array.isArray(n.bnv) && n.bnv.length > 0)
                             || n.tr
                             || hasTechniqueVibrato
                         );
@@ -12119,11 +12120,17 @@
                         arrow.material.opacity = 1;
                     }
                 }
-                if (n.bn > 0) {
+                // Derive the peak from bn OR the bnv curve: a note may carry an
+                // authoritative curve with bn left at 0 (bn SHOULD be the peak
+                // whenever bnv exists — this is the robustness fallback).
+                const _bnvPeak = (Array.isArray(n.bnv) && n.bnv.length)
+                    ? n.bnv.reduce((m, p) => Math.max(m, Number(p.v) || 0), 0) : 0;
+                const _bendPeak = Math.max(Number(n.bn) || 0, _bnvPeak);
+                if (_bendPeak > 0) {
                     // Bend chevron stack — PlaneGeometry mesh so it tilts with
                     // the gem (approachRot). Fixed world size so it perspective-
                     // shrinks naturally without distFactor compensation.
-                    const steps = Math.max(1, Math.min(4, Math.round(n.bn)));
+                    const steps = Math.max(1, Math.min(4, Math.round(_bendPeak)));
                     const bendSm = bendChevronMat(steps, activePalette[s] || 0xffffff);
                     const l = pTechPlane.get();
                     l.material = _spriteMat2MeshMat(l, bendSm);

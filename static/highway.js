@@ -471,8 +471,15 @@ function createHighway() {
     /** Map a bend curve [{t, v}] (§6.2.1) to [{x, v}] with x normalized to
      * 0..1 across the curve's time span (0 when the span is degenerate).
      * Pure — drives the 2D bend-shape glyph. */
-    function bnvNormalizedPoints(bnv) {
+    function bnvNormalizedPoints(bnv, sus) {
         if (!Array.isArray(bnv) || bnv.length === 0) return [];
+        // Map each point's time over the NOTE's span [0, sus] so it sits at its
+        // real fraction of the note (a bend that completes before the note ends
+        // draws short of the glyph's right edge). Fall back to the curve's own
+        // t-range only when the note has no usable sustain.
+        if (Number.isFinite(sus) && sus > 0) {
+            return bnv.map(p => ({ x: Math.min(Math.max(p.t / sus, 0), 1), v: p.v }));
+        }
         const t0 = bnv[0].t;
         const span = bnv[bnv.length - 1].t - t0;
         return bnv.map(p => ({ x: span > 0 ? (p.t - t0) / span : 0, v: p.v }));
@@ -1625,7 +1632,7 @@ function createHighway() {
                 // Bend curve (§6.2.1): trace the real shape as a contour above
                 // the gem (round-trip rises then falls, pre-bend starts high,
                 // release descends, …) — `bt` is implicit in the point shape.
-                const pts = bnvNormalizedPoints(bnv);
+                const pts = bnvNormalizedPoints(bnv, opts?.sus);
                 const gw = sz * 0.6;
                 const x0 = x - gw / 2;
                 ctx.beginPath();
