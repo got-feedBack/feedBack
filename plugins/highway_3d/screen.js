@@ -2535,8 +2535,12 @@
         /** Snapshotted in update() — drawNote() is a sibling of update(), not nested in its closure. */
         let _drawChordTemplates = null;
         /** Teaching marks sd/ch overlay pref (§6.2.2), mirrored from the 2D
-         * highway's `teachingMarksVisible` bundle flag. fg renders regardless. */
+         * highway's `teachingMarksVisible` bundle flag. */
         let _drawTeachingMarks = false;
+        /** Fret-hand finger (fg) hint pref, mirrored from the 2D highway's
+         * `fingerHintsVisible` bundle flag — default on (shown unless an explicit
+         * false), hideable independently of the sd/ch overlays. */
+        let _showFingerHints = true;
         let _laneTargetColor = null;
         let _renderScale = 1;
         let lyricsCanvas = null, lyricsCtx = null;
@@ -8831,6 +8835,8 @@
             _drawNextByString = nextNoteByString;
             _drawChordTemplates = bundle.chordTemplates ?? null;
             _drawTeachingMarks = !!bundle.teachingMarksVisible;
+            // Default on: only an explicit false (older bundles omit the flag) hides fg.
+            _showFingerHints = bundle.fingerHintsVisible !== false;
 
             // ── Recent-past event per string (for _nextAnyT deadline) ─────
             // Once a note/chord passes `now` it leaves _drawNextByString,
@@ -12300,8 +12306,9 @@
 
                     // Teaching marks (§6.2.2) — display only, never grading. The
                     // fret-hand finger (fg) renders by default to the right of the
-                    // fret label; the scale degree (sd) is opt-in (mirrors the 2D
-                    // `teachingMarksVisible` toggle) and renders to the left.
+                    // fret label (hideable via the finger-hints toggle); the scale
+                    // degree (sd) is opt-in (mirrors the 2D `teachingMarksVisible`
+                    // toggle) and renders to the left.
                     if (alpha > 0 && n.f > 0) {
                         const _tmS = 5.0 * K * _textSizeMul * fretLabelScaleForFret(n.f);
                         const _drawTeachMark = (text, colorHex, dx, cacheKey) => {
@@ -12318,7 +12325,9 @@
                             spr.scale.set(_tmS, _tmS, 1);
                             spr.material.opacity = alpha;
                         };
-                        _drawTeachMark(teachingFingerLabel(n.fg), '#7fd1ff', NW * 0.95, 'teachFg');
+                        if (_showFingerHints) {
+                            _drawTeachMark(teachingFingerLabel(n.fg), '#7fd1ff', NW * 0.95, 'teachFg');
+                        }
                         if (_drawTeachingMarks) {
                             _drawTeachMark(teachingDegreeLabel(n.sd), '#ffcc66', -NW * 0.95, 'teachSd');
                         }

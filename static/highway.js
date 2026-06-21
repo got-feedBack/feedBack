@@ -210,6 +210,11 @@ function createHighway() {
     // overlays are opt-in so the default highway stays uncluttered. Display only
     // — never used for grading.
     let _showTeachingMarks = localStorage.getItem('showTeachingMarks') === 'true';
+    // Fret-hand finger (fg) hints are shown by DEFAULT (the most broadly useful
+    // teaching mark) but independently hideable — separate from the sd/ch opt-in
+    // above so the two defaults (fg on, sd/ch off) can coexist. Default-true: an
+    // absent key reads as on; only an explicit 'false' hides it.
+    let _showFingerHints = localStorage.getItem('showFingerHints') !== 'false';
     let _drawHooks = [];  // plugin draw callbacks: fn(ctx, W, H)
     // slopsmith#254 — per-note judgment overlay. A plugin (note_detect)
     // registers fn(note, chartTime) -> 'hit' | 'active' | 'miss' | null
@@ -774,8 +779,10 @@ function createHighway() {
             renderScale: _effectiveRenderScale(),
             lyricsVisible: showLyrics,
             // Teaching marks sd/ch overlay pref (§6.2.2) so custom renderers
-            // (e.g. the 3D highway) can mirror the 2D opt-in toggle.
+            // (e.g. the 3D highway) can mirror the 2D opt-in toggle. The fg
+            // finger-hint pref rides alongside (default on, independently hideable).
             teachingMarksVisible: _showTeachingMarks,
+            fingerHintsVisible: _showFingerHints,
 
             // 2D-style helpers (renderers that don't need these can ignore).
             // `fillTextUnmirrored` is deliberately NOT exposed here —
@@ -1728,9 +1735,10 @@ function createHighway() {
 
         // Teaching marks (§6.2.2) — display only, never grading. The fret-hand
         // finger (fg) renders by default as a small numeral hugging the gem's
-        // right edge (T = thumb, 1..4); the scale degree (sd) is opt-in and sits
-        // on the left edge so the two never collide with the centred fret number.
-        const fgLabel = teachingFingerLabel(opts?.fg);
+        // right edge (T = thumb, 1..4), hideable via the finger-hints toggle; the
+        // scale degree (sd) is opt-in and sits on the left edge so the two never
+        // collide with the centred fret number.
+        const fgLabel = _showFingerHints ? teachingFingerLabel(opts?.fg) : '';
         if (fgLabel) {
             ctx.fillStyle = '#7fd1ff';
             ctx.font = `bold ${Math.max(8, sz * 0.26) | 0}px sans-serif`;
@@ -3783,7 +3791,7 @@ function createHighway() {
         setOnLyricsChange(fn) { _onLyricsChange = fn; },
 
         // Teaching marks (§6.2.2): toggle the opt-in sd/ch overlays. The fg
-        // numeral is unaffected (always on). Persisted to localStorage.
+        // numeral has its own toggle below. Persisted to localStorage.
         getTeachingMarksVisible() { return _showTeachingMarks; },
         toggleTeachingMarks() {
             _showTeachingMarks = !_showTeachingMarks;
@@ -3792,6 +3800,18 @@ function createHighway() {
         setTeachingMarksVisible(v) {
             _showTeachingMarks = !!v;
             localStorage.setItem('showTeachingMarks', String(_showTeachingMarks));
+        },
+
+        // Fret-hand finger hints (§6.2.2 fg): shown by default, hideable
+        // independently of the sd/ch overlays. Persisted to localStorage.
+        getFingerHintsVisible() { return _showFingerHints; },
+        toggleFingerHints() {
+            _showFingerHints = !_showFingerHints;
+            localStorage.setItem('showFingerHints', String(_showFingerHints));
+        },
+        setFingerHintsVisible(v) {
+            _showFingerHints = !!v;
+            localStorage.setItem('showFingerHints', String(_showFingerHints));
         },
 
         reconnect(filename, arrangement) {
