@@ -17,6 +17,7 @@ from song import (
     arrangement_string_count,
     arrangement_to_wire,
     chord_from_wire,
+    chord_template_to_wire,
     chord_to_wire,
     sanitize_tempos,
     compute_smart_names,
@@ -393,6 +394,95 @@ def test_chord_notes_inherit_chord_time_on_deserialization():
     )
     result = chord_from_wire(chord_to_wire(c))
     assert all(n.time == 3.0 for n in result.notes)
+
+
+# ── Harmony annotations: chord fn (§6.3.1) + template voicing (§6.6) ──────────
+
+def test_chord_fn_round_trip():
+    """A well-formed fn {rn, q, deg} survives the wire under its literal key."""
+    c = Chord(
+        time=2.0, chord_id=0,
+        notes=[Note(time=2.0, string=0, fret=2)],
+        fn={"rn": "ii7", "q": "m7", "deg": 2},
+    )
+    wire = chord_to_wire(c)
+    assert wire["fn"] == {"rn": "ii7", "q": "m7", "deg": 2}
+    assert chord_from_wire(wire) == c
+
+
+def test_chord_fn_omitted_when_none():
+    """fn defaults to None and produces no `fn` key on the wire."""
+    wire = chord_to_wire(Chord(time=0.0, chord_id=0,
+                               notes=[Note(time=0.0, string=0, fret=0)]))
+    assert "fn" not in wire
+    assert chord_from_wire(wire).fn is None
+
+
+@pytest.mark.parametrize("bad", [
+    None,                                   # absent / null
+    "ii7",                                  # not an object
+    {},                                     # empty
+    {"rn": "ii7", "q": "m7"},               # missing deg
+    {"rn": "ii7", "deg": 2},                # missing q
+    {"q": "m7", "deg": 2},                  # missing rn
+    {"rn": "", "q": "m7", "deg": 2},        # blank rn
+    {"rn": "ii7", "q": "  ", "deg": 2},     # blank q
+    {"rn": "ii7", "q": "m7", "deg": 15},    # deg out of range (high)
+    {"rn": "ii7", "q": "m7", "deg": -1},    # deg out of range (low)
+    {"rn": "ii7", "q": "m7", "deg": "2"},   # deg not an int
+    {"rn": "ii7", "q": "m7", "deg": True},  # deg is a bool, not a real int
+    {"rn": 7, "q": "m7", "deg": 2},         # rn not a str
+])
+def test_chord_fn_malformed_drops_to_none(bad):
+    """Any malformed / partial / out-of-range fn decodes to None (never partial)."""
+    c = chord_from_wire({"t": 1.0, "id": 0, "notes": [], "fn": bad})
+    assert c.fn is None
+
+
+@pytest.mark.parametrize("bad_fn", [
+    {"rn": "ii7"},                          # missing q + deg
+    {"rn": "ii7", "q": "m7", "deg": 15},    # deg out of range
+    {"rn": "", "q": "m7", "deg": 2},        # blank rn
+])
+def test_chord_to_wire_drops_invalid_fn_on_emit(bad_fn):
+    """A directly-constructed Chord with a partial/out-of-range fn never rides the wire."""
+    wire = chord_to_wire(Chord(time=1.0, chord_id=0, notes=[], fn=bad_fn))
+    assert "fn" not in wire
+
+
+def test_chord_fn_strips_whitespace_on_decode():
+    c = chord_from_wire({"t": 1.0, "id": 0, "notes": [],
+                         "fn": {"rn": " V7 ", "q": " 7 ", "deg": 7}})
+    assert c.fn == {"rn": "V7", "q": "7", "deg": 7}
+
+
+def test_template_voicing_round_trip():
+    """A non-empty voicing survives the template wire + arrangement round-trip."""
+    ct = ChordTemplate(name="Am", display_name="Am", fingers=[-1, 0, 2, 2, 1, 0],
+                       frets=[-1, 0, 2, 2, 1, 0], voicing="open")
+    assert chord_template_to_wire(ct)["voicing"] == "open"
+    arr = Arrangement(name="Rhythm", chord_templates=[ct])
+    assert arrangement_from_wire(arrangement_to_wire(arr)).chord_templates[0] == ct
+
+
+def test_template_voicing_omitted_when_default():
+    """An empty voicing (the default) produces no `voicing` key."""
+    ct = ChordTemplate(name="Am", fingers=[-1] * 6, frets=[-1] * 6)
+    assert "voicing" not in chord_template_to_wire(ct)
+    arr = arrangement_from_wire(arrangement_to_wire(
+        Arrangement(name="Rhythm", chord_templates=[ct])))
+    assert arr.chord_templates[0].voicing == ""
+
+
+@pytest.mark.parametrize("bad", [None, 7, ["open"], {"v": "open"}])
+def test_template_voicing_tolerates_malformed(bad):
+    """A non-string voicing on the wire falls back to the empty default."""
+    arr = arrangement_from_wire({
+        "name": "Rhythm",
+        "templates": [{"name": "Am", "fingers": [-1] * 6, "frets": [-1] * 6,
+                       "voicing": bad}],
+    })
+    assert arr.chord_templates[0].voicing == ""
 
 
 # ── Arrangement round-trip ───────────────────────────────────────────────────

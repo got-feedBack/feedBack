@@ -65,6 +65,9 @@ class ChordTemplate:
     frets: list[int]
     display_name: str = ""
     arpeggio: bool = False
+    # Harmony annotation (§6.6) — key-independent voicing type, e.g. "open",
+    # "triad", "shell", "drop2", "barre". Display/teaching only, never grading.
+    voicing: str = ""
 
 
 @dataclass
@@ -73,6 +76,10 @@ class Chord:
     chord_id: int
     notes: list[Note] = field(default_factory=list)
     high_density: bool = False
+    # Harmony annotation (§6.3.1) — key-dependent harmonic function on the chord
+    # INSTANCE: {rn: str, q: str, deg: int 0..11}. All three keys required when
+    # present (see _validate_fn). Display/teaching only, never grading.
+    fn: dict | None = None
 
 
 @dataclass
@@ -268,12 +275,19 @@ def chord_note_to_wire(cn: Note) -> dict:
 
 
 def chord_to_wire(c: Chord) -> dict:
-    return {
+    out = {
         "t": round(c.time, 3),
         "id": c.chord_id,
         "hd": c.high_density,
         "notes": [chord_note_to_wire(cn) for cn in c.notes],
     }
+    # Harmony function (§6.3.1) — default-omitted, mirroring bend `bnv`. Re-validate
+    # on emit (not just decode) so a directly-constructed Chord can't put a partial
+    # or out-of-range fn on the wire, which would fail the schema's required-keys rule.
+    fn = _validate_fn(c.fn)
+    if fn:
+        out["fn"] = fn
+    return out
 
 
 def anchor_to_wire(a: Anchor) -> dict:
@@ -290,7 +304,7 @@ def hand_shape_to_wire(h: HandShape) -> dict:
 
 
 def chord_template_to_wire(ct: ChordTemplate) -> dict:
-    return {
+    out = {
         "name": ct.name,
         # ChordTemplate.display_name defaults to "" on the dataclass, but
         # the spec defaults displayName to name. Fall back here so
@@ -302,6 +316,10 @@ def chord_template_to_wire(ct: ChordTemplate) -> dict:
         "fingers": list(ct.fingers),
         "frets": list(ct.frets),
     }
+    # Harmony voicing (§6.6) — default-omitted, only when non-empty.
+    if ct.voicing:
+        out["voicing"] = ct.voicing
+    return out
 
 
 def _wire_int_optional(v, default=-1):
@@ -479,6 +497,30 @@ def note_from_wire(d: dict, time: float | None = None) -> Note:
     )
 
 
+def _validate_fn(raw) -> dict | None:
+    """Validate an optional chord harmony function (§6.3.1).
+
+    Returns a clean ``{"rn", "q", "deg"}`` dict only when ``raw`` is an object
+    with a non-empty ``rn`` string, a non-empty ``q`` string, and an int ``deg``
+    in 0..11. Any malformed / missing-key / out-of-range input -> ``None`` so a
+    partial fn (which would fail the schema's required-keys rule) never rides the
+    wire. Display/teaching only — MUST NEVER feed a grader. Mirrors the
+    drop-to-default tolerance of `_sanitize_bend_curve`."""
+    if not isinstance(raw, dict):
+        return None
+    rn = raw.get("rn")
+    q = raw.get("q")
+    deg = raw.get("deg")
+    if not isinstance(rn, str) or not rn.strip():
+        return None
+    if not isinstance(q, str) or not q.strip():
+        return None
+    # bool is an int subclass — reject it so `deg=True` can't pass as 1.
+    if not isinstance(deg, int) or isinstance(deg, bool) or not (0 <= deg <= 11):
+        return None
+    return {"rn": rn.strip(), "q": q.strip(), "deg": deg}
+
+
 def chord_from_wire(d: dict) -> Chord:
     t = float(d.get("t", 0.0))
     return Chord(
@@ -486,6 +528,7 @@ def chord_from_wire(d: dict) -> Chord:
         chord_id=int(d.get("id", 0)),
         high_density=bool(d.get("hd", False)),
         notes=[note_from_wire(cn, time=t) for cn in d.get("notes", [])],
+        fn=_validate_fn(d.get("fn")),
     )
 
 
@@ -838,7 +881,9 @@ def arrangement_from_wire(d: dict) -> Arrangement:
                           display_name=ct.get("displayName", ct.get("name", "")),
                           arpeggio=bool(ct.get("arp", False)),
                           fingers=list(ct.get("fingers", [-1] * 6)),
-                          frets=list(ct.get("frets", [-1] * 6)))
+                          frets=list(ct.get("frets", [-1] * 6)),
+                          voicing=(ct.get("voicing")
+                                   if isinstance(ct.get("voicing"), str) else ""))
             for ct in d.get("templates", [])
         ],
         # `phrases` is optional — absent on single-level sources / older
