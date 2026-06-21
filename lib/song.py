@@ -328,10 +328,15 @@ def chord_template_to_wire(ct: ChordTemplate) -> dict:
     if ct.voicing:
         out["voicing"] = ct.voicing
     # CAGED shape + guide tones (§6.6) — default-omitted, mirroring voicing.
-    if ct.caged:
-        out["caged"] = ct.caged
-    if ct.guide_tones:
-        out["guideTones"] = list(ct.guide_tones)
+    # Sanitize on EMIT too (not just on decode): a directly-constructed template
+    # must not be able to write a non-enum `caged` or an out-of-range `guideTone`
+    # to the wire (the spec constrains caged to C/A/G/E/D and guideTones to 0..11).
+    _caged = _sanitize_caged(ct.caged)
+    if _caged:
+        out["caged"] = _caged
+    _guide_tones = _sanitize_guide_tones(ct.guide_tones)
+    if _guide_tones:
+        out["guideTones"] = _guide_tones
     return out
 
 

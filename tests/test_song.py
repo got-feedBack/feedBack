@@ -514,6 +514,20 @@ def test_template_caged_tolerates_malformed(bad):
     assert arr.chord_templates[0].caged == ""
 
 
+def test_template_caged_guide_tones_sanitized_on_emit():
+    """A directly-constructed template can't write an invalid caged / out-of-range
+    guideTone to the wire — the emitter sanitizes, not just the decoder."""
+    ct = ChordTemplate(name="Am", fingers=[-1] * 6, frets=[-1] * 6,
+                       caged="X", guide_tones=[3, 99, -1, "x", True])
+    wire = chord_template_to_wire(ct)
+    assert "caged" not in wire            # non-enum dropped, not emitted
+    assert wire["guideTones"] == [3]      # only the valid in-range int survives
+    # A wholly-invalid guideTones list omits the key entirely.
+    ct2 = ChordTemplate(name="Am", fingers=[-1] * 6, frets=[-1] * 6,
+                        guide_tones=[42, "nope"])
+    assert "guideTones" not in chord_template_to_wire(ct2)
+
+
 def test_template_guide_tones_round_trip():
     """A non-empty guideTones list survives the template wire + round-trip."""
     ct = ChordTemplate(name="G7", display_name="G7", fingers=[3, 2, 0, 0, 0, 1],
