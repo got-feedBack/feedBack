@@ -973,6 +973,23 @@ function createHighway() {
         return '2d';
     }
 
+    // Logical identity of a renderer for swap detection: its viz id, not
+    // its object reference. app.js stamps `pluginId`/`source` (the viz
+    // picker id) onto every renderer it installs via _tagVizRenderer, and
+    // setViz()/_autoMatchViz() build a FRESH renderer object with factory()
+    // on every (re)apply — even when the selected viz did not change (e.g.
+    // Auto re-resolving to the same viz across consecutive songs). Keying
+    // the canvas-replacement decision on object identity would therefore
+    // treat those benign re-installs as a swap and needlessly clone
+    // #highway, dropping listeners/expando state attached to the element.
+    // The default renderer has no id, so it keys on its own singleton; an
+    // untagged custom renderer falls back to its object reference (the safe
+    // "treat as a swap" answer).
+    function _rendererVizKey(r) {
+        if (r === _defaultRenderer) return _defaultRenderer;
+        return (r && (r.pluginId || r.source)) || r;
+    }
+
     // Replace the underlying <canvas> element with a fresh one because
     // the next renderer needs a different context type than the current
     // canvas is locked to. Preserves the DOM position, id, classes,
@@ -1077,8 +1094,8 @@ function createHighway() {
         const nextType = _resolveRendererContextType(next);
         // Replace the underlying <canvas> when (a) the new renderer needs
         // a different context type than the one currently bound, OR (b)
-        // we're swapping to a *different* renderer instance while keeping
-        // the same context type. Case (b) prevents a stale frame from the
+        // we're swapping to a *different* visualization while keeping the
+        // same context type. Case (b) prevents a stale frame from the
         // previous renderer bleeding through: renderers that draw into a
         // sibling overlay (e.g. 3D Highway's `.h3d-wrap`) never paint
         // #highway, so whatever the *previous* renderer left on the shared
@@ -1088,11 +1105,16 @@ function createHighway() {
         // the 3D guitar highway's overlay after switching between them —
         // both are webgl2, so the type-change check alone never fired. A
         // fresh canvas starts blank/transparent, so the incoming renderer
-        // always begins over a clean surface. Skipped when re-installing
-        // the same renderer instance (next === prev), e.g. an Auto re-eval
-        // that resolves to the already-active viz, and on the very first
-        // install (prev === null) where there is no prior frame to clear.
-        if (nextType !== _currentCanvasContextType || (prev && next !== prev)) {
+        // always begins over a clean surface. The swap test keys on the
+        // viz id (_rendererVizKey), NOT object identity: setViz/_autoMatchViz
+        // build a fresh renderer object on every apply, so an object-identity
+        // check would clone #highway on every benign same-viz re-install
+        // (e.g. Auto re-resolving to the same viz across songs) and drop the
+        // element's listeners/expando state. Skipped when re-installing the
+        // same viz, and on the very first install (prev === null) where
+        // there is no prior frame to clear.
+        const _vizChanged = prev && _rendererVizKey(next) !== _rendererVizKey(prev);
+        if (nextType !== _currentCanvasContextType || _vizChanged) {
             _replaceCanvas(nextType);
         }
         const bundle = _makeBundle();

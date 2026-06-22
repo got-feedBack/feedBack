@@ -54,24 +54,38 @@ test('_setRenderer captures the outgoing renderer before overwriting it', () => 
     assert.ok(prevIdx < assignIdx, 'prev must be captured before `_renderer = next`');
 });
 
-test('_setRenderer replaces the canvas on a context-type change OR a renderer-instance swap', () => {
+test('_setRenderer replaces the canvas on a context-type change OR a viz change', () => {
     const src = fs.readFileSync(highwayJs, 'utf8');
     const fn = extractBlock(src, 'function _setRenderer(r)');
     // The replace guard must fire on EITHER a context-type change OR a
-    // swap to a different renderer instance. A regression that drops the
-    // `next !== prev` clause would let a stale frame bleed through.
+    // swap to a different visualization. A regression that drops the
+    // viz-change clause would let a stale frame bleed through.
     assert.match(
         fn,
-        /if\s*\(\s*nextType\s*!==\s*_currentCanvasContextType\s*\|\|\s*\(\s*prev\s*&&\s*next\s*!==\s*prev\s*\)\s*\)\s*\{\s*_replaceCanvas\(nextType\)/,
-        'replace guard must be `nextType !== _currentCanvasContextType || (prev && next !== prev)`',
+        /const\s+_vizChanged\s*=\s*prev\s*&&\s*_rendererVizKey\(next\)\s*!==\s*_rendererVizKey\(prev\)/,
+        '_vizChanged must compare _rendererVizKey(next) vs _rendererVizKey(prev), guarded by prev',
+    );
+    assert.match(
+        fn,
+        /if\s*\(\s*nextType\s*!==\s*_currentCanvasContextType\s*\|\|\s*_vizChanged\s*\)\s*\{\s*_replaceCanvas\(nextType\)/,
+        'replace guard must be `nextType !== _currentCanvasContextType || _vizChanged`',
     );
 });
 
-test('_setRenderer skips the extra replace on first install and same-renderer re-install', () => {
+test('_rendererVizKey keys on the viz id, not object identity (avoids churn on same-viz re-install)', () => {
+    const src = fs.readFileSync(highwayJs, 'utf8');
+    const fn = extractBlock(src, 'function _rendererVizKey(r)');
+    // Default renderer keys on its singleton; custom renderers key on the
+    // viz picker id (pluginId/source) stamped by app.js's _tagVizRenderer,
+    // falling back to the object reference only when untagged.
+    assert.match(fn, /r\s*===\s*_defaultRenderer/, 'default renderer must key on its own singleton');
+    assert.match(fn, /r\.pluginId\s*\|\|\s*r\.source/, 'custom renderers must key on pluginId/source (the viz id)');
+});
+
+test('_setRenderer skips the extra replace on first install (prev === null)', () => {
     const src = fs.readFileSync(highwayJs, 'utf8');
     const fn = extractBlock(src, 'function _setRenderer(r)');
     // The `prev &&` guard avoids a needless swap on the very first install
-    // (prev === null), and `next !== prev` avoids one when api.init re-applies
-    // the already-selected renderer via _setRenderer(_renderer).
-    assert.match(fn, /prev\s*&&\s*next\s*!==\s*prev/, 'must guard against prev===null and next===prev');
+    // (prev === null) where there is no prior frame to clear.
+    assert.match(fn, /_vizChanged\s*=\s*prev\s*&&/, 'must short-circuit _vizChanged when prev is null');
 });
