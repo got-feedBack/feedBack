@@ -58,15 +58,15 @@
         let f = ((song && song.format) || '').toLowerCase();
         if (!f) {
             const fn = ((song && song.filename) || '').toLowerCase();
-            f = fn.endsWith('.sloppak') ? 'sloppak' : '';
+            f = (fn.endsWith('.feedpak') || fn.endsWith('.sloppak')) ? 'sloppak' : '';
         }
-        return f === 'sloppak' ? 'SLOPPAK' : f === 'loose' ? 'FOLDER' : '';
+        return f === 'sloppak' ? 'FEEDPAK' : f === 'loose' ? 'FOLDER' : '';
     }
     // Corner badge for art-thumbnail cards (sloppak accented, others muted).
     function fmtBadge(song) {
         const l = fmtName(song);
         if (!l) return '';
-        const c = l === 'SLOPPAK' ? 'bg-fb-primary text-white' : 'bg-black/70 text-fb-textDim';
+        const c = l === 'FEEDPAK' ? 'bg-fb-primary text-white' : 'bg-black/70 text-fb-textDim';
         return '<span class="absolute bottom-0 left-0 ' + c + ' text-[9px] font-bold px-1.5 py-0.5 rounded-tr-md tracking-wide">' + l + '</span>';
     }
     // Inline pill for the hero (Pick/Continue) card, where the art is text-overlaid
@@ -74,7 +74,7 @@
     function fmtTag(song) {
         const l = fmtName(song);
         if (!l) return '';
-        const c = l === 'SLOPPAK' ? 'bg-fb-primary/20 text-fb-primary' : 'bg-fb-card/80 text-fb-textDim';
+        const c = l === 'FEEDPAK' ? 'bg-fb-primary/20 text-fb-primary' : 'bg-fb-card/80 text-fb-textDim';
         return '<span class="' + c + ' text-[9px] font-bold px-1.5 py-0.5 rounded tracking-wide shrink-0">' + l + '</span>';
     }
 

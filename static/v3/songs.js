@@ -22,7 +22,7 @@
         ['recent', 'Recently Added'], ['year-desc', 'Year (newest)'],
         ['year', 'Year (oldest)'], ['tuning', 'Tuning'],
     ];
-    const FORMATS = [['', 'All formats'], ['sloppak', 'Sloppak'], ['loose', 'Folder']];
+    const FORMATS = [['', 'All formats'], ['sloppak', 'Feedpak'], ['loose', 'Folder']];
     const ARRANGEMENTS = ['Lead', 'Rhythm', 'Bass', 'Combo', 'Vocals'];
     const STEMS = ['guitar', 'bass', 'drums', 'vocals', 'other'];
     const PAGE_SIZE = 24;
@@ -314,15 +314,15 @@
         let f = (song.format || '').toLowerCase();
         if (!f) {
             const fn = (song.filename || '').toLowerCase();
-            f = fn.endsWith('.sloppak') ? 'sloppak' : '';
+            f = (fn.endsWith('.feedpak') || fn.endsWith('.sloppak')) ? 'sloppak' : '';
         }
-        return f === 'sloppak' ? 'SLOPPAK' : f === 'loose' ? 'FOLDER' : '';
+        return f === 'sloppak' ? 'FEEDPAK' : f === 'loose' ? 'FOLDER' : '';
     }
     // Corner badge for art-based cards (sloppak accented, others muted).
     function fmtBadge(song) {
         const l = fmtLabel(song);
         if (!l) return '';
-        const c = l === 'SLOPPAK' ? 'bg-fb-primary text-white' : 'bg-black/70 text-fb-textDim';
+        const c = l === 'FEEDPAK' ? 'bg-fb-primary text-white' : 'bg-black/70 text-fb-textDim';
         return '<span class="absolute bottom-0 left-0 ' + c + ' text-[9px] font-bold px-1.5 py-0.5 rounded-tr-md tracking-wide">' + l + '</span>';
     }
 
@@ -647,7 +647,7 @@
                     '<div class="flex items-center gap-2 py-1 group" data-fn="' + esc(k) + '" data-library-song="' + esc(songId(s)) + '" data-library-provider="' + esc(state.provider) + '">' +
                     '<img src="' + esc(artUrl(s)) + '" alt="" loading="lazy" decoding="async" class="w-8 h-8 rounded object-cover bg-fb-card cursor-pointer" data-v3-play onerror="this.style.visibility=\'hidden\'">' +
                     '<span class="flex-1 min-w-0 cursor-pointer" data-v3-play><span class="block text-sm text-fb-text truncate">' + esc(s.title) + '</span></span>' +
-                    (fl ? '<span class="text-[9px] font-bold px-1 py-0.5 rounded shrink-0 ' + (fl === 'SLOPPAK' ? 'bg-fb-primary/20 text-fb-primary' : 'bg-fb-card text-fb-textDim') + '">' + fl + '</span>' : '') +
+                    (fl ? '<span class="text-[9px] font-bold px-1 py-0.5 rounded shrink-0 ' + (fl === 'FEEDPAK' ? 'bg-fb-primary/20 text-fb-primary' : 'bg-fb-card text-fb-textDim') + '">' + fl + '</span>' : '') +
                     (state.accuracy[k] != null ? '<span class="text-xs font-bold ' + (state.accuracy[k] >= 0.9 ? 'text-fb-good' : state.accuracy[k] >= 0.5 ? 'text-fb-mid' : 'text-fb-low') + '">' + Math.round(state.accuracy[k] * 100) + '%</span>' : '') +
                     '<button data-fav class="opacity-0 group-hover:opacity-100 px-1 ' + (s.favorite ? 'text-fb-accent' : 'text-fb-textDim') + '">' + (s.favorite ? '♥' : '♡') + '</button>' +
                     '</div>'); }).join('') + '</div>').join('') + '</div></details>').join('');

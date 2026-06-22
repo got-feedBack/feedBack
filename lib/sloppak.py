@@ -29,6 +29,12 @@ log = logging.getLogger("slopsmith.lib.sloppak")
 # (additive/MINOR compatibility); writers stamp this.
 FEEDPAK_VERSION = "1.2.0"
 
+# Package suffixes. The format is byte-identical regardless of suffix; `.feedpak`
+# is the current write extension, `.sloppak` the legacy one we still read.
+FEEDPAK_EXT = ".feedpak"
+SLOPPAK_EXT = ".sloppak"
+SONG_EXTS = (FEEDPAK_EXT, SLOPPAK_EXT)  # accepted on read/discovery
+
 import yaml
 
 from safepath import safe_join
@@ -48,8 +54,12 @@ import notation as notation_mod
 # ── Format detection ──────────────────────────────────────────────────────────
 
 def is_sloppak(path: Path) -> bool:
-    """True if path looks like a sloppak (zip file or directory)."""
-    return path.name.lower().endswith(".sloppak")
+    """True if path looks like a song package (zip file or directory).
+
+    Accepts both the current `.feedpak` suffix and the legacy `.sloppak` one —
+    same on-disk format, either form.
+    """
+    return path.name.lower().endswith(SONG_EXTS)
 
 
 # ── Source resolution (zip unpack cache + directory passthrough) ──────────────

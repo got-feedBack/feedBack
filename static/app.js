@@ -1918,7 +1918,7 @@ function formatBadge(fmt, stemCount) {
         return `<span class="fmt-badge absolute top-2 right-2 px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-900/80 text-purple-200 border border-purple-700">STEMS</span>`;
     }
     if (fmt === 'sloppak') {
-        return `<span class="fmt-badge absolute top-2 right-2 px-1.5 py-0.5 rounded text-[10px] font-bold bg-green-900/80 text-green-200 border border-green-700">SLOPPAK</span>`;
+        return `<span class="fmt-badge absolute top-2 right-2 px-1.5 py-0.5 rounded text-[10px] font-bold bg-green-900/80 text-green-200 border border-green-700">FEEDPAK</span>`;
     }
     if (fmt === 'loose') {
         return `<span class="fmt-badge absolute top-2 right-2 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-900/80 text-amber-200 border border-amber-700">FOLDER</span>`;
@@ -1931,7 +1931,7 @@ function formatBadgeInline(fmt, stemCount) {
         return `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-900/60 text-purple-300">STEMS</span>`;
     }
     if (fmt === 'sloppak') {
-        return `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-green-900/60 text-green-300">SLOPPAK</span>`;
+        return `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-green-900/60 text-green-300">FEEDPAK</span>`;
     }
     if (fmt === 'loose') {
         return `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-900/60 text-amber-300">FOLDER</span>`;
@@ -4152,10 +4152,10 @@ async function uploadSongs(fileList) {
     const files = [];
     for (const f of all) {
         const lower = f.name.toLowerCase();
-        if (lower.endsWith('.sloppak')) {
+        if (lower.endsWith('.feedpak') || lower.endsWith('.sloppak')) {
             files.push(f);
         } else {
-            failures.push(`${f.name}: only .sloppak accepted`);
+            failures.push(`${f.name}: only .feedpak accepted`);
         }
     }
     if (files.length === 0) {

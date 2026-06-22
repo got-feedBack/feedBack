@@ -3129,8 +3129,10 @@ def _background_scan():
         # path for playback.
         def _is_excluded_from_library(p: Path) -> bool:
             return "tutorials-builtin" in p.parts or "minigames-builtin" in p.parts
-        # Sloppaks: match both file (zip) and directory form by suffix.
-        sloppaks = [f for f in sorted(dlc.rglob("*.sloppak"))
+        # Sloppaks: match both file (zip) and directory form, across both the
+        # `.feedpak` and legacy `.sloppak` suffixes.
+        _cands = sorted(p for ext in sloppak_mod.SONG_EXTS for p in dlc.rglob(f"*{ext}"))
+        sloppaks = [f for f in _cands
                     if sloppak_mod.is_sloppak(f)
                     and not _is_excluded_from_library(f)]
 
@@ -3148,7 +3150,7 @@ def _background_scan():
             if _is_excluded_from_library(wem):
                 continue
             d = wem.parent
-            if d in sloppak_dirs or d.name.lower().endswith(".sloppak"):
+            if d in sloppak_dirs or d.name.lower().endswith(sloppak_mod.SONG_EXTS):
                 continue
             if d not in seen_loose and loosefolder_mod.is_loose_song(d):
                 loose_songs.append(d)
@@ -3832,7 +3834,7 @@ def trigger_full_rescan():
 
 # ── Song upload ───────────────────────────────────────────────────────────────
 
-_ALLOWED_SONG_EXTS = {".sloppak"}
+_ALLOWED_SONG_EXTS = set(sloppak_mod.SONG_EXTS)
 _MAX_UPLOAD_BYTES = 1024 * 1024 * 1024  # 1 GB — covers sloppaks bundled with stems
 # Per-request batch cap. Lets a user drop a whole album of sloppaks at once
 # without giving a hostile client a 1000-file DoS surface via Starlette's
@@ -4063,7 +4065,7 @@ async def _save_uploaded_song(upload: UploadFile, dlc: Path, overwrite: bool) ->
     suffix = Path(base).suffix.lower()
     if suffix not in _ALLOWED_SONG_EXTS:
         return {"status": "error", "filename": base,
-                "error": "Only .sloppak files are accepted"}
+                "error": "Only .feedpak files are accepted"}
 
     dest = dlc / base
     if dest.exists():
@@ -4121,10 +4123,10 @@ async def _save_uploaded_song(upload: UploadFile, dlc: Path, overwrite: bool) ->
             if bytes_read == 0:
                 error_result = {"status": "error", "filename": base,
                                 "error": "Empty upload — file is 0 bytes"}
-            elif suffix == ".sloppak":
+            elif suffix in _ALLOWED_SONG_EXTS:
                 if head[:2] != b"PK":
                     error_result = {"status": "error", "filename": base,
-                                    "error": "Not a valid sloppak file (expected zip archive)"}
+                                    "error": "Not a valid feedpak file (expected zip archive)"}
                 else:
                     # ZIP magic alone admits any renamed zip — verify the sloppak
                     # loader can actually parse a manifest.yaml inside. Without
@@ -5320,8 +5322,9 @@ def save_settings(data: dict):
         else:
             if Path(dlc_path).is_dir():
                 updates["dlc_dir"] = dlc_path
-                count = sum(1 for f in Path(dlc_path).iterdir() if f.suffix == ".sloppak")
-                messages.append(f"DLC folder: {count} sloppak files found")
+                count = sum(1 for f in Path(dlc_path).iterdir()
+                            if f.suffix.lower() in sloppak_mod.SONG_EXTS)
+                messages.append(f"DLC folder: {count} song files found")
             else:
                 return {"error": f"DLC directory not found: {dlc_path}"}
 
