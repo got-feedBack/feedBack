@@ -25,6 +25,17 @@ html { scroll-behavior: smooth; }
 }
 #highway { flex: 1; width: 100%; min-height: 0; }
 
+/* The section_map plugin injects #section-map as #player's first child, a
+   ~20px bar pinned to top:0. #player-hud is also top:0/absolute but at a
+   higher z-index, so its song name (top-left) and timer (top-right) would
+   paint on top of that bar. When the bar is present, push the HUD's content
+   below it, preserving the HUD's original py-3 (0.75rem) inset *under* the
+   bar (bar height + py-3). The general-sibling combinator only matches when
+   #section-map precedes #player-hud — which is exactly how the plugin inserts
+   it (#highway sits between them) — so the bar-less layout is untouched.
+   ID-on-ID specificity overrides Tailwind's .py-3 top padding. */
+#section-map ~ #player-hud { padding-top: calc(20px + 0.75rem); }
+
 /* Player controls need their own stacking context so visualization
    plugins that paint absolutely-positioned overlays (e.g. the bundled
    3D Highway's WebGL wrap at z-index:2, or any community viz plugin)
