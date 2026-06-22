@@ -240,6 +240,10 @@
         if (window.v3AudioRouting && typeof window.v3AudioRouting.render === 'function') {
             try { window.v3AudioRouting.render(document.getElementById('v3-audio-routing')); } catch (e) { /* */ }
         }
+        // Signal that #v3-home has been (re)built, so the first-run onboarding
+        // tour can wait for the real cards instead of attaching to nodes from a
+        // prior render that this innerHTML swap just replaced.
+        try { document.dispatchEvent(new CustomEvent('v3:dashboard-rendered')); } catch (e) { /* older runtimes */ }
     }
 
     function statCard(value, unit, unitColor) {

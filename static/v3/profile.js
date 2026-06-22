@@ -520,6 +520,12 @@
             if (!editing && !finishOpts.launchingSong &&
                 window.v3OnboardingTour && typeof window.v3OnboardingTour.startFirstRun === 'function') {
                 try { window.v3OnboardingTour.startFirstRun(); } catch (e) { /* never block onboarding */ }
+            } else if (!editing && finishOpts.launchingSong &&
+                window.v3OnboardingTour && typeof window.v3OnboardingTour.armPendingFirstRun === 'function') {
+                // "Play it now" navigates straight to the player, so the home
+                // tour can't run now — arm it to fire the first time the user
+                // returns to home, instead of silently never showing.
+                try { window.v3OnboardingTour.armPendingFirstRun(); } catch (e) { /* never block onboarding */ }
             }
         }
 

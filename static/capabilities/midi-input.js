@@ -177,14 +177,31 @@
     async function _discover() {
         if (providers.size === 0) return _unavailable('No MIDI provider registered', _snapshot());
         let found = 0;
+        let enumerated = 0;
+        let lastError = null;
         for (const provider of providers.values()) {
             if (!provider.handlers.enumerate) continue;
             let list;
             try { list = await provider.handlers.enumerate(); }
             catch (e) {
-                // requestMIDIAccess rejection = permission denied / unsupported.
-                return _denied(_str(e && e.message, 'MIDI access denied'), _snapshot());
+                // One provider failing (e.g. browser Web-MIDI permission denied,
+                // or unsupported) must NOT hide other providers' devices (e.g. a
+                // native/desktop MIDI provider). Record it and keep going; denial
+                // is only reported below when NO provider enumerated successfully.
+                lastError = e;
+                // Drop this provider's now-unverifiable sources so revoked /
+                // unplugged devices don't linger as selectable and fail on a
+                // later open (it just failed to enumerate, so we can't trust its
+                // previous list).
+                for (const [key, s] of Array.from(sources.entries())) {
+                    if (s.providerId === provider.id) {
+                        _closeSessionInternal(key, 'enumerate-failed');
+                        sources.delete(key);
+                    }
+                }
+                continue;
             }
+            enumerated += 1;
             const fresh = new Set();
             for (const raw of (Array.isArray(list) ? list : [])) {
                 const sourceId = _str(raw.sourceId || raw.id, '');
@@ -216,6 +233,11 @@
         }
         // Restore a previously-selected source if it reappeared.
         if (selectedKey && !sources.has(selectedKey)) { /* keep the preference; it may return later */ }
+        // Only surface a denial when NO provider could enumerate — otherwise a
+        // single denied/unsupported provider would mask the working ones.
+        if (enumerated === 0 && lastError) {
+            return _denied(_str(lastError && lastError.message, 'MIDI access denied'), _snapshot());
+        }
         _emit('sources-changed', { count: found });
         _contributeDiagnostics();
         return _handled(_snapshot({ discovered: found }));

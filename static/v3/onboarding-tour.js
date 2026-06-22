@@ -93,18 +93,47 @@
         try {
             if (t.hasSeen(TOUR_ID) || t.hasDismissed(TOUR_ID)) return;
         } catch (e) { /* private mode — fall through and attempt once */ }
-        // Make sure the home screen is in view so the spotlight targets exist;
-        // the per-step waitFor handles the async dashboard render.
+        // Make sure the home screen is in view so the spotlight targets exist.
         if (typeof window.showScreen === 'function') {
             try { window.showScreen('v3-home'); } catch (e) { /* best-effort */ }
         }
-        // Defer a frame so the 'v3:profile-updated' dashboard re-render has a
-        // chance to begin before Shepherd starts polling for the first target.
-        var raf = window.requestAnimationFrame || function (fn) { return setTimeout(fn, 16); };
-        raf(function () { try { t.start(TOUR_ID); } catch (e) { /* degrade */ } });
+        // Wait for the dashboard to finish (re)rendering #v3-home before
+        // attaching Shepherd. Starting after a single animation frame can latch
+        // onto the pre-render #v3-hero / [data-tour] nodes that the async render
+        // then replaces, breaking the tour. Listen for the render-complete
+        // event; fall back on a timeout in case the render already finished
+        // (no event coming) or never fires.
+        var started = false;
+        var go = function () {
+            if (started) return;
+            started = true;
+            try { document.removeEventListener('v3:dashboard-rendered', go); } catch (e) { /* */ }
+            try { t.start(TOUR_ID); } catch (e) { /* degrade */ }
+        };
+        try { document.addEventListener('v3:dashboard-rendered', go, { once: true }); } catch (e) { /* */ }
+        setTimeout(go, 1200);
     }
 
-    window.v3OnboardingTour = { startFirstRun: startFirstRun };
+    // Onboarding paths that navigate straight to the player ("Play it now")
+    // can't start the tour immediately — there is no home screen to spotlight
+    // yet. Arm it to run the first time the user lands back on v3-home.
+    function armPendingFirstRun() {
+        var t = window.slopsmithTour;
+        if (!t || typeof t.start !== 'function') return;
+        try {
+            if (t.hasSeen(TOUR_ID) || t.hasDismissed(TOUR_ID)) return;
+        } catch (e) { /* private mode — fall through */ }
+        var sm = window.slopsmith;
+        if (!sm || typeof sm.on !== 'function') return;
+        var onScreen = function (e) {
+            if (!(e && e.detail && e.detail.id === 'v3-home')) return;
+            try { if (typeof sm.off === 'function') sm.off('screen:changed', onScreen); } catch (_) { /* */ }
+            startFirstRun();
+        };
+        sm.on('screen:changed', onScreen);
+    }
+
+    window.v3OnboardingTour = { startFirstRun: startFirstRun, armPendingFirstRun: armPendingFirstRun };
 
     // tour-engine.js assigns window.slopsmithTour at script-eval time, so if it
     // is loaded before us register() succeeds immediately; otherwise retry once
