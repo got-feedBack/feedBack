@@ -12941,7 +12941,27 @@
             const baseDPR = _ssActive() ? Math.min(devicePixelRatio, 1.25) : Math.min(devicePixelRatio, 2);
             ren.setPixelRatio(_renderScale * baseDPR);
             ren.setSize(w, h);
-            wrap.style.height = h + 'px';
+            // Pin the overlay to #highway's exact box so it fully covers the
+            // canvas. The wrap is anchored to top:0/left:0/right:0 of its
+            // offset parent, which only lines up with #highway when the
+            // canvas sits at the parent's origin. The v3 player can place
+            // chrome above the canvas, shifting the wrap up so its lower edge
+            // falls short of #highway — leaving a strip of the canvas exposed
+            // (the reported gap, where the previous renderer's frame showed
+            // through). The wrap is a sibling of highwayCanvas, so they share
+            // an offset parent; tracking the canvas's offset box keeps the
+            // overlay flush in single-player and splitscreen alike. Guarded on
+            // a laid-out canvas (offsetWidth/Height > 0); otherwise fall back
+            // to the computed height and the static top:0/left:0/right:0.
+            if (highwayCanvas && highwayCanvas.offsetWidth > 0 && highwayCanvas.offsetHeight > 0) {
+                wrap.style.top = highwayCanvas.offsetTop + 'px';
+                wrap.style.left = highwayCanvas.offsetLeft + 'px';
+                wrap.style.right = 'auto';
+                wrap.style.width = highwayCanvas.offsetWidth + 'px';
+                wrap.style.height = highwayCanvas.offsetHeight + 'px';
+            } else {
+                wrap.style.height = h + 'px';
+            }
             if (lyricsCanvas) { lyricsCanvas.width = w; lyricsCanvas.height = h; }
             _diagRenderCache.clear();
             cam.aspect = w / h;
