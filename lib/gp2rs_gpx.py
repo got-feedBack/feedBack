@@ -1696,6 +1696,17 @@ def convert_file(
                                     for _bn in beat_rs_notes:
                                         _bn.vibrato = True
 
+                                # Tremolo picking: GP7/GP8 encodes the rate as a
+                                # beat-level <Tremolo>1/8</Tremolo> child. The note
+                                # model has a single tremolo flag (no rate), so map
+                                # any tremolo-picked beat to note tremolo across it.
+                                # Independent of vibrato above — a note can carry
+                                # both. (Beat-level <Tremolo>, not the whammy
+                                # VibratoWTremBar Property, which is handled above.)
+                                if beat_el.find('Tremolo') is not None:
+                                    for _bn in beat_rs_notes:
+                                        _bn.tremolo = True
+
                                 if len(beat_rs_notes) == 1:
                                     rs_notes.append(beat_rs_notes[0])
                                 elif len(beat_rs_notes) > 1:
