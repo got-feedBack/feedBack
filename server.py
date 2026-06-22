@@ -580,6 +580,88 @@ class MetadataDB:
         self.conn.execute("INSERT OR IGNORE INTO wallet (id) VALUES (1)")
         self.conn.commit()
         self._lock = threading.Lock()
+        # One-time repair of pre-fix rows written under URL-encoded filenames
+        # (idempotent: a no-op once every row is canonical).
+        self._migrate_decode_stat_filenames()
+
+    def _song_exists(self, filename: str) -> bool:
+        return self.conn.execute(
+            "SELECT 1 FROM songs WHERE filename = ?", (filename,)).fetchone() is not None
+
+    def _canonical_song_filename(self, filename: str) -> str:
+        """Map a (possibly URL-encoded) filename to the `songs` library key.
+
+        The recorder relays encodeURIComponent'd names ('/'→'%2F', ' '→'%20'),
+        but `songs` keys on the decoded on-disk path. Decoding is LIBRARY-AWARE so
+        a real filename that legitimately contains literal %XX is never corrupted:
+        prefer the form that already exists in `songs`, and decode only when the
+        decoded form resolves to a real song. When NEITHER form is in the library
+        (e.g. a play recorded before the library scan finishes) keep the stored
+        name unchanged — the next-startup migration canonicalizes it once the song
+        is scanned, rather than risk corrupting a real %XX name now."""
+        if not isinstance(filename, str):
+            return filename
+        if self._song_exists(filename):
+            return filename                      # already a real library key (may contain %)
+        from urllib.parse import unquote
+        decoded = unquote(filename)
+        if decoded != filename and self._song_exists(decoded):
+            return decoded                       # encoded → real library key
+        return filename                          # neither in library: leave as-is (heals on migrate)
+
+    def _migrate_decode_stat_filenames(self):
+        """Rewrite URL-encoded song_stats.filename rows to the decoded
+        library-path key (the form `songs` uses). Pre-fix, the recorder stored
+        encodeURIComponent'd names, so every recorded best was invisible to the
+        reads that filter on `filename IN (SELECT filename FROM songs)`. Merge on
+        collision — two encoded rows decoding to the same name, or an encoded row
+        meeting an already-decoded one — with the same best=max / plays=sum /
+        last-wins semantics as song_score.merge_stats, so the (filename,
+        arrangement) primary key is never violated.
+
+        Library-aware via the shared _canonical_song_filename rule: only decode a
+        row when the decoded form is a real song, so a correctly-stored name
+        containing literal %XX is never rewritten, and dead-song/orphan rows
+        (neither form in the library) are left exactly as-is."""
+        cols = self._STATS_COLS
+        with self._lock:
+            rows = [dict(zip(cols, r)) for r in self.conn.execute(
+                "SELECT " + ", ".join(cols) + " FROM song_stats").fetchall()]
+            canon = self._canonical_song_filename
+            if all(canon(r["filename"]) == r["filename"] for r in rows):
+                return  # every row already canonical (or an untouchable orphan)
+            merged: dict = {}
+            for r in rows:
+                key = (canon(r["filename"]), int(r["arrangement"]))
+                cur = merged.get(key)
+                if cur is None:
+                    merged[key] = dict(r, filename=key[0], arrangement=key[1])
+                    continue
+                # Most-recently-updated row wins the "last_*"/position fields.
+                def _stamp(x):
+                    return str(x.get("updated_at") or x.get("last_played_at") or "")
+                newer = r if _stamp(r) >= _stamp(cur) else cur
+                merged[key] = {
+                    "filename": key[0], "arrangement": key[1],
+                    "plays": (cur["plays"] or 0) + (r["plays"] or 0),
+                    "best_score": max(cur["best_score"] or 0, r["best_score"] or 0),
+                    "best_accuracy": max(cur["best_accuracy"] or 0.0, r["best_accuracy"] or 0.0),
+                    "last_score": newer["last_score"], "last_accuracy": newer["last_accuracy"],
+                    "last_position": newer["last_position"],
+                    "last_played_at": newer["last_played_at"], "updated_at": newer["updated_at"],
+                }
+            # Atomic swap: clear and reinsert the canonicalized set in one txn.
+            try:
+                self.conn.execute("DELETE FROM song_stats")
+                self.conn.executemany(
+                    "INSERT INTO song_stats (" + ", ".join(cols) + ") VALUES ("
+                    + ", ".join("?" * len(cols)) + ")",
+                    [tuple(m[c] for c in cols) for m in merged.values()],
+                )
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
 
     def is_favorite(self, filename: str) -> bool:
         return self.conn.execute("SELECT 1 FROM favorites WHERE filename = ?", (filename,)).fetchone() is not None
@@ -4876,6 +4958,10 @@ def api_record_stats(data: dict):
     filename = _clean_str(data.get("filename"))
     if not filename:
         return JSONResponse({"error": "filename required"}, status_code=400)
+    # The recorder hands us URL-encoded filenames; canonicalize to the library
+    # key so stored rows line up with `songs` (and so the arrangement-count bound
+    # below resolves the real song). See MetadataDB._canonical_song_filename.
+    filename = meta_db._canonical_song_filename(filename)
     arr_raw = data.get("arrangement", 0)
     if arr_raw is None:
         arrangement = 0
