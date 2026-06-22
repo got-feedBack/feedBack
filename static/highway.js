@@ -1038,6 +1038,11 @@ function createHighway() {
     }
 
     function _setRenderer(r) {
+        // Capture the outgoing renderer before _destroyCurrentIfInited /
+        // the `_renderer = next` assignment below overwrite it — the
+        // canvas-replacement decision needs to know whether we're
+        // actually swapping to a *different* renderer instance.
+        const prev = _renderer;
         _destroyCurrentIfInited();
         // null/undefined reverts to default. Anything else must provide
         // at minimum a draw(bundle) function — without it the rAF loop
@@ -1070,7 +1075,24 @@ function createHighway() {
         // destroyed by _destroyCurrentIfInited above, so it's safe to
         // detach the element from the DOM here.
         const nextType = _resolveRendererContextType(next);
-        if (nextType !== _currentCanvasContextType) {
+        // Replace the underlying <canvas> when (a) the new renderer needs
+        // a different context type than the one currently bound, OR (b)
+        // we're swapping to a *different* renderer instance while keeping
+        // the same context type. Case (b) prevents a stale frame from the
+        // previous renderer bleeding through: renderers that draw into a
+        // sibling overlay (e.g. 3D Highway's `.h3d-wrap`) never paint
+        // #highway, so whatever the *previous* renderer left on the shared
+        // canvas would otherwise stay visible in any area the overlay does
+        // not cover. The reported symptom was the 3D drum highway (which
+        // renders directly onto #highway) showing through the gap below
+        // the 3D guitar highway's overlay after switching between them —
+        // both are webgl2, so the type-change check alone never fired. A
+        // fresh canvas starts blank/transparent, so the incoming renderer
+        // always begins over a clean surface. Skipped when re-installing
+        // the same renderer instance (next === prev), e.g. an Auto re-eval
+        // that resolves to the already-active viz, and on the very first
+        // install (prev === null) where there is no prior frame to clear.
+        if (nextType !== _currentCanvasContextType || (prev && next !== prev)) {
             _replaceCanvas(nextType);
         }
         const bundle = _makeBundle();
