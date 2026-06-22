@@ -5,8 +5,8 @@
  * renders as a stompbox pedal (thumbnail + name + short description). Pedals are
  * free-form draggable within their board (positions persist in localStorage),
  * and decorative patch cables (pedal-cables.js) sag/swing between them. Clicking
- * (not dragging) a pedal opens that plugin's SETTINGS page; plugins with no
- * settings fall back to their screen. Data comes from the enriched /api/plugins
+ * (not dragging) a pedal opens that plugin's own SCREEN (its page); plugins with
+ * no screen fall back to their settings panel. Data comes from the enriched /api/plugins
  * (now carrying description/category/icon — see plugins/__init__.py::_nav_entry).
  * The bundled Capability Inspector still owns the live capability graph; we
  * surface a deep-link to it rather than rebuilding it.
@@ -136,11 +136,15 @@
         return !!(p.nav || p.has_screen || (p.has_script && document.getElementById('plugin-' + p.id)));
     }
 
-    // Decide what a pedal click should open: its settings panel, else its
-    // screen, else nothing (toast). Pure — unit-tested.
+    // Decide what a pedal click should open. A plugin's own screen (its full
+    // "page") is the primary surface, so clicking the pedal opens it when one
+    // exists — matching the stompbox metaphor (step on the pedal → see the
+    // pedal). Plugins with no screen fall back to their settings panel; the
+    // settings of a screen+settings plugin (e.g. audio_engine) stay reachable
+    // from the main Settings screen. Pure — unit-tested.
     function settingsTarget(p) {
-        if (p && p.has_settings) return { kind: 'settings', id: p.id };
         if (openable(p)) return { kind: 'screen', id: p.id };
+        if (p && p.has_settings) return { kind: 'settings', id: p.id };
         return { kind: 'none', id: p && p.id };
     }
 
@@ -198,8 +202,12 @@
         var off = p.enabled === false;
         // Description shows only as a hover tooltip on the pedal, not on the face.
         var tip = (p.name || p.id) + (desc ? ' — ' + desc : '');
+        // The action verb tracks what a click actually opens (screen-first,
+        // then settings) so the a11y label never promises the wrong surface.
+        var kind = settingsTarget(p).kind;
+        var action = kind === 'screen' ? ' — open' : (kind === 'settings' ? ' — open settings' : '');
         return '<div class="v3-pedal' + (off ? ' v3-pedal-off' : '') + '" data-id="' + esc(p.id) + '" tabindex="0" role="button" ' +
-            'aria-label="' + esc(p.name || p.id) + ' — open settings" title="' + esc(tip) + '"' + style + '>' +
+            'aria-label="' + esc((p.name || p.id) + action) + '" title="' + esc(tip) + '"' + style + '>' +
             '<span class="v3-pedal-glow" aria-hidden="true"></span>' +
             (p.bundled ? '<span class="v3-pedal-bundled" title="Ships with Slopsmith core">core</span>' : '') +
             '<span class="v3-pedal-offbadge" aria-hidden="true">off</span>' +
@@ -272,6 +280,11 @@
             // failed plugin has manifest has_screen but no #plugin-<id> div yet.
             if (window.showScreen && document.getElementById('plugin-' + tgt.id)) {
                 window.showScreen('plugin-' + tgt.id);
+            } else if (p && p.has_settings) {
+                // Screen declared but not mounted yet — fall back to the
+                // settings panel rather than stranding the user on a toast.
+                if (window.showScreen) window.showScreen('settings');
+                openSettingsPanel(p.id);
             } else {
                 toast('This plugin is still loading — try again in a moment.');
             }
