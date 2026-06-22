@@ -613,15 +613,15 @@
             if (raw) {
                 const obj = JSON.parse(raw);
                 if (obj && typeof obj === 'object') {
-                    return { id: String(obj.id || ''), name: String(obj.name || '') };
+                    return { id: String(obj.id || ''), name: String(obj.name || ''), key: String(obj.key || '') };
                 }
             }
         } catch (_) {}
         return null;
     }
 
-    function _writeSavedPick(id, name) {
-        _writeStore(STORE_KEYS.midiPick, JSON.stringify({ id: id || '', name: name || '' }));
+    function _writeSavedPick(id, name, key) {
+        _writeStore(STORE_KEYS.midiPick, JSON.stringify({ id: id || '', name: name || '', key: key || '' }));
     }
 
     function _midiAutoConnect(allowFallback) {
@@ -635,10 +635,12 @@
         const saved = _readSavedPick();
         // Explicit "None" opt-out.
         if (saved && saved.id === '' && saved.name === '') return;
-        // Exact id match first, then case-insensitive name match (Chrome on
-        // Linux regenerates ids per page load), then first non-loopback.
+        // Prefer the globally-unique logicalSourceKey, then the legacy bare
+        // sourceId, then case-insensitive name (Chrome on Linux regenerates ids
+        // per page load), then first non-loopback.
         let target = null;
-        if (saved && saved.id) target = inputs.find(i => i.id === saved.id) || null;
+        if (saved && saved.key) target = inputs.find(i => i.key === saved.key) || null;
+        if (!target && saved && saved.id) target = inputs.find(i => i.id === saved.id) || null;
         if (!target && saved && saved.name) {
             const n = saved.name.toLowerCase();
             target = inputs.find(i => (i.name || '').toLowerCase() === n) || null;
@@ -652,14 +654,14 @@
             // absent (recovery: preserve it, don't clobber on a transient unplug).
             // With no saved pick at all, a fallback is the intended first-hotplug
             // auto-connect — allow it even in recovery.
-            const hasSavedPick = !!(saved && (saved.id || saved.name));
+            const hasSavedPick = !!(saved && (saved.key || saved.id || saved.name));
             if (!allowFallback && hasSavedPick) return;
             target = inputs.find(i => !_MIDI_BLOCKLIST_RE.test(i.name || '')) || inputs[0];
         }
-        _midiConnect(target.id, target.name);
+        _midiConnect(target.id, target.name, target.key);
     }
 
-    async function _midiConnect(id, name) {
+    async function _midiConnect(id, name, key) {
         // Capture our generation AFTER _midiDetach()'s own bump, so a later
         // detach (device removal / new connect / opt-out) reliably supersedes us.
         _midiDetach();
@@ -670,10 +672,15 @@
         for (const inst of _instances) {
             if (inst && typeof inst._releaseAllHeld === 'function') inst._releaseAllHeld();
         }
-        _writeSavedPick(id || '', name || '');
+        _writeSavedPick(id || '', name || '', key || '');
         const mi = _mi();
-        if (id && mi) {
-            const src = _midiSources().find(s => s.id === id);
+        if ((id || key) && mi) {
+            // Prefer the globally-unique logicalSourceKey so two providers that
+            // expose the same provider-local sourceId stay distinguishable; fall
+            // back to the legacy sourceId match.
+            const src = (key && _midiSources().find(s => s.key === key))
+                || (id && _midiSources().find(s => s.id === id))
+                || null;
             if (src) {
                 const lkey = src.key || ('web-midi::' + src.id);
                 _midiInput = { id: src.id, name: src.name, key: lkey };
@@ -842,8 +849,11 @@
     window.keysH3dListMidiInputs = function () { return _midiListInputs(); };
     window.keysH3dGetMidiInputId = function () { return _midiInput ? _midiInput.id : ''; };
     window.keysH3dSetMidiInput = function (id) {
-        const src = id ? _midiSources().find(s => s.id === id) : null;
-        _midiConnect(id || '', src ? src.name : '');
+        // `id` may be a logicalSourceKey (new host calls) or a legacy sourceId.
+        const src = id
+            ? (_midiSources().find(s => s.key === id) || _midiSources().find(s => s.id === id))
+            : null;
+        _midiConnect(src ? src.id : (id || ''), src ? src.name : '', src ? src.key : '');
         return true;
     };
     window.keysH3dGetMidiChannel = function () { return _cfg.midiChannel; };
@@ -974,11 +984,11 @@
     function _aiOpen(req) {
         // Opening a MIDI source connects the corresponding Web MIDI input.
         const idx = _aiIndexFor(req && (req.sourceId || req.logicalSourceKey));
-        const inputs = _midiListInputs();
+        const inputs = _midiSources();   // carries .key (logicalSourceKey), unlike _midiListInputs()
         if (idx == null || idx >= inputs.length) {
             return { outcome: 'failed', reason: 'MIDI input source is no longer present' };
         }
-        _midiConnect(inputs[idx].id, inputs[idx].name);
+        _midiConnect(inputs[idx].id, inputs[idx].name, inputs[idx].key);
         return { outcome: 'handled', payload: {} };
     }
 
