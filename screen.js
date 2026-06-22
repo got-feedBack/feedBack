@@ -461,7 +461,7 @@
             if (v2) {
                 const obj = JSON.parse(v2);
                 if (obj && typeof obj === 'object') {
-                    return { id: String(obj.id || ''), name: String(obj.name || '') };
+                    return { id: String(obj.id || ''), name: String(obj.name || ''), key: String(obj.key || '') };
                 }
             }
         } catch (_) {}
@@ -470,9 +470,9 @@
         return null;
     }
 
-    function _writeSavedPick(id, name) {
+    function _writeSavedPick(id, name, key) {
         try {
-            localStorage.setItem(LS_MIDI_PICK, JSON.stringify({ id: id || '', name: name || '' }));
+            localStorage.setItem(LS_MIDI_PICK, JSON.stringify({ id: id || '', name: name || '', key: key || '' }));
             // Keep the legacy key in sync so a downgrade is non-destructive.
             localStorage.setItem(LS_MIDI_INPUT, id || '');
         } catch (_) {}
@@ -494,7 +494,11 @@
         // hashed id on every page load, so id-only matching strands the
         // saved pick after the first reload.
         let target = null;
-        if (saved && saved.id) {
+        // Prefer the globally-unique logicalSourceKey, then the legacy sourceId.
+        if (saved && saved.key) {
+            target = inputs.find(i => i.key === saved.key) || null;
+        }
+        if (!target && saved && saved.id) {
             target = inputs.find(i => i.id === saved.id) || null;
         }
         if (!target && saved && saved.name) {
@@ -506,26 +510,31 @@
             // absent (recovery: preserve it, don't clobber on a transient unplug).
             // With no saved pick at all, a fallback is the intended first-hotplug
             // auto-connect — allow it even in recovery.
-            const hasSavedPick = !!(saved && (saved.id || saved.name));
+            const hasSavedPick = !!(saved && (saved.key || saved.id || saved.name));
             if (!allowFallback && hasSavedPick) return;
             // Pick the first input that isn't a loopback/passthrough. Falls back to
             // inputs[0] only if every input is blocklisted.
             target = inputs.find(i => !_MIDI_BLOCKLIST_RE.test(i.name || '')) || inputs[0];
         }
-        _midiConnect(target.id, target.name);
+        _midiConnect(target.id, target.name, target.key);
     }
 
-    async function _midiConnect(id, name) {
+    async function _midiConnect(id, name, key) {
         // Capture our generation AFTER _midiDetach()'s own bump, so a later
         // detach (device removal / new connect / opt-out) reliably supersedes us.
         _midiDetach();
         const myGen = ++_midiConnectSeq;
         // Pass through `name` so a future id-drift can still find this
         // device. Empty id is the explicit-None opt-out.
-        _writeSavedPick(id || '', name || '');
+        _writeSavedPick(id || '', name || '', key || '');
         const mi = _mi();
-        if (id && mi) {
-            const src = _midiSources().find(s => s.id === id);
+        if ((id || key) && mi) {
+            // Prefer the globally-unique logicalSourceKey so two providers that
+            // expose the same provider-local sourceId stay distinguishable; fall
+            // back to the legacy sourceId match.
+            const src = (key && _midiSources().find(s => s.key === key))
+                || (id && _midiSources().find(s => s.id === id))
+                || null;
             if (src) {
                 const lkey = src.key || ('web-midi::' + src.id);
                 _midiInput = { id: src.id, name: src.name, key: lkey };
@@ -714,8 +723,11 @@
         // Empty string = explicit "None" opt-out. Persists by name +
         // id via _midiConnect so a future page reload still finds the
         // device after Chrome regenerates ids.
-        const src = id ? _midiSources().find(s => s.id === id) : null;
-        _midiConnect(id || '', src ? src.name : '');
+        // `id` may be a logicalSourceKey (new host calls) or a legacy sourceId.
+        const src = id
+            ? (_midiSources().find(s => s.key === id) || _midiSources().find(s => s.id === id))
+            : null;
+        _midiConnect(src ? src.id : (id || ''), src ? src.name : '', src ? src.key : '');
         return true;
     };
     window.drumH3dGetSynthVolume = function () {
