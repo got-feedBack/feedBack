@@ -222,23 +222,39 @@
         if (!instruments.length) return;
         // Don't let a plugin-load race skip the mandatory input-setup step.
         if (!(await waitForInputSetup(8000))) return;
-        const caps = window.feedBack && window.feedBack.capabilities;
-        if (!caps || typeof caps.command !== 'function') {
-            try { await window.feedBackInputSetup.launch(instruments); } catch (e) { /* proceed */ }
-            return;
+        // Hide this onboarding modal while the input-setup wizard (its own
+        // full-screen overlay) runs on top. Otherwise both stay stacked, and when
+        // the note-detect calibration wizard minimizes to expose the Tuner the
+        // onboarding modal shows through behind the tuner. Restored in `finally`
+        // before we advance to the calibration-challenge step.
+        const ob = document.getElementById('v3-onboarding');
+        const obPrevDisplay = ob ? ob.style.display : '';
+        if (ob) ob.style.display = 'none';
+        const restoreOnboarding = () => {
+            const o = document.getElementById('v3-onboarding');
+            if (o) o.style.display = obPrevDisplay;
+        };
+        try {
+            const caps = window.feedBack && window.feedBack.capabilities;
+            if (!caps || typeof caps.command !== 'function') {
+                try { await window.feedBackInputSetup.launch(instruments); } catch (e) { /* proceed */ }
+                return;
+            }
+            await new Promise((resolve) => {
+                let settled = false;
+                let unsub = null;
+                const done = () => { if (settled) return; settled = true; try { unsub && unsub(); } catch (e) { /* noop */ } resolve(); };
+                try { unsub = typeof caps.subscribe === 'function' ? caps.subscribe('input-calibration:calibration-done', done) : null; } catch (e) { unsub = null; }
+                // `run` is fire-and-launch; completion arrives via the event above.
+                // A non-handled outcome (no owner / plugin absent / error) means
+                // nothing was launched, so proceed immediately.
+                caps.command('input-calibration', 'run', { requester: 'onboarding', payload: { instruments } })
+                    .then((r) => { if (!r || r.outcome !== 'handled') done(); })
+                    .catch(() => done());
+            });
+        } finally {
+            restoreOnboarding();
         }
-        await new Promise((resolve) => {
-            let settled = false;
-            let unsub = null;
-            const done = () => { if (settled) return; settled = true; try { unsub && unsub(); } catch (e) { /* noop */ } resolve(); };
-            try { unsub = typeof caps.subscribe === 'function' ? caps.subscribe('input-calibration:calibration-done', done) : null; } catch (e) { unsub = null; }
-            // `run` is fire-and-launch; completion arrives via the event above.
-            // A non-handled outcome (no owner / plugin absent / error) means
-            // nothing was launched, so proceed immediately.
-            caps.command('input-calibration', 'run', { requester: 'onboarding', payload: { instruments } })
-                .then((r) => { if (!r || r.outcome !== 'handled') done(); })
-                .catch(() => done());
-        });
     }
 
     function show(profile, opts) {

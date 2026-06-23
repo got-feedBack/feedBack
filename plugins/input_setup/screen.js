@@ -163,10 +163,25 @@
 
                 host.querySelector('[data-is-cal]').addEventListener('click', () => {
                     if (hasDetector) {
+                        // Hide our own full-screen overlay while note_detect's
+                        // Calibration Wizard runs on top. That wizard goes
+                        // transparent (pointer-events:none) when it minimizes to
+                        // expose the Tuner; if our overlay stayed up it would show
+                        // through — covering the tuner with the still-mounted
+                        // "select your input" card and looking like a second
+                        // wizard at the input step. Restore it on done/cancel
+                        // (one of which always fires when that wizard closes).
+                        const ov = document.getElementById('input-setup-overlay');
+                        const prevDisplay = ov ? ov.style.display : '';
+                        if (ov) ov.style.display = 'none';
+                        const restore = () => {
+                            const o = document.getElementById('input-setup-overlay');
+                            if (o) o.style.display = prevDisplay;
+                        };
                         window.noteDetect.launchCalibration({
                             instrument: inst,
-                            onDone: () => advance(inst, true),
-                            onCancel: () => { /* stay on this panel; user can skip or retry */ },
+                            onDone: () => { restore(); advance(inst, true); },
+                            onCancel: () => { restore(); /* stay on this panel; user can skip or retry */ },
                         });
                     } else {
                         advance(inst, true);
