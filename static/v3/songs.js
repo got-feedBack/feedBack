@@ -376,6 +376,17 @@
         return '<span class="absolute bottom-0 left-0 ' + c + ' text-[9px] font-bold px-1.5 py-0.5 rounded-tr-md tracking-wide">' + l + '</span>';
     }
 
+    // Clickable arrangement chips — one <button data-arr="<index>"> per
+    // arrangement. wireCards() binds the click to playCard(song, index), which
+    // opens THAT arrangement in the highway via playSong(filename, index).
+    // Shared by the grid card and the tree row so both views render the same
+    // badges with the same click-to-open behaviour. Capped at 4 to match the
+    // card layout.
+    function arrChipsHtml(song) {
+        return (song.arrangements || []).slice(0, 4).map((a) =>
+            '<button data-arr="' + esc(a.index != null ? a.index : '') + '" title="Play ' + esc(a.name) + '" class="text-[10px] px-1.5 py-0.5 rounded bg-gray-800/60 text-fb-textDim hover:bg-fb-primary hover:text-white transition">' + esc(a.name) + '</button>').join('');
+    }
+
     function songCard(song) {
         const fav = song.favorite;
         const key = cardKey(song);
@@ -410,8 +421,7 @@
         const checkbox = state.selectMode
             ? '<input type="checkbox" data-select class="absolute top-2 left-2 z-20 w-5 h-5 accent-fb-primary pointer-events-none"' + (state.selected.has(key) ? ' checked' : '') + '>'
             : '';
-        const arrChips = (song.arrangements || []).slice(0, 4).map((a) =>
-            '<button data-arr="' + esc(a.index != null ? a.index : '') + '" title="Play ' + esc(a.name) + '" class="text-[10px] px-1.5 py-0.5 rounded bg-gray-800/60 text-fb-textDim hover:bg-fb-primary hover:text-white transition">' + esc(a.name) + '</button>').join('');
+        const arrChips = arrChipsHtml(song);
         // Plugin-contributed card actions placed 'inline' (in the hover action
         // row) or 'overlay' (centered over the art). Menu-placed actions live in
         // the ⋮ menu (openCardMenu); rendering these here means plugins using
@@ -720,10 +730,11 @@
             '<span>' + esc(a.name) + '</span><span class="text-xs text-fb-textDim">' + esc(a.song_count) + '</span></summary>' +
             '<div class="pl-3 pb-2 space-y-2">' + (a.albums || []).map((al) =>
                 '<div><div class="text-xs uppercase tracking-wider text-fb-textDim/70 mt-2 mb-1">' + esc(al.name || 'Unknown') + '</div>' +
-                (al.songs || []).map((s) => { const k = cardKey(s); const fl = fmtLabel(s); return (
+                (al.songs || []).map((s) => { const k = cardKey(s); const fl = fmtLabel(s); const chips = arrChipsHtml(s); return (
                     '<div class="flex items-center gap-2 py-1 group" data-fn="' + esc(k) + '" data-library-song="' + esc(songId(s)) + '" data-library-provider="' + esc(state.provider) + '">' +
                     '<img src="' + esc(artUrl(s)) + '" alt="" loading="lazy" decoding="async" class="w-8 h-8 rounded object-cover bg-fb-card cursor-pointer" data-v3-play onerror="this.style.visibility=\'hidden\'">' +
                     '<span class="flex-1 min-w-0 cursor-pointer" data-v3-play><span class="block text-sm text-fb-text truncate">' + esc(s.title) + '</span></span>' +
+                    (chips ? '<span class="hidden sm:flex items-center gap-1 shrink-0">' + chips + '</span>' : '') +
                     (fl ? '<span class="text-[9px] font-bold px-1 py-0.5 rounded shrink-0 ' + (fl === 'FEEDPAK' ? 'bg-fb-primary/20 text-fb-primary' : 'bg-fb-card text-fb-textDim') + '">' + fl + '</span>' : '') +
                     accuracyBadge(k, 'tree') +
                     '<button data-fav class="opacity-0 group-hover:opacity-100 px-1 ' + (s.favorite ? 'text-fb-accent' : 'text-fb-textDim') + '">' + (s.favorite ? '♥' : '♡') + '</button>' +
