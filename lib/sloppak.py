@@ -367,6 +367,14 @@ class LoadedSloppak:
     # song.arrangements (not to manifest["arrangements"]) — skipped entries are
     # absent so indexing by song.arrangements index is safe.
     arrangement_ids: list[str | None] = field(default_factory=list)
+    # Manifest-relative path to the single full-mix audio file, taken from the
+    # manifest `original_audio:` key (e.g. "original/full.ogg"). This is the
+    # pre-separation mixdown that exists alongside the per-instrument `stems`.
+    # None when the key is absent, points outside source_dir, or the file is
+    # missing on disk. Served to the front-end via the highway WS as
+    # `original_audio_url`; the stems plugin uses it to play the untouched mix
+    # when every stem slider is at unity (and the separate stems otherwise).
+    original_audio: str | None = None
 
 
 def load_song(
@@ -808,6 +816,29 @@ def load_song(
                     }
 
     _fpv = manifest.get("feedpak_version")
+    # Optional full-mix audio — manifest `original_audio:` key. The single
+    # pre-separation mixdown that ships alongside the per-instrument stems.
+    # Same permissive, path-traversal-guarded posture as drum_tab above: a
+    # missing/escaping/absent file simply leaves the full mix unavailable (the
+    # player falls back to the separate stems) rather than aborting the load.
+    # We store the manifest-relative string so server.py can build its URL the
+    # same way it builds stem URLs (via the /api/sloppak/.../file/ endpoint).
+    original_audio_data: str | None = None
+    original_audio_rel = manifest.get("original_audio")
+    if isinstance(original_audio_rel, str) and original_audio_rel.strip():
+        rel = original_audio_rel.strip()
+        try:
+            oa_path = (source_dir / rel).resolve()
+            oa_path.relative_to(source_dir.resolve())
+        except ValueError:
+            log.warning("sloppak: original_audio path %r escapes source_dir — skipped", rel)
+            oa_path = None
+        except OSError as e:
+            log.warning("sloppak: original_audio path resolution failed (%s) — skipped", e)
+            oa_path = None
+        if oa_path is not None and oa_path.is_file():
+            original_audio_data = rel
+
     return LoadedSloppak(
         song=song,
         stems=stems,
@@ -821,6 +852,7 @@ def load_song(
         keys=keys_data,
         notation_by_id=notation_by_id_data,
         arrangement_ids=arrangement_ids_acc,
+        original_audio=original_audio_data,
     )
 
 

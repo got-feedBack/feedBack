@@ -6923,6 +6923,11 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
         audio_url = None
         audio_error: str | None = None  # Surfaced in song_info when audio_url is None
         stems_payload: list[dict] = []
+        # URL of the single full-mix audio (sloppak `original_audio:`), when the
+        # pack ships one. The stems plugin uses this to play the untouched mix
+        # while every stem slider is at unity; None otherwise (separate stems
+        # only, loose folder, or archive).
+        original_audio_url: str | None = None
         if is_loose:
             # Loose folder filenames are relative paths (artist/album/song).
             # Hash the *canonical* dlc-relative path (so two URL spellings
@@ -6961,8 +6966,22 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
             for s in loaded_slop.stems:
                 url = f"/api/sloppak/{q_fn}/file/{quote(s['file'])}"
                 stems_payload.append({"id": s["id"], "url": url, "default": s["default"]})
+            # Full-mix URL (served by the same /api/sloppak/.../file/ endpoint).
+            if loaded_slop is not None and loaded_slop.original_audio:
+                original_audio_url = (
+                    f"/api/sloppak/{q_fn}/file/{quote(loaded_slop.original_audio)}"
+                )
             if stems_payload:
+                # Stems present: keep the core <audio> pointed at stem[0]. This
+                # URL is only ever heard in the degraded path (stems plugin
+                # refuses takeover / decode fails); the full-mix↔stems switch is
+                # driven client-side by `original_audio_url`, not `audio_url`.
                 audio_url = stems_payload[0]["url"]
+            elif original_audio_url:
+                # Stem-less full-mix pack: nothing to separate, so play the full
+                # mix natively through the core <audio>. The stems plugin's
+                # onSongReady returns early on an empty stems list (no graph).
+                audio_url = original_audio_url
             else:
                 audio_error = "This sloppak has no playable stems."
         else:
@@ -7098,6 +7117,15 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
             "offset": _sanitized_song_offset(song) if is_loose else 0.0,
             "format": "sloppak" if is_slop else ("loose" if is_loose else "archive"),
             "stems": stems_payload,
+            # Full-mix audio (sloppak `original_audio:`) served alongside the
+            # separate `stems`. The stems plugin plays this single file while
+            # every stem slider is at unity and switches to the separate stems
+            # the moment one drops below 100%. None when the pack ships stems
+            # only. `has_*` flags mirror the has_drum_tab/has_keys convention so
+            # a client can branch without re-deriving from the URLs.
+            "original_audio_url": original_audio_url,
+            "has_original_audio": bool(original_audio_url),
+            "has_stems": bool(stems_payload),
             # Surface a drum_tab presence flag so the visualization picker
             # can auto-activate the drums plugin even when the chosen
             # arrangement isn't named "Drums" (drum_tab.json lives next
