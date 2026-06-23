@@ -2368,6 +2368,7 @@ function displayTuningName(value, offsets) {
 
 window.displayTuningName = displayTuningName;
 window.feedBack = window.feedBack || {};
+window.slopsmith = window.feedBack;
 window.feedBack.displayTuningName = displayTuningName;
 
 function isBassArrangement(context) {
@@ -5327,6 +5328,8 @@ if (_feedBackExisting && _feedBackExisting !== window.feedBack) {
         }
     }
 }
+window.feedback = window.feedBack;
+window.slopsmith = window.feedback;
 
 function _playbackApi() {
     return window.feedBack && window.feedBack.playback && window.feedBack.playback.version === 1

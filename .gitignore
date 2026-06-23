@@ -9,6 +9,7 @@ build/
 .env*
 .DS_Store
 .vscode/
+data/web_library.db
 static/*.ogg
 static/*.mp3
 static/*.wav

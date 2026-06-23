@@ -118,12 +118,12 @@
     // can't start the tour immediately — there is no home screen to spotlight
     // yet. Arm it to run the first time the user lands back on v3-home.
     function armPendingFirstRun() {
-        var t = window.slopsmithTour;
+        var t = window.feedBackTour;
         if (!t || typeof t.start !== 'function') return;
         try {
             if (t.hasSeen(TOUR_ID) || t.hasDismissed(TOUR_ID)) return;
         } catch (e) { /* private mode — fall through */ }
-        var sm = window.slopsmith;
+        var sm = window.feedBack;
         if (!sm || typeof sm.on !== 'function') return;
         var onScreen = function (e) {
             if (!(e && e.detail && e.detail.id === 'v3-home')) return;
