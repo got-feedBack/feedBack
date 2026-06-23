@@ -968,3 +968,109 @@ body.font-display { font-family: Rubik, system-ui, sans-serif; }
     color: #ddd6fe; background: rgba(76, 29, 149, .6);
     border: 1px solid rgba(139, 92, 246, .4); border-radius: .3rem; padding: .04rem .28rem;
 }
+
+/* ════════════════════════════════════════════════════════════════════════
+   Tabbed settings page (v3) — feat/v3-settings-tabbed
+   Card-row layout: leading icon + title/description + right-aligned control,
+   grouped under a horizontal tab bar. Pure CSS (no Tailwind rebuild); colors
+   mirror the fb-* design tokens so the page matches the rest of the v3 shell.
+   ════════════════════════════════════════════════════════════════════════ */
+#settings .fb-settings { max-width: 56rem; margin: 0 auto; padding: 6rem 1.5rem 4rem; }
+.fb-settings-back {
+    display: inline-flex; align-items: center; gap: .25rem;
+    font-size: .8rem; color: #94a3b8; background: none; border: none; cursor: pointer;
+    padding: 0; margin-bottom: 1rem; transition: color .15s;
+}
+.fb-settings-back:hover { color: #f8fafc; }
+.fb-settings-back svg { width: 1rem; height: 1rem; }
+.fb-settings-title { font-size: 1.875rem; font-weight: 800; color: #f8fafc; }
+
+/* Tab bar */
+.fb-tabbar {
+    display: flex; flex-wrap: wrap; gap: .25rem;
+    border-bottom: 1px solid rgba(51, 65, 85, .6);
+    margin: 1.25rem 0 1.5rem;
+}
+.fb-tab {
+    appearance: none; background: none; border: none; cursor: pointer;
+    padding: .55rem .85rem; font-size: .85rem; font-weight: 600;
+    color: #94a3b8; border-bottom: 2px solid transparent;
+    margin-bottom: -1px; transition: color .15s, border-color .15s; white-space: nowrap;
+}
+.fb-tab:hover { color: #e2e8f0; }
+.fb-tab.active { color: #f8fafc; border-bottom-color: #0ea5e9; }
+
+/* Panels */
+.fb-tabpanel { display: none; }
+.fb-tabpanel.active { display: block; }
+.fb-tabpanel-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
+.fb-tabpanel-head h3 { font-size: 1.1rem; font-weight: 700; color: #f8fafc; }
+
+/* Card rows */
+.fb-srows { display: flex; flex-direction: column; gap: .6rem; }
+.fb-srow {
+    display: flex; align-items: center; gap: 1rem;
+    background: #1e293b; border: 1px solid rgba(51, 65, 85, .55);
+    border-radius: .75rem; padding: .85rem 1rem;
+}
+.fb-srow-stack { flex-direction: column; align-items: stretch; gap: .65rem; }
+.fb-srow-icon {
+    flex: none; width: 2.25rem; height: 2.25rem; border-radius: .6rem;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(14, 165, 233, .12); color: #38bdf8;
+}
+.fb-srow-icon svg { width: 1.15rem; height: 1.15rem; }
+.fb-srow-main { flex: 1 1 auto; min-width: 0; }
+.fb-srow-title { font-size: .9rem; font-weight: 600; color: #e2e8f0; display: flex; align-items: center; }
+.fb-srow-desc { font-size: .75rem; color: #94a3b8; margin-top: .15rem; }
+.fb-srow-control { flex: none; display: flex; align-items: center; gap: .5rem; }
+.fb-srow-control select,
+.fb-srow-control input[type="text"] { min-width: 11rem; }
+.fb-srow-stack .fb-srow-control { width: 100%; }
+.fb-srow-stack .fb-srow-control input[type="text"] { flex: 1 1 auto; min-width: 0; }
+.fb-srow-wide { width: 100%; }
+
+/* Toggle switch */
+.fb-switch { position: relative; display: inline-block; width: 2.6rem; height: 1.5rem; flex: none; }
+.fb-switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.fb-switch .fb-switch-track {
+    position: absolute; inset: 0; cursor: pointer;
+    background: #334155; border-radius: 999px; transition: background .15s;
+}
+.fb-switch .fb-switch-track::before {
+    content: ""; position: absolute; height: 1.1rem; width: 1.1rem; left: .2rem; top: .2rem;
+    background: #f8fafc; border-radius: 50%; transition: transform .15s;
+}
+.fb-switch input:checked + .fb-switch-track { background: #0ea5e9; }
+.fb-switch input:checked + .fb-switch-track::before { transform: translateX(1.1rem); }
+.fb-switch input:focus-visible + .fb-switch-track { box-shadow: 0 0 0 2px rgba(56, 189, 248, .5); }
+
+/* "Not yet active" stub badge */
+.fb-stub-note {
+    font-size: .6rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+    color: #fde68a; background: rgba(234, 179, 8, .12);
+    border-radius: 999px; padding: .1rem .45rem; margin-left: .5rem; white-space: nowrap;
+}
+
+/* Per-category reset */
+.fb-reset-btn {
+    display: inline-flex; align-items: center; gap: .35rem;
+    font-size: .8rem; color: #94a3b8; background: none; border: none; cursor: pointer;
+    padding: .35rem .5rem; border-radius: .5rem; transition: color .15s, background .15s;
+}
+.fb-reset-btn:hover { color: #fca5a5; background: rgba(239, 68, 68, .08); }
+.fb-reset-btn svg { width: .9rem; height: .9rem; }
+
+/* Keybinds reference */
+.fb-kbd {
+    display: inline-block; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .72rem; color: #e2e8f0; background: #0b1220;
+    border: 1px solid rgba(51, 65, 85, .8); border-bottom-width: 2px;
+    border-radius: .35rem; padding: .1rem .4rem; min-width: 1.4rem; text-align: center;
+}
+.fb-kbd-group-title {
+    font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+    color: #94a3b8; margin: 1.25rem 0 .5rem;
+}
+.fb-settings-note { font-size: .75rem; color: #64748b; margin-top: 1rem; }
+.fb-tabpanel-empty { font-size: .8rem; color: #64748b; padding: .5rem 0; }

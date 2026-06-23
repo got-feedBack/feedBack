@@ -173,6 +173,7 @@ def _run_janitor_hook(hook) -> None:
 _DEMO_BLOCKED: list[tuple[str, re.Pattern]] = [
     ("POST",   re.compile(r"^/api/settings$")),
     ("POST",   re.compile(r"^/api/settings/import$")),
+    ("POST",   re.compile(r"^/api/settings/reset$")),
     ("POST",   re.compile(r"^/api/rescan$")),
     ("POST",   re.compile(r"^/api/rescan/full$")),
     ("POST",   re.compile(r"^/api/songs/upload$")),
@@ -5379,6 +5380,14 @@ def _default_settings():
     # silently undoing the env-var fix on the next load.
     return {
         "dlc_dir": str(DLC_DIR) if (_DLC_DIR_ENV and DLC_DIR.is_dir()) else "",
+        # fee[dB]ack v0.3.0 gameplay settings (tabbed settings page). Each
+        # defaults to its neutral / off value so existing users see no
+        # behaviour change until they opt in. countdown_before_song is wired
+        # into the song-start path; miss_penalty / fail_behavior are persisted
+        # but not yet consumed by scoring (stub rows on the Gameplay tab).
+        "countdown_before_song": False,
+        "miss_penalty": "none",
+        "fail_behavior": "continue",
     }
 
 
@@ -5505,6 +5514,29 @@ def save_settings(data: dict):
         except (TypeError, ValueError, OverflowError):
             return {"error": "av_offset_ms must be a number between -1000 and 1000"}
 
+    # fee[dB]ack v0.3.0 gameplay settings (tabbed settings page). null is a
+    # no-op per the merge contract; bad shapes return a structured error
+    # rather than 500. countdown_before_song is consumed by the song-start
+    # count-in; miss_penalty / fail_behavior are persisted-only stubs.
+    if "countdown_before_song" in data:
+        raw = data["countdown_before_song"]
+        if raw is not None:
+            if not isinstance(raw, bool):
+                return {"error": "countdown_before_song must be a boolean"}
+            updates["countdown_before_song"] = raw
+    if "miss_penalty" in data:
+        raw = data["miss_penalty"]
+        if raw is not None:
+            if not isinstance(raw, str) or raw not in ("none", "low", "medium", "high"):
+                return {"error": "miss_penalty must be one of none, low, medium, high"}
+            updates["miss_penalty"] = raw
+    if "fail_behavior" in data:
+        raw = data["fail_behavior"]
+        if raw is not None:
+            if not isinstance(raw, str) or raw not in ("continue", "restart", "stop"):
+                return {"error": "fail_behavior must be one of continue, restart, stop"}
+            updates["fail_behavior"] = raw
+
     # fee[dB]ack v0.3.0 — tuner reference pitch + instrument selection.
     # These drive the topbar tuner/instrument badges and (when installed) the
     # note_detect scoring tuning tables. null is a no-op per the merge contract.
@@ -5572,6 +5604,41 @@ def save_settings(data: dict):
         cfg.update(updates)
         _atomic_write_file(config_file, json.dumps(cfg, indent=2).encode("utf-8"))
     return {"message": ". ".join(messages) if messages else "Settings saved"}
+
+
+# Keys a client "Reset {category}" action may clear. Resetting removes the key
+# from config.json so the next GET falls back to the _default_settings() value
+# (or the frontend's own default when the key is then absent). Restricting to a
+# known set means a malformed or hostile body can't wipe unrelated config.
+_RESETTABLE_SETTINGS_KEYS = frozenset({
+    "default_arrangement", "demucs_server_url", "master_difficulty",
+    "av_offset_ms", "countdown_before_song", "miss_penalty", "fail_behavior",
+    "reference_pitch", "instrument", "string_count", "tuning",
+})
+
+
+@app.post("/api/settings/reset")
+def reset_settings(data: dict):
+    """Clear the given settings keys back to their defaults — backs the
+    per-category "Reset" buttons on the tabbed settings page. Unknown keys are
+    ignored (not an error) so a newer client asking to reset a key an older
+    server doesn't recognise degrades gracefully. Shares _settings_lock with
+    save_settings()/import for the same read-merge-write atomicity reason."""
+    raw_keys = data.get("keys")
+    if not isinstance(raw_keys, list):
+        return {"error": "keys must be a list of setting names"}
+    keys = [k for k in raw_keys if isinstance(k, str) and k in _RESETTABLE_SETTINGS_KEYS]
+    config_file = CONFIG_DIR / "config.json"
+    with _settings_lock:
+        cfg = _load_config(config_file)
+        if cfg is None:
+            # Nothing persisted yet — already at defaults.
+            return {"message": "Settings reset", "reset": []}
+        removed = [k for k in keys if k in cfg]
+        for k in removed:
+            del cfg[k]
+        _atomic_write_file(config_file, json.dumps(cfg, indent=2).encode("utf-8"))
+    return {"message": "Settings reset", "reset": removed}
 
 
 # ── Settings export/import (feedBack#113) ───────────────────────────────────

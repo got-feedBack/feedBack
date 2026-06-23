@@ -343,76 +343,60 @@
 
     <!-- ══ SETTINGS ═══════════════════════════════════════════════════════ -->
     <div id="settings" class="screen">
-        <div class="max-w-2xl mx-auto px-6 pt-24 pb-16">
-            <button onclick="showScreen('home')" class="text-gray-500 hover:text-white text-sm mb-6 flex items-center gap-1">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg> Back
+        <div class="fb-settings">
+            <button onclick="showScreen('home')" class="fb-settings-back">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg> Home
             </button>
-            <h2 class="text-3xl font-bold text-white mb-8">Settings</h2>
+            <h2 class="fb-settings-title">Settings</h2>
 
-            <div class="space-y-10">
-                <!-- App Updates — Velopack auto-update, desktop only. Stays
-                     hidden in the plain web app; setupAppUpdates() unhides
-                     this block when window.feedBackDesktop.update exists,
-                     and shows a disabled "not available on Linux" fallback
-                     when running on Linux. -->
-                <div id="app-updates-block" class="hidden border border-gray-800 rounded-xl bg-dark-800/40 p-5">
-                    <h3 class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-4">App Updates</h3>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                            <label class="text-sm font-medium text-gray-400 mb-2 block" for="app-update-channel">Update channel</label>
-                            <select id="app-update-channel"
-                                class="w-full bg-dark-700 border border-gray-800 rounded-xl px-3 py-2.5 text-sm text-gray-300 outline-none">
-                                <option value="stable">Stable</option>
-                                <option value="rc">Release candidate</option>
-                                <option value="beta">Beta</option>
-                                <option value="alpha">Alpha</option>
-                            </select>
+            <!-- Tab bar — click handling + active-tab persistence wired by
+                 static/v3/settings.js. data-tab keys match the .fb-tabpanel
+                 below; the fallback "Plugins" tab hosts uncategorized plugin
+                 panels (manifest settings.category routes the others). -->
+            <div class="fb-tabbar" id="settings-tabbar">
+                <button type="button" class="fb-tab" data-tab="gameplay">Gameplay</button>
+                <button type="button" class="fb-tab" data-tab="audio">Audio</button>
+                <button type="button" class="fb-tab" data-tab="graphics">Graphics</button>
+                <button type="button" class="fb-tab" data-tab="keybinds">Keybinds</button>
+                <button type="button" class="fb-tab" data-tab="progression">Progression</button>
+                <button type="button" class="fb-tab" data-tab="mic">Mic</button>
+                <button type="button" class="fb-tab" data-tab="plugins">Plugins</button>
+                <button type="button" class="fb-tab" data-tab="system">System</button>
+            </div>
+
+            <!-- ══ GAMEPLAY ════════════════════════════════════════════════ -->
+            <div class="fb-tabpanel" data-tab="gameplay">
+                <div class="fb-tabpanel-head">
+                    <h3>Gameplay Settings</h3>
+                    <button type="button" class="fb-reset-btn" data-reset="gameplay">
+                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                        Reset Gameplay Settings
+                    </button>
+                </div>
+                <div class="fb-srows">
+                    <!-- Left-handed -->
+                    <div class="fb-srow">
+                        <span class="fb-srow-icon"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4M16 17H4m0 0l4 4m-4-4l4-4"/></svg></span>
+                        <div class="fb-srow-main">
+                            <div class="fb-srow-title">Left-handed mode</div>
+                            <div class="fb-srow-desc">Invert frets on the note highway for left-handed players.</div>
                         </div>
-                        <div class="flex items-end">
-                            <button id="app-update-check-now"
-                                class="bg-accent hover:bg-accent-light px-4 py-2.5 rounded-xl text-sm font-medium text-white transition disabled:opacity-50">
-                                Check for updates
-                            </button>
+                        <div class="fb-srow-control">
+                            <label class="fb-switch">
+                                <input type="checkbox" id="setting-lefty" onchange="highway.setLefty(this.checked)">
+                                <span class="fb-switch-track"></span>
+                            </label>
                         </div>
                     </div>
-                    <p id="app-update-status" class="text-xs text-gray-500 mt-3">Loading updater status…</p>
-                    <p id="app-update-linux-note" class="hidden text-xs text-yellow-300 mt-2">
-                        Auto-update is not available on Linux —
-                        <a href="https://github.com/got-feedback/feedBack-desktop/releases" target="_blank" rel="noopener" class="text-accent hover:text-accent-light underline">download new versions from GitHub Releases</a>.
-                    </p>
-                </div>
-
-                <!-- ── Core FeedBack settings ─────────────────────────────── -->
-                <section>
-                    <h3 class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-4">FeedBack</h3>
-                    <div class="space-y-6">
-                        <div>
-                            <label class="text-sm font-medium text-gray-400 mb-2 block">Library Folder Path</label>
-                            <div class="flex gap-3">
-                                <input type="text" id="dlc-path" placeholder="/path/to/your/library"
-                                    class="flex-1 bg-dark-700 border border-gray-800 rounded-xl px-4 py-2.5 text-sm text-gray-300 placeholder-gray-600 focus:border-accent/50 outline-none">
-                                <button onclick="pickDlcFolder()" id="btn-pick-dlc" class="hidden bg-dark-600 hover:bg-dark-500 px-4 py-2.5 rounded-xl text-sm text-gray-300 transition whitespace-nowrap">📂 Browse</button>
-                                <button onclick="saveSettings()" class="bg-accent hover:bg-accent-light px-6 py-2.5 rounded-xl text-sm font-semibold text-white transition">Save</button>
-                            </div>
+                    <!-- Default arrangement -->
+                    <div class="fb-srow">
+                        <span class="fb-srow-icon"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg></span>
+                        <div class="fb-srow-main">
+                            <div class="fb-srow-title">Default arrangement</div>
+                            <div class="fb-srow-desc">Which arrangement loads first when you open a song.</div>
                         </div>
-                        <div>
-                            <label class="flex items-center gap-3 cursor-pointer select-none">
-                                <input type="checkbox" id="setting-lefty" onchange="highway.setLefty(this.checked)"
-                                    class="rounded border-gray-600 bg-dark-700 text-accent focus:ring-accent/40">
-                                <span class="text-sm text-gray-300">Left-handed <span class="text-gray-500">(invert frets on the note highway)</span></span>
-                            </label>
-                        </div>
-                        <div>
-                            <label class="flex items-center gap-3 cursor-pointer select-none">
-                                <input type="checkbox" id="setting-autoplay-exit" checked onchange="setAutoplayExit(this.checked)"
-                                    class="rounded border-gray-600 bg-dark-700 text-accent focus:ring-accent/40">
-                                <span class="text-sm text-gray-300">Autoplay &amp; auto-exit <span class="text-gray-500">(start songs/lessons automatically and return to the menu when the score screen closes)</span></span>
-                            </label>
-                        </div>
-                        <div>
-                            <label class="text-sm font-medium text-gray-400 mb-2 block">Default Arrangement</label>
-                            <select id="default-arrangement"
-                                onchange="persistSetting('default_arrangement', this.value)"
+                        <div class="fb-srow-control">
+                            <select id="default-arrangement" onchange="persistSetting('default_arrangement', this.value)"
                                 class="bg-dark-700 border border-gray-800 rounded-xl px-3 py-2.5 text-sm text-gray-300 outline-none">
                                 <option value="">Most notes (auto)</option>
                                 <option value="Lead">Lead</option>
@@ -420,112 +404,299 @@
                                 <option value="Bass">Bass</option>
                             </select>
                         </div>
-                        <div>
-                            <label class="text-sm font-medium text-gray-400 mb-2 block">Arrangement Names</label>
-                            <select id="arrangement-naming-mode"
-                                onchange="_onNamingModeChange(this.value)"
+                    </div>
+                    <!-- Arrangement routes (naming mode) -->
+                    <div class="fb-srow">
+                        <span class="fb-srow-icon"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-1.447-.894L15 4m0 13V4m0 0L9 7"/></svg></span>
+                        <div class="fb-srow-main">
+                            <div class="fb-srow-title">Arrangement routes</div>
+                            <div class="fb-srow-desc">How arrangement variants are labelled across the app.</div>
+                        </div>
+                        <div class="fb-srow-control">
+                            <select id="arrangement-naming-mode" onchange="_onNamingModeChange(this.value)"
                                 class="bg-dark-700 border border-gray-800 rounded-xl px-3 py-2.5 text-sm text-gray-300 outline-none">
                                 <option value="smart">Smart (Lead, Alt. Lead, Rhythm, Bass…)</option>
                                 <option value="legacy">Legacy (Combo, Bass)</option>
                             </select>
                         </div>
-                        <div>
-                            <label for="setting-av-offset" class="text-sm font-medium text-gray-400 mb-2 block">
-                                A/V Sync Offset: <span id="setting-av-offset-val">0</span> ms
-                            </label>
-                            <input type="range" id="setting-av-offset" min="-1000" max="1000" step="1" value="0"
-                                oninput="setAvOffsetMs(this.value)"
-                                class="w-full slider-input">
-                            <p class="text-xs text-gray-600 mt-1">Positive = audio plays ahead of visual notes; raise this value to catch the highway up. Adjust live with the [ and ] keys (Shift for ±50 ms). Auto-saves on every change.</p>
+                    </div>
+                    <!-- A/V sync offset -->
+                    <div class="fb-srow fb-srow-stack">
+                        <div style="display:flex; align-items:center; gap:1rem;">
+                            <span class="fb-srow-icon"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></span>
+                            <div class="fb-srow-main">
+                                <div class="fb-srow-title">A/V sync offset: <span id="setting-av-offset-val" style="margin-left:.35rem;">0</span> ms</div>
+                                <div class="fb-srow-desc">Positive = audio plays ahead of visual notes; raise to catch the highway up. Adjust live with the [ and ] keys (Shift for ±50 ms). Auto-saves.</div>
+                            </div>
                         </div>
-                        <div>
-                            <label for="setting-live-guitar-tone-source" class="text-sm font-medium text-gray-400 mb-2 block">Live guitar tone source</label>
-                            <select id="setting-live-guitar-tone-source"
+                        <input type="range" id="setting-av-offset" min="-1000" max="1000" step="1" value="0"
+                            oninput="setAvOffsetMs(this.value)" class="fb-srow-wide slider-input">
+                    </div>
+                    <!-- Note highway speed (master difficulty) -->
+                    <div class="fb-srow fb-srow-stack">
+                        <div style="display:flex; align-items:center; gap:1rem;">
+                            <span class="fb-srow-icon"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg></span>
+                            <div class="fb-srow-main">
+                                <div class="fb-srow-title">Note highway speed: <span id="setting-highway-speed-val" style="margin-left:.35rem;">100</span>%</div>
+                                <div class="fb-srow-desc">Master difficulty — lower simplifies the chart (fewer notes); 100% plays the full arrangement.</div>
+                            </div>
+                        </div>
+                        <input type="range" id="setting-highway-speed" min="0" max="100" step="5" value="100"
+                            oninput="setMastery(this.value)" class="fb-srow-wide slider-input">
+                    </div>
+                    <!-- Miss penalty (stub) -->
+                    <div class="fb-srow">
+                        <span class="fb-srow-icon"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M5.07 19H19a2 2 0 001.71-3L13.71 4a2 2 0 00-3.42 0L3.34 16a2 2 0 001.73 3z"/></svg></span>
+                        <div class="fb-srow-main">
+                            <div class="fb-srow-title">Miss penalty <span class="fb-stub-note">Not yet active</span></div>
+                            <div class="fb-srow-desc">How harshly missed notes are scored. Saved now; scoring wiring lands in a later release.</div>
+                        </div>
+                        <div class="fb-srow-control">
+                            <select id="setting-miss-penalty" onchange="persistSetting('miss_penalty', this.value)"
                                 class="bg-dark-700 border border-gray-800 rounded-xl px-3 py-2.5 text-sm text-gray-300 outline-none">
-                                <option value="internal">fee[dB]ack internal tone</option>
-                                <option value="external_hardware">External amp / hardware pedalboard</option>
-                                <option value="spark_control_x">Spark LIVE + Spark Control X</option>
+                                <option value="none">None</option>
+                                <option value="low">Low</option>
+                                <option value="medium">Standard</option>
+                                <option value="high">High</option>
                             </select>
-                            <p class="text-xs text-gray-600 mt-1">Choose External/Spark if your guitar tone comes from hardware like Spark LIVE. fee[dB]ack will still score your playing but won&rsquo;t warn that no internal amp tone is loaded.</p>
                         </div>
-                        <div>
-                            <label for="demucs-server-url" class="text-sm font-medium text-gray-400 mb-2 block">Demucs Server (for stem separation)</label>
-                            <div class="flex gap-3">
-                                <input type="text" id="demucs-server-url" placeholder="http://192.168.1.100:7865"
-                                    class="flex-1 bg-dark-700 border border-gray-800 rounded-xl px-4 py-2.5 text-sm text-gray-300 placeholder-gray-600 focus:border-accent/50 outline-none">
-                                <button onclick="saveSettings()" class="bg-accent hover:bg-accent-light px-6 py-2.5 rounded-xl text-sm font-semibold text-white transition">Save</button>
-                            </div>
-                            <p class="text-xs text-gray-600 mt-1">Optional. Run <a href="https://github.com/got-feedBack/feedBack-demucs-server" target="_blank" rel="noopener" class="text-accent hover:text-accent-light underline">feedBack-demucs-server</a> on a machine with a GPU to offload stem splitting and avoid resource exhaustion on the host running FeedBack.</p>
-                        </div>
-                        <div>
-                            <label class="text-sm font-medium text-gray-400 mb-2 block">Library</label>
-                            <div class="flex items-center gap-3">
-                                <button onclick="rescanLibrary()" id="btn-rescan" class="bg-dark-600 hover:bg-dark-500 px-5 py-2.5 rounded-xl text-sm text-gray-300 transition">Rescan Library</button>
-                                <button onclick="fullRescanLibrary()" id="btn-full-rescan" class="bg-dark-600 hover:bg-red-900/30 px-5 py-2.5 rounded-xl text-sm text-gray-400 transition">Full Rescan</button>
-                                <span id="rescan-status" class="text-xs text-gray-500"></span>
-                            </div>
-                            <p class="text-xs text-gray-600 mt-1">Rescan checks for new songs. Full Rescan clears the cache and re-imports everything.</p>
-                        </div>
-                        <div>
-                            <label class="text-sm font-medium text-gray-400 mb-2 block">Backup</label>
-                            <div class="flex items-center gap-3">
-                                <button onclick="exportSettings()" id="btn-export-settings" class="bg-dark-600 hover:bg-dark-500 px-5 py-2.5 rounded-xl text-sm text-gray-300 transition">Export Settings</button>
-                                <button onclick="document.getElementById('import-settings-file').click()" id="btn-import-settings" class="bg-dark-600 hover:bg-dark-500 px-5 py-2.5 rounded-xl text-sm text-gray-300 transition">Import Settings</button>
-                                <input type="file" id="import-settings-file" accept="application/json,.json" class="hidden" onchange="importSettings(this.files[0]); this.value=''">
-                                <span id="backup-status" class="text-xs text-gray-500"></span>
-                            </div>
-                            <p class="text-xs text-gray-600 mt-1">Export bundles server config, browser preferences, and opted-in plugin data into one JSON file. Import overwrites current settings and reloads.</p>
-                        </div>
-                        <!-- ── Diagnostics (feedBack#166) ────────────────────── -->
-                        <div>
-                            <label class="text-sm font-medium text-gray-400 mb-2 block">Diagnostics</label>
-                            <div class="grid grid-cols-2 gap-2 mb-3 text-xs text-gray-400">
-                                <label class="flex items-center gap-2"><input type="checkbox" id="diag-incl-system" checked class="rounded border-gray-600 bg-dark-700 text-accent"> System info</label>
-                                <label class="flex items-center gap-2"><input type="checkbox" id="diag-incl-hardware" checked class="rounded border-gray-600 bg-dark-700 text-accent"> Hardware (CPU/GPU/RAM)</label>
-                                <label class="flex items-center gap-2"><input type="checkbox" id="diag-incl-logs" checked class="rounded border-gray-600 bg-dark-700 text-accent"> Server logs (last 5 MB)</label>
-                                <label class="flex items-center gap-2"><input type="checkbox" id="diag-incl-console" checked class="rounded border-gray-600 bg-dark-700 text-accent"> Browser console + errors</label>
-                                <label class="flex items-center gap-2"><input type="checkbox" id="diag-incl-plugins" checked class="rounded border-gray-600 bg-dark-700 text-accent"> Plugin diagnostics</label>
-                                <label class="flex items-center gap-2"><input type="checkbox" id="diag-redact" checked class="rounded border-gray-600 bg-dark-700 text-accent"> Redact paths &amp; song names</label>
-                            </div>
-                            <div class="flex items-center gap-3">
-                                <button onclick="previewDiagnostics()" id="btn-diag-preview" class="bg-dark-600 hover:bg-dark-500 px-5 py-2.5 rounded-xl text-sm text-gray-300 transition">Preview Bundle</button>
-                                <button onclick="exportDiagnostics()" id="btn-diag-export" class="bg-dark-600 hover:bg-dark-500 px-5 py-2.5 rounded-xl text-sm text-gray-300 transition">Export Diagnostics</button>
-                                <span id="diag-status" class="text-xs text-gray-500"></span>
-                            </div>
-                            <p class="text-xs text-gray-600 mt-1">Bundles server logs, hardware info, plugin inventory, and the browser console transcript into one zip for bug reports. Redaction strips DLC paths, song filenames, and IP addresses by default. Attach to GitHub issues; AI agents can parse the included <code>manifest.json</code>.</p>
-                            <div id="diag-preview" class="hidden mt-3 bg-dark-700 border border-gray-800 rounded-xl p-3 text-xs text-gray-400 max-h-96 overflow-auto"></div>
-                        </div>
-                        <div id="settings-status" class="text-sm text-gray-500"></div>
                     </div>
-                </section>
+                    <!-- Countdown before song -->
+                    <div class="fb-srow">
+                        <span class="fb-srow-icon"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m-3 5a9 9 0 100-18 9 9 0 000 18z"/></svg></span>
+                        <div class="fb-srow-main">
+                            <div class="fb-srow-title">Countdown before song</div>
+                            <div class="fb-srow-desc">Play a four-beat count-in before a song starts so you can get ready.</div>
+                        </div>
+                        <div class="fb-srow-control">
+                            <label class="fb-switch">
+                                <input type="checkbox" id="setting-countdown-before-song" onchange="setCountdownBeforeSong(this.checked)">
+                                <span class="fb-switch-track"></span>
+                            </label>
+                        </div>
+                    </div>
+                    <!-- Fail behavior (stub) -->
+                    <div class="fb-srow">
+                        <span class="fb-srow-icon"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg></span>
+                        <div class="fb-srow-main">
+                            <div class="fb-srow-title">Fail behavior <span class="fb-stub-note">Not yet active</span></div>
+                            <div class="fb-srow-desc">What happens when you fail a section. Saved now; gameplay wiring lands in a later release.</div>
+                        </div>
+                        <div class="fb-srow-control">
+                            <select id="setting-fail-behavior" onchange="persistSetting('fail_behavior', this.value)"
+                                class="bg-dark-700 border border-gray-800 rounded-xl px-3 py-2.5 text-sm text-gray-300 outline-none">
+                                <option value="continue">Continue playing</option>
+                                <option value="restart">Restart section</option>
+                                <option value="stop">Stop song</option>
+                            </select>
+                        </div>
+                    </div>
+                    <!-- Autoplay & auto-exit -->
+                    <div class="fb-srow">
+                        <span class="fb-srow-icon"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></span>
+                        <div class="fb-srow-main">
+                            <div class="fb-srow-title">Autoplay &amp; auto-exit</div>
+                            <div class="fb-srow-desc">Start songs/lessons automatically and return to the menu when the score screen closes.</div>
+                        </div>
+                        <div class="fb-srow-control">
+                            <label class="fb-switch">
+                                <input type="checkbox" id="setting-autoplay-exit" checked onchange="setAutoplayExit(this.checked)">
+                                <span class="fb-switch-track"></span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            </div>
 
-                <!-- ── Plugin settings ─────────────────────────────────────── -->
-                <section id="plugin-settings-area" class="hidden">
-                    <h3 class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-4">Plugins</h3>
-                    <div class="space-y-6">
-                        <div>
-                            <label class="text-sm font-medium text-gray-400 mb-2 block">Plugin Updates</label>
-                            <div class="flex items-center gap-3 mb-2">
-                                <button onclick="checkPluginUpdates()" id="btn-check-updates" class="bg-dark-600 hover:bg-dark-500 px-5 py-2.5 rounded-xl text-sm text-gray-300 transition">Check for Updates</button>
-                                <span id="updates-status" class="text-xs text-gray-500"></span>
+            <!-- ══ AUDIO ═══════════════════════════════════════════════════ -->
+            <div class="fb-tabpanel" data-tab="audio">
+                <div class="fb-tabpanel-head"><h3>Audio Settings</h3></div>
+                <div class="fb-srows">
+                    <!-- Live guitar tone source -->
+                    <div class="fb-srow fb-srow-stack">
+                        <div style="display:flex; align-items:center; gap:1rem;">
+                            <span class="fb-srow-icon"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072M19 5a9 9 0 010 14M5 9v6h4l5 5V4L9 9H5z"/></svg></span>
+                            <div class="fb-srow-main">
+                                <div class="fb-srow-title">Live guitar tone source</div>
+                                <div class="fb-srow-desc">Choose External/Spark if your guitar tone comes from hardware like Spark LIVE. fee[dB]ack still scores your playing but won't warn that no internal amp tone is loaded.</div>
                             </div>
-                            <div id="plugin-updates-list" class="space-y-2"></div>
                         </div>
-                        <!-- Per-plugin collapsible sections injected here -->
-                        <div id="plugin-settings" class="space-y-3"></div>
+                        <select id="setting-live-guitar-tone-source"
+                            class="fb-srow-wide bg-dark-700 border border-gray-800 rounded-xl px-3 py-2.5 text-sm text-gray-300 outline-none">
+                            <option value="internal">fee[dB]ack internal tone</option>
+                            <option value="external_hardware">External amp / hardware pedalboard</option>
+                            <option value="spark_control_x">Spark LIVE + Spark Control X</option>
+                        </select>
                     </div>
-                </section>
+                    <!-- Demucs server -->
+                    <div class="fb-srow fb-srow-stack">
+                        <div style="display:flex; align-items:center; gap:1rem;">
+                            <span class="fb-srow-icon"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/></svg></span>
+                            <div class="fb-srow-main">
+                                <div class="fb-srow-title">Demucs server (for stem separation)</div>
+                                <div class="fb-srow-desc">Optional. Run <a href="https://github.com/got-feedback/feedBack-demucs-server" target="_blank" rel="noopener" class="text-accent hover:text-accent-light underline">feedBack-demucs-server</a> on a GPU machine to offload stem splitting and avoid resource exhaustion on the host.</div>
+                            </div>
+                        </div>
+                        <div class="fb-srow-control">
+                            <input type="text" id="demucs-server-url" placeholder="http://192.168.1.100:7865"
+                                class="bg-dark-700 border border-gray-800 rounded-xl px-4 py-2.5 text-sm text-gray-300 placeholder-gray-600 focus:border-accent/50 outline-none">
+                            <button onclick="saveSettings()" class="bg-accent hover:bg-accent-light px-6 py-2.5 rounded-xl text-sm font-semibold text-white transition">Save</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
 
-                <!-- ── About / Source / License (AGPL §13 disclosure) ──────── -->
-                <section>
-                    <h3 class="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-4">About</h3>
-                    <div class="space-y-2 text-sm text-gray-400">
-                        <div>FeedBack <span id="app-version-about" class="text-gray-500"></span></div>
-                        <div>Licensed under <a id="about-license-link" href="https://github.com/got-feedback/feedBack/blob/main/LICENSE" target="_blank" rel="noopener" class="text-accent hover:text-accent-light underline">GNU AGPL v3.0</a>.</div>
-                        <div><a id="about-source-link" href="https://github.com/got-feedback/feedBack" target="_blank" rel="noopener" class="text-accent hover:text-accent-light underline">Source code repository</a></div>
-                        <p class="text-xs text-gray-600 mt-2">FeedBack is free software. You can redistribute it and modify it under the terms of the AGPL. If you run a modified version that interacts with users over a network, you must make the modified source available to those users.</p>
+            <!-- ══ GRAPHICS ════════════════════════════════════════════════ -->
+            <div class="fb-tabpanel" data-tab="graphics">
+                <div class="fb-tabpanel-head"><h3>Graphics Settings</h3></div>
+                <!-- highway_3d (manifest settings.category="graphics") mounts here. -->
+                <div id="plugin-settings-graphics" class="space-y-3"></div>
+                <p class="fb-tabpanel-empty" data-empty-for="plugin-settings-graphics">No graphics plugins are installed.</p>
+            </div>
+
+            <!-- ══ KEYBINDS ════════════════════════════════════════════════ -->
+            <div class="fb-tabpanel" data-tab="keybinds">
+                <div class="fb-tabpanel-head"><h3>Keyboard Shortcuts</h3></div>
+                <!-- Populated by settings.js from the live shortcut registry. -->
+                <div id="settings-keybinds"></div>
+            </div>
+
+            <!-- ══ PROGRESSION ═════════════════════════════════════════════ -->
+            <div class="fb-tabpanel" data-tab="progression">
+                <div class="fb-tabpanel-head"><h3>Progression Settings</h3></div>
+                <div id="plugin-settings-progression" class="space-y-3"></div>
+                <p class="fb-tabpanel-empty" data-empty-for="plugin-settings-progression">No progression plugins are installed.</p>
+            </div>
+
+            <!-- ══ MIC ═════════════════════════════════════════════════════ -->
+            <div class="fb-tabpanel" data-tab="mic">
+                <div class="fb-tabpanel-head"><h3>Microphone &amp; Detection</h3></div>
+                <div id="plugin-settings-mic" class="space-y-3"></div>
+                <p class="fb-tabpanel-empty" data-empty-for="plugin-settings-mic">No microphone/detection plugins are installed.</p>
+            </div>
+
+            <!-- ══ PLUGINS (fallback for uncategorized panels) ═════════════ -->
+            <div class="fb-tabpanel" data-tab="plugins">
+                <div class="fb-tabpanel-head"><h3>Plugins</h3></div>
+                <div class="fb-srows">
+                    <div class="fb-srow fb-srow-stack">
+                        <div class="fb-srow-main">
+                            <div class="fb-srow-title">Plugin updates</div>
+                            <div class="fb-srow-desc">Check installed plugins for newer versions.</div>
+                        </div>
+                        <div class="fb-srow-control" style="justify-content:flex-start;">
+                            <button onclick="checkPluginUpdates()" id="btn-check-updates" class="bg-dark-600 hover:bg-dark-500 px-5 py-2.5 rounded-xl text-sm text-gray-300 transition">Check for Updates</button>
+                            <span id="updates-status" class="text-xs text-gray-500"></span>
+                        </div>
+                        <div id="plugin-updates-list" class="space-y-2 fb-srow-wide"></div>
                     </div>
-                </section>
+                </div>
+                <!-- Per-plugin collapsible sections injected here (uncategorized). -->
+                <div id="plugin-settings" class="space-y-3" style="margin-top:.6rem;"></div>
+            </div>
+
+            <!-- ══ SYSTEM ══════════════════════════════════════════════════ -->
+            <div class="fb-tabpanel" data-tab="system">
+                <div class="fb-tabpanel-head"><h3>System</h3></div>
+                <div class="fb-srows">
+                    <!-- App Updates — desktop-only; setupAppUpdates() unhides. -->
+                    <div id="app-updates-block" class="hidden fb-srow fb-srow-stack">
+                        <div class="fb-srow-main">
+                            <div class="fb-srow-title">App updates</div>
+                            <div class="fb-srow-desc">Velopack auto-update channel for the desktop app.</div>
+                        </div>
+                        <div class="fb-srow-control" style="flex-wrap:wrap;">
+                            <select id="app-update-channel"
+                                class="bg-dark-700 border border-gray-800 rounded-xl px-3 py-2.5 text-sm text-gray-300 outline-none">
+                                <option value="stable">Stable</option>
+                                <option value="rc">Release candidate</option>
+                                <option value="beta">Beta</option>
+                                <option value="alpha">Alpha</option>
+                            </select>
+                            <button id="app-update-check-now"
+                                class="bg-accent hover:bg-accent-light px-4 py-2.5 rounded-xl text-sm font-medium text-white transition disabled:opacity-50">
+                                Check for updates
+                            </button>
+                        </div>
+                        <p id="app-update-status" class="text-xs text-gray-500 fb-srow-wide">Loading updater status…</p>
+                        <p id="app-update-linux-note" class="hidden text-xs text-yellow-300 fb-srow-wide">
+                            Auto-update is not available on Linux —
+                            <a href="https://github.com/got-feedback/feedback-desktop/releases" target="_blank" rel="noopener" class="text-accent hover:text-accent-light underline">download new versions from GitHub Releases</a>.
+                        </p>
+                    </div>
+                    <!-- Library folder path -->
+                    <div class="fb-srow fb-srow-stack">
+                        <div class="fb-srow-main">
+                            <div class="fb-srow-title">Library folder path</div>
+                            <div class="fb-srow-desc">The folder fee[dB]ack scans for your song library.</div>
+                        </div>
+                        <div class="fb-srow-control">
+                            <input type="text" id="dlc-path" placeholder="/path/to/your/library"
+                                class="bg-dark-700 border border-gray-800 rounded-xl px-4 py-2.5 text-sm text-gray-300 placeholder-gray-600 focus:border-accent/50 outline-none">
+                            <button onclick="pickDlcFolder()" id="btn-pick-dlc" class="hidden bg-dark-600 hover:bg-dark-500 px-4 py-2.5 rounded-xl text-sm text-gray-300 transition whitespace-nowrap">📂 Browse</button>
+                            <button onclick="saveSettings()" class="bg-accent hover:bg-accent-light px-6 py-2.5 rounded-xl text-sm font-semibold text-white transition">Save</button>
+                        </div>
+                    </div>
+                    <!-- Library rescan -->
+                    <div class="fb-srow fb-srow-stack">
+                        <div class="fb-srow-main">
+                            <div class="fb-srow-title">Library</div>
+                            <div class="fb-srow-desc">Rescan checks for new songs. Full Rescan clears the cache and re-imports everything.</div>
+                        </div>
+                        <div class="fb-srow-control">
+                            <button onclick="rescanLibrary()" id="btn-rescan" class="bg-dark-600 hover:bg-dark-500 px-5 py-2.5 rounded-xl text-sm text-gray-300 transition">Rescan Library</button>
+                            <button onclick="fullRescanLibrary()" id="btn-full-rescan" class="bg-dark-600 hover:bg-red-900/30 px-5 py-2.5 rounded-xl text-sm text-gray-400 transition">Full Rescan</button>
+                            <span id="rescan-status" class="text-xs text-gray-500"></span>
+                        </div>
+                    </div>
+                    <!-- Backup -->
+                    <div class="fb-srow fb-srow-stack">
+                        <div class="fb-srow-main">
+                            <div class="fb-srow-title">Backup</div>
+                            <div class="fb-srow-desc">Export bundles server config, browser preferences, and opted-in plugin data into one JSON file. Import overwrites current settings and reloads.</div>
+                        </div>
+                        <div class="fb-srow-control">
+                            <button onclick="exportSettings()" id="btn-export-settings" class="bg-dark-600 hover:bg-dark-500 px-5 py-2.5 rounded-xl text-sm text-gray-300 transition">Export Settings</button>
+                            <button onclick="document.getElementById('import-settings-file').click()" id="btn-import-settings" class="bg-dark-600 hover:bg-dark-500 px-5 py-2.5 rounded-xl text-sm text-gray-300 transition">Import Settings</button>
+                            <input type="file" id="import-settings-file" accept="application/json,.json" class="hidden" onchange="importSettings(this.files[0]); this.value=''">
+                            <span id="backup-status" class="text-xs text-gray-500"></span>
+                        </div>
+                    </div>
+                    <!-- Diagnostics -->
+                    <div class="fb-srow fb-srow-stack">
+                        <div class="fb-srow-main">
+                            <div class="fb-srow-title">Diagnostics</div>
+                            <div class="fb-srow-desc">Bundles server logs, hardware info, plugin inventory, and the browser console transcript into one zip for bug reports. Redaction strips DLC paths, song filenames, and IP addresses by default.</div>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2 mb-1 text-xs text-gray-400 fb-srow-wide">
+                            <label class="flex items-center gap-2"><input type="checkbox" id="diag-incl-system" checked class="rounded border-gray-600 bg-dark-700 text-accent"> System info</label>
+                            <label class="flex items-center gap-2"><input type="checkbox" id="diag-incl-hardware" checked class="rounded border-gray-600 bg-dark-700 text-accent"> Hardware (CPU/GPU/RAM)</label>
+                            <label class="flex items-center gap-2"><input type="checkbox" id="diag-incl-logs" checked class="rounded border-gray-600 bg-dark-700 text-accent"> Server logs (last 5 MB)</label>
+                            <label class="flex items-center gap-2"><input type="checkbox" id="diag-incl-console" checked class="rounded border-gray-600 bg-dark-700 text-accent"> Browser console + errors</label>
+                            <label class="flex items-center gap-2"><input type="checkbox" id="diag-incl-plugins" checked class="rounded border-gray-600 bg-dark-700 text-accent"> Plugin diagnostics</label>
+                            <label class="flex items-center gap-2"><input type="checkbox" id="diag-redact" checked class="rounded border-gray-600 bg-dark-700 text-accent"> Redact paths &amp; song names</label>
+                        </div>
+                        <div class="fb-srow-control">
+                            <button onclick="previewDiagnostics()" id="btn-diag-preview" class="bg-dark-600 hover:bg-dark-500 px-5 py-2.5 rounded-xl text-sm text-gray-300 transition">Preview Bundle</button>
+                            <button onclick="exportDiagnostics()" id="btn-diag-export" class="bg-dark-600 hover:bg-dark-500 px-5 py-2.5 rounded-xl text-sm text-gray-300 transition">Export Diagnostics</button>
+                            <span id="diag-status" class="text-xs text-gray-500"></span>
+                        </div>
+                        <div id="diag-preview" class="hidden mt-1 bg-dark-700 border border-gray-800 rounded-xl p-3 text-xs text-gray-400 max-h-96 overflow-auto fb-srow-wide"></div>
+                    </div>
+                    <!-- About -->
+                    <div class="fb-srow fb-srow-stack">
+                        <div class="fb-srow-main">
+                            <div class="fb-srow-title">About</div>
+                            <div class="fb-srow-desc">
+                                fee[dB]ack <span id="app-version-about" class="text-gray-500"></span> · Licensed under
+                                <a id="about-license-link" href="https://github.com/got-feedback/feedback/blob/main/LICENSE" target="_blank" rel="noopener" class="text-accent hover:text-accent-light underline">GNU AGPL v3.0</a> ·
+                                <a id="about-source-link" href="https://github.com/got-feedback/feedback" target="_blank" rel="noopener" class="text-accent hover:text-accent-light underline">Source code repository</a>.
+                                Free software — if you run a modified version that interacts with users over a network, you must make the modified source available to those users.
+                            </div>
+                        </div>
+                    </div>
+                    <div id="settings-status" class="text-sm text-gray-500"></div>
+                </div>
             </div>
         </div>
     </div>
@@ -900,6 +1071,7 @@
     <script src="/static/v3/songs.js"></script>
     <script src="/static/v3/lessons.js"></script>
     <script src="/static/v3/dashboard.js"></script>
+    <script src="/static/v3/settings.js"></script>
     <!-- First-run home tour: spotlights the home cards via the shared tour
          engine (tour-engine.js, loaded above). Auto-runs once after onboarding
          (triggered from profile.js finish()); replayable from the "?" menu. -->

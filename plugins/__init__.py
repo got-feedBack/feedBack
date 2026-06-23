@@ -1330,6 +1330,18 @@ def load_plugins(app: FastAPI, context: dict, progress_cb=None, route_setup_fn=N
         _category = manifest.get("category")
         if not isinstance(_category, str) or not _category:
             _category = None
+        # Settings-tab placement (tabbed settings page). When `settings` is a
+        # dict, an optional `category` field names which settings tab the
+        # plugin's panel mounts under (e.g. "graphics", "mic", "progression").
+        # Distinct from the top-level `category` above (which drives Pedalboard
+        # grouping) so the two don't collide. Absent/blank → None → the
+        # frontend falls back to the generic "Plugins" tab.
+        _settings_manifest = manifest.get("settings")
+        _settings_category = None
+        if isinstance(_settings_manifest, dict):
+            _sc = _settings_manifest.get("category")
+            if isinstance(_sc, str) and _sc:
+                _settings_category = _sc
         _icon = manifest.get("icon")
         if not isinstance(_icon, str) or not _icon:
             _icon = None
@@ -1355,6 +1367,7 @@ def load_plugins(app: FastAPI, context: dict, progress_cb=None, route_setup_fn=N
             "has_screen": bool(manifest.get("screen")),
             "has_script": bool(manifest.get("script")),
             "has_settings": bool(manifest.get("settings")),
+            "settings_category": _settings_category,
             "has_tour": _is_valid_tour_manifest(manifest.get("tour")),
             # `styles` is an optional relpath (under the plugin's assets/) to a
             # compiled, preflight-off stylesheet the frontend injects as a
@@ -2067,6 +2080,9 @@ def register_plugin_api(app: FastAPI):
                 "has_screen": p["has_screen"],
                 "has_script": p["has_script"],
                 "has_settings": p["has_settings"],
+                # Settings-tab placement; None when the manifest's `settings`
+                # is absent, a bare string, or omits `category`.
+                "settings_category": p.get("settings_category"),
                 "has_tour": p.get("has_tour", False),
                 # `.get()` fallbacks keep stubbed test entries (built without
                 # _nav_entry) working — styles is None when unset.
@@ -2115,6 +2131,7 @@ def register_plugin_api(app: FastAPI):
                 "has_screen": e.get("has_screen", False),
                 "has_script": e.get("has_script", False),
                 "has_settings": e.get("has_settings", False),
+                "settings_category": e.get("settings_category"),
                 "has_tour": e.get("has_tour", False),
                 "has_styles": e.get("has_styles", False),
                 "styles": e.get("styles"),

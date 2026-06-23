@@ -35,9 +35,11 @@ class _DirectSettingsClient:
         return _DirectResponse(self._server.get_settings())
 
     def post(self, path, json):
-        if path != "/api/settings":
-            raise ValueError(f"unsupported path: {path}")
-        return _DirectResponse(self._server.save_settings(json))
+        if path == "/api/settings":
+            return _DirectResponse(self._server.save_settings(json))
+        if path == "/api/settings/reset":
+            return _DirectResponse(self._server.reset_settings(json))
+        raise ValueError(f"unsupported path: {path}")
 
     def close(self):
         pass
@@ -682,3 +684,91 @@ def test_skip_startup_tasks_clears_stale_plugin_registry(tmp_path, monkeypatch, 
         if conn is not None:
             conn.close()
         _restore_loaded_plugins(plugins_snapshot)
+
+
+# ── v0.3.0 gameplay settings (tabbed settings page) ─────────────────────────
+
+def test_countdown_before_song_persists_bool(client, tmp_path):
+    r = client.post("/api/settings", json={"countdown_before_song": True})
+    assert r.status_code == 200
+    assert _read_cfg(tmp_path)["countdown_before_song"] is True
+    client.post("/api/settings", json={"countdown_before_song": False})
+    assert _read_cfg(tmp_path)["countdown_before_song"] is False
+
+
+@pytest.mark.parametrize("bad_value", [1, 0, "true", "yes", [], {}])
+def test_countdown_before_song_rejects_non_bool(client, tmp_path, bad_value):
+    (tmp_path / "config.json").write_text(json.dumps({"countdown_before_song": True}))
+    r = client.post("/api/settings", json={"countdown_before_song": bad_value})
+    assert "error" in r.json()
+    # Previous value preserved on bad input.
+    assert _read_cfg(tmp_path)["countdown_before_song"] is True
+
+
+@pytest.mark.parametrize("key,good,bad", [
+    ("miss_penalty", "high", "extreme"),
+    ("fail_behavior", "restart", "explode"),
+])
+def test_enum_settings_validate(client, tmp_path, key, good, bad):
+    r = client.post("/api/settings", json={key: good})
+    assert r.status_code == 200
+    assert _read_cfg(tmp_path)[key] == good
+    # Bad enum value is rejected and doesn't clobber the persisted good one.
+    r = client.post("/api/settings", json={key: bad})
+    assert "error" in r.json()
+    assert _read_cfg(tmp_path)[key] == good
+
+
+def test_defaults_include_gameplay_keys(client, tmp_path):
+    # Fresh install (no config.json) — GET should expose the new keys at their
+    # neutral defaults so the frontend hydrates predictably.
+    data = client.get("/api/settings").json()
+    assert data["countdown_before_song"] is False
+    assert data["miss_penalty"] == "none"
+    assert data["fail_behavior"] == "continue"
+
+
+# ── /api/settings/reset ─────────────────────────────────────────────────────
+
+def test_reset_clears_requested_keys(client, tmp_path):
+    (tmp_path / "config.json").write_text(json.dumps({
+        "master_difficulty": 40,
+        "countdown_before_song": True,
+        "default_arrangement": "Lead",
+        "demucs_server_url": "http://demucs.example:9000",
+    }))
+    r = client.post("/api/settings/reset",
+                    json={"keys": ["master_difficulty", "countdown_before_song"]})
+    assert r.status_code == 200
+    body = r.json()
+    assert set(body["reset"]) == {"master_difficulty", "countdown_before_song"}
+    cfg = _read_cfg(tmp_path)
+    # Reset removes the key so GET falls back to the default.
+    assert "master_difficulty" not in cfg
+    assert "countdown_before_song" not in cfg
+    # Unlisted keys are untouched.
+    assert cfg["default_arrangement"] == "Lead"
+    assert cfg["demucs_server_url"] == "http://demucs.example:9000"
+
+
+def test_reset_ignores_unknown_keys(client, tmp_path):
+    (tmp_path / "config.json").write_text(json.dumps({"master_difficulty": 40}))
+    # Unknown / non-resettable keys are silently ignored, not an error, and
+    # can't be used to delete arbitrary config.
+    r = client.post("/api/settings/reset",
+                    json={"keys": ["dlc_dir", "not_a_real_key", "master_difficulty"]})
+    assert r.status_code == 200
+    assert r.json()["reset"] == ["master_difficulty"]
+    assert "master_difficulty" not in _read_cfg(tmp_path)
+
+
+def test_reset_bad_body_returns_error(client, tmp_path):
+    r = client.post("/api/settings/reset", json={"keys": "master_difficulty"})
+    assert "error" in r.json()
+
+
+def test_reset_with_no_config_is_noop(client, tmp_path):
+    # No config.json yet — already at defaults, nothing to remove.
+    r = client.post("/api/settings/reset", json={"keys": ["master_difficulty"]})
+    assert r.status_code == 200
+    assert r.json()["reset"] == []

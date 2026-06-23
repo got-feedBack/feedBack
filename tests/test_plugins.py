@@ -4006,3 +4006,32 @@ def test_loader_honors_persisted_disable_without_memory_flip(tmp_path, reset_plu
     assert not (config_dir / "z_marker").exists()
     assert plugins.PENDING_PLUGINS["z_target"]["status"] == "disabled"
     assert plugins.PENDING_PLUGINS["z_target"]["enabled"] is False
+
+
+def test_settings_category_parsed_from_manifest(tmp_path, reset_plugin_state):
+    """A plugin manifest's settings.category is parsed into settings_category
+    on the loaded entry (drives the v3 settings-tab placement). Absent or a
+    bare-string `settings` value yields None → the frontend's fallback tab."""
+    plugins = reset_plugin_state
+
+    def _write(pid, settings_value):
+        d = tmp_path / pid
+        d.mkdir()
+        (d / "plugin.json").write_text(json.dumps({
+            "id": pid, "name": pid, "routes": "routes.py", "settings": settings_value,
+        }))
+        (d / "routes.py").write_text("def setup(app, ctx):\n    pass\n")
+
+    _write("graphy", {"html": "settings.html", "category": "graphics"})
+    _write("plainset", {"html": "settings.html"})        # dict, no category
+    _write("noset", None)                                # no settings at all
+
+    _run_load_plugins(plugins, type("FakeApp", (), {})(), tmp_path)
+
+    rows = {p["id"]: p for p in plugins.LOADED_PLUGINS}
+    assert rows["graphy"]["settings_category"] == "graphics"
+    assert rows["graphy"]["has_settings"] is True
+    assert rows["plainset"]["settings_category"] is None
+    assert rows["plainset"]["has_settings"] is True
+    assert rows["noset"]["settings_category"] is None
+    assert rows["noset"]["has_settings"] is False

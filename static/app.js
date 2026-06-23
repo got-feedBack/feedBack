@@ -3234,10 +3234,16 @@ async function loadSettings() {
     setupAppUpdates();
     const resp = await fetch('/api/settings');
     const data = await resp.json();
-    document.getElementById('dlc-path').value = data.dlc_dir || '';
+    // Null-guard the form fields: on the v3 tabbed settings page the markup is
+    // rendered by settings.js, so a control may be absent if that render hasn't
+    // run yet (or on a follower window). The optional-chaining keeps loadSettings
+    // from throwing and aborting the rest of the hydration.
+    const dlcEl = document.getElementById('dlc-path');
+    if (dlcEl) dlcEl.value = data.dlc_dir || '';
     _defaultArrangement = data.default_arrangement || '';
     _syncDefaultArrangementSelect(_defaultArrangement);
-    document.getElementById('demucs-server-url').value = data.demucs_server_url || '';
+    const demucsEl = document.getElementById('demucs-server-url');
+    if (demucsEl) demucsEl.value = data.demucs_server_url || '';
     const leftyEl = document.getElementById('setting-lefty');
     if (leftyEl) leftyEl.checked = highway.getLefty();
     const autoplayExitEl = document.getElementById('setting-autoplay-exit');
@@ -3248,14 +3254,11 @@ async function loadSettings() {
     const masteryPct = typeof data.master_difficulty === 'number'
         ? Math.max(0, Math.min(100, data.master_difficulty))
         : 100;
-    const masterySlider = document.getElementById('mastery-slider');
-    const masteryLabel = document.getElementById('mastery-label');
-    if (masterySlider) {
-        masterySlider.value = masteryPct;
-        handleSliderInput(masterySlider);
-    }
-    if (masteryLabel) masteryLabel.textContent = masteryPct + '%';
-    highway.setMastery(masteryPct / 100);
+    // Drives both the player-popover slider (#mastery-slider) and the
+    // Gameplay-tab "Note highway speed" slider (#setting-highway-speed), which
+    // share the master_difficulty key. skipPersist so loading the value doesn't
+    // echo it back to the server.
+    _applyMastery(masteryPct, { skipPersist: true });
     // Route the loaded value through setAvOffsetMs so the highway's
     // render clock, the Settings slider, the HUD readout, and the
     // module variable all pick it up consistently. Pass skipPersist
@@ -3264,6 +3267,18 @@ async function loadSettings() {
     // Arrangement naming mode is localStorage-only (client preference).
     const namingModeEl = document.getElementById('arrangement-naming-mode');
     if (namingModeEl) namingModeEl.value = _getArrangementNamingMode();
+    // Gameplay-tab settings (tabbed settings page). Countdown is mirrored to
+    // localStorage so the song-start path reads it synchronously without an
+    // async /api/settings fetch on the play hot path. Miss penalty / fail
+    // behavior are persist-only stubs (not yet consumed by scoring).
+    const countdownOn = data.countdown_before_song === true;
+    try { localStorage.setItem('countdownBeforeSong', countdownOn ? '1' : '0'); } catch (_) { /* private mode */ }
+    const countdownEl = document.getElementById('setting-countdown-before-song');
+    if (countdownEl) countdownEl.checked = countdownOn;
+    const missEl = document.getElementById('setting-miss-penalty');
+    if (missEl) missEl.value = typeof data.miss_penalty === 'string' ? data.miss_penalty : 'none';
+    const failEl = document.getElementById('setting-fail-behavior');
+    if (failEl) failEl.value = typeof data.fail_behavior === 'string' ? data.fail_behavior : 'continue';
     // Native folder picker — only present when running inside feedBack-desktop.
     if (window.feedBackDesktop && typeof window.feedBackDesktop.pickDirectory === 'function') {
         document.getElementById('btn-pick-dlc')?.classList.remove('hidden');
@@ -5720,6 +5735,22 @@ window.setAutoplayExit = function (on) {
 Object.defineProperty(window.feedBack, 'autoplayExit', {
     get: _autoplayExitEnabled, configurable: true,
 });
+
+// "Countdown before song" (Gameplay tab). Mirrored to localStorage by
+// loadSettings so the song-start path can read it synchronously here — no
+// async /api/settings fetch on the play hot path. Defaults off.
+function _countdownBeforeSongEnabled() {
+    try { return localStorage.getItem('countdownBeforeSong') === '1'; } catch (_) { return false; }
+}
+// Settings checkbox setter (onchange="setCountdownBeforeSong(this.checked)").
+// Writes localStorage for the synchronous read above AND persists to the
+// server so it survives a reload / rides along in the settings export bundle.
+window.setCountdownBeforeSong = function (on) {
+    try { localStorage.setItem('countdownBeforeSong', on ? '1' : '0'); } catch (_) { /* private mode */ }
+    const el = document.getElementById('setting-countdown-before-song');
+    if (el && el.checked !== !!on) el.checked = !!on;
+    persistSetting('countdown_before_song', !!on);
+};
 // One-shot launcher override for the player's return destination.
 window.feedBack.setReturnScreen = function (id) {
     window.feedBack._nextReturnScreen = id || null;
@@ -5755,8 +5786,13 @@ window.feedBack.on('song:ready', () => {
     if (!_pendingAutostart) return;
     _pendingAutostart = false;
     if (!_autoplayExitEnabled() || isPlaying) return;
-    // Reuse the Play button's start path (handles HTML5 + _juceMode + count-in).
-    Promise.resolve(togglePlay()).catch((err) => console.warn('[app] autoplay failed:', err));
+    // "Countdown before song": play a 4-beat count-in, then start. Otherwise
+    // reuse the Play button's start path directly (handles HTML5 + _juceMode).
+    if (_countdownBeforeSongEnabled()) {
+        Promise.resolve(startSongCountIn()).catch((err) => console.warn('[app] song count-in failed:', err));
+    } else {
+        Promise.resolve(togglePlay()).catch((err) => console.warn('[app] autoplay failed:', err));
+    }
 });
 
 // Editor → Highway handoff (Editor ⇄ 3D Highway region round-trip). The
@@ -6290,16 +6326,42 @@ function _persistMastery(pct) {
     }, 300);
 }
 function setMastery(v) {
-    // Guard + clamp: v might be a slider string, a programmatic call
-    // from a plugin, or a restored settings value with a bad shape.
-    // Don't let NaN hit the label (would show "NaN%") or the POST.
+    _applyMastery(v);
+}
+// Shared mastery applier. Master difficulty has two controls that write the
+// same master_difficulty key: the player-popover slider (#mastery-slider) and
+// the Gameplay-tab "Note highway speed" slider (#setting-highway-speed). Route
+// both — and loadSettings' hydration — through here so their positions,
+// labels, and track fills stay in sync regardless of which the user touches,
+// plus the live highway re-filter and the debounced persist. All element reads
+// are null-guarded since either control may be absent (follower window, or the
+// settings markup not yet rendered).
+function _applyMastery(v, opts = {}) {
+    // Guard + clamp: v might be a slider string, a programmatic call from a
+    // plugin, or a restored settings value with a bad shape. Don't let NaN
+    // reach a label (would show "NaN%") or the POST.
     const parsed = parseInt(v, 10);
     if (!Number.isFinite(parsed)) return;
     const pct = Math.max(0, Math.min(100, parsed));
-    document.getElementById('mastery-label').textContent = pct + '%';
-    handleSliderInput(document.getElementById('mastery-slider'));
+    const popLabel = document.getElementById('mastery-label');
+    if (popLabel) popLabel.textContent = pct + '%';
+    const popSlider = document.getElementById('mastery-slider');
+    if (popSlider) {
+        if (String(popSlider.value) !== String(pct)) popSlider.value = pct;
+        handleSliderInput(popSlider);
+    }
+    const setSlider = document.getElementById('setting-highway-speed');
+    if (setSlider) {
+        if (String(setSlider.value) !== String(pct)) setSlider.value = pct;
+        handleSliderInput(setSlider);
+    }
+    // The Gameplay-tab label markup appends a literal "%" after this span
+    // (matching the av-offset "ms" pattern), so write the number alone here —
+    // unlike #mastery-label above, whose markup carries no trailing unit.
+    const setLabel = document.getElementById('setting-highway-speed-val');
+    if (setLabel) setLabel.textContent = pct;
     highway.setMastery(pct / 100);
-    _persistMastery(pct);
+    if (!opts.skipPersist) _persistMastery(pct);
 }
 // Reflect phrase-data availability on the slider after every `ready`.
 // The server omits the `phrases` message entirely for single-level
@@ -8834,6 +8896,49 @@ async function startCountIn(opts = {}) {
     }
 }
 
+// Start-of-song count-in: a 4-beat click before playback begins, gated by the
+// "Countdown before song" setting (Gameplay tab). Mirrors the loop count-in's
+// overlay + click + gen-token cancellation, but counts from the song's current
+// position (0 at song start) with no loop A/B rewind. startCountIn() is loop-
+// coupled (early-returns when loopA/loopB are null), so this is a sibling
+// rather than an overload. Hands off to togglePlay() once the count completes.
+async function startSongCountIn() {
+    if (_countingIn) return;
+    _countingIn = true;
+    // Snapshot the gen so a teardown (showScreen/playSong calls _cancelCountIn)
+    // bumps it and every delayed callback below bails.
+    const gen = _countInGen;
+    if (window._juceMode) {
+        await jucePlayer.pause().catch((err) => console.error('[app] jucePlayer.pause error in song count-in:', err));
+    } else {
+        audio.pause();
+    }
+    if (gen !== _countInGen) return; // teardown during pause
+    const startT = lastAudioTime || 0;
+    let bpm = highway.getBPM(startT);
+    // Pre-chart / malformed-tempo fallback: 4 beats at 120 BPM (500 ms each).
+    if (!Number.isFinite(bpm) || bpm <= 0) bpm = 120;
+    const beatInterval = 60 / bpm;
+    let count = 0;
+    function tick() {
+        if (gen !== _countInGen) return; // teardown mid-count
+        count++;
+        if (count > 4) {
+            hideCountOverlay();
+            _countingIn = false;
+            // Hand off to the normal play path — togglePlay() flips isPlaying,
+            // updates the button, and emits song:play/resume for plugins.
+            Promise.resolve(togglePlay()).catch((err) => console.warn('[app] play after count-in failed:', err));
+            return;
+        }
+        showCountOverlay(count);
+        playClick(count === 1);
+        _countInTimer = setTimeout(tick, beatInterval * 1000);
+    }
+    // First beat after a short lead-in, matching the loop count-in's 500 ms.
+    _countInTimer = setTimeout(tick, 500);
+}
+
 // Time display + highway sync
 let lastAudioTime = 0;
 setInterval(() => {
@@ -9042,6 +9147,33 @@ window.registerShortcut = (options) => {
     }
     
     panel.registerShortcut(options);
+};
+
+// Flat, read-only snapshot of every registered shortcut across all panels,
+// for the Settings → Keybinds reference tab. Dedupes by combo+scope (the same
+// shortcut can live in both the active panel and the default panel) and uses
+// the same modifier-prefix formatting as the shortcuts modal. Returns
+// [{ combo, description, scope }]; remapping is not supported, so this is
+// purely informational.
+window.getAllShortcuts = () => {
+    const fmt = (s) => {
+        const m = s.modifiers || {};
+        return (m.ctrl ? 'Ctrl+' : '') + (m.alt ? 'Alt+' : '')
+            + (m.shift ? 'Shift+' : '') + (m.meta ? 'Meta+' : '') + s.key;
+    };
+    const seen = new Set();
+    const out = [];
+    for (const [, panel] of _panels) {
+        if (!panel || !panel.shortcuts) continue;
+        for (const [, s] of panel.shortcuts) {
+            const combo = fmt(s);
+            const dedupe = combo + '|' + (s.scope || '');
+            if (seen.has(dedupe)) continue;
+            seen.add(dedupe);
+            out.push({ combo, description: s.description || '', scope: s.scope || 'global' });
+        }
+    }
+    return out;
 };
 
 window.unregisterShortcut = (key, scope) => {
@@ -9908,6 +10040,35 @@ async function _registerLegacyPluginUiContributions(plugin) {
     }
 }
 
+// Settings-tab containers that can host plugin <details> panels on the v3
+// tabbed settings page. '#plugin-settings' is the fallback bucket (and the
+// only container in the classic v2 settings page); the per-tab containers map
+// to a plugin manifest's settings.category. A plugin with no category, or one
+// whose tab container is absent (v2, or render not yet run), falls back to
+// '#plugin-settings'. Body divs injected per plugin use id
+// `plugin-settings-<pluginId>` and live INSIDE a <details>, so they are never
+// direct children of these containers — no id collision in the scans below.
+const _PLUGIN_SETTINGS_CONTAINER_IDS = [
+    'plugin-settings', 'plugin-settings-graphics',
+    'plugin-settings-mic', 'plugin-settings-progression',
+];
+function _pluginSettingsContainers() {
+    const out = [];
+    for (const id of _PLUGIN_SETTINGS_CONTAINER_IDS) {
+        const el = document.getElementById(id);
+        if (el) out.push(el);
+    }
+    return out;
+}
+function _pluginSettingsTarget(plugin) {
+    const cat = plugin && plugin.settings_category;
+    if (cat) {
+        const el = document.getElementById('plugin-settings-' + cat);
+        if (el) return el;
+    }
+    return document.getElementById('plugin-settings');
+}
+
 async function loadPlugins() {
     if (_loadPluginsInFlight) { console.log('[feedBack] loadPlugins: in-flight, skipping'); return null; }
     _loadPluginsInFlight = true;
@@ -9959,7 +10120,8 @@ async function loadPlugins() {
             console.warn('[feedBack] capability manifest registration failed:', e);
         }
 
-        const settingsContainer = document.getElementById('plugin-settings');
+        // Plugin settings panels mount into one of several tab containers —
+        // see _pluginSettingsContainers()/_pluginSettingsTarget() above.
 
         // Plugins whose screen.js has already been evaluated this session
         // at the current version AND whose DOM is still in the document.
@@ -10097,8 +10259,8 @@ async function loadPlugins() {
             }
         };
         const existingSettingsByPluginId = new Map();
-        if (settingsContainer) {
-            for (const child of settingsContainer.children) {
+        for (const container of _pluginSettingsContainers()) {
+            for (const child of container.children) {
                 const pid = child.dataset ? child.dataset.pluginId : null;
                 if (pid) existingSettingsByPluginId.set(pid, child);
             }
@@ -10127,8 +10289,8 @@ async function loadPlugins() {
         // so always rebuild them.
         navContainer.innerHTML = '';
         mobileNavContainer.innerHTML = '<span class="text-xs text-gray-600 uppercase tracking-wider">Plugins</span>';
-        if (settingsContainer) {
-            [...settingsContainer.children].forEach((el) => {
+        for (const container of _pluginSettingsContainers()) {
+            [...container.children].forEach((el) => {
                 const pid = el.dataset ? el.dataset.pluginId : null;
                 if (!pid || !alreadyHydrated.has(pid)) el.remove();
             });
@@ -10290,7 +10452,10 @@ async function loadPlugins() {
             // Skip for already-hydrated plugins — preserved details element
             // still carries listeners wired by its inline settings script
             // and by screen.js on first load.
-            if (plugin.has_settings && settingsContainer && !alreadyHydrated.has(plugin.id)) {
+            // Resolve which settings tab this plugin's panel mounts under
+            // (manifest settings.category), falling back to '#plugin-settings'.
+            const settingsTarget = plugin.has_settings ? _pluginSettingsTarget(plugin) : null;
+            if (plugin.has_settings && settingsTarget && !alreadyHydrated.has(plugin.id)) {
                 const details = document.createElement('details');
                 details.className = 'bg-dark-700/40 border border-gray-800 rounded-xl overflow-hidden group';
                 details.dataset.pluginId = plugin.id;
@@ -10382,7 +10547,7 @@ async function loadPlugins() {
                 body.className = 'px-4 py-4 border-t border-gray-800 space-y-4';
                 details.appendChild(body);
 
-                settingsContainer.appendChild(details);
+                settingsTarget.appendChild(details);
 
                 const settingsResp = await fetch(`/api/plugins/${plugin.id}/settings.html`);
                 body.innerHTML = await settingsResp.text();
