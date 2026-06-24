@@ -732,6 +732,56 @@ test('should support condition callbacks', async ({ page }) => {
     expect(result.value).toBe(' ');
   });
 
+  test('Space inside a modal dialog over the player reaches the modal, not play/pause (#593)', async ({ page }) => {
+    await openPlayerWithMockSong(page);
+
+    // A true modal dialog (role="dialog" aria-modal="true" / .feedBack-modal)
+    // layered over the player must trap interaction: Space activates the
+    // modal's focused control (native), it does NOT toggle playback behind it.
+    await page.evaluate(() => {
+      // @ts-ignore
+      window.__spacePlayCount = 0;
+      // @ts-ignore
+      window.__modalBtnClicked = 0;
+      // @ts-ignore
+      window.registerShortcut({
+        key: 'Space',
+        description: 'Play/Pause (test spy)',
+        scope: 'player',
+        // @ts-ignore
+        handler: () => { window.__spacePlayCount++; },
+      });
+      const modal = document.createElement('div');
+      modal.id = '__test-modal';
+      modal.className = 'feedBack-modal';
+      modal.setAttribute('role', 'dialog');
+      modal.setAttribute('aria-modal', 'true');
+      const btn = document.createElement('button');
+      btn.id = '__test-modal-btn';
+      btn.textContent = 'Close';
+      // @ts-ignore
+      btn.addEventListener('click', () => { window.__modalBtnClicked++; });
+      modal.appendChild(btn);
+      document.body.appendChild(modal);
+    });
+
+    await page.locator('#__test-modal-btn').focus();
+    await expect(page.locator('#__test-modal-btn')).toBeFocused();
+
+    await page.keyboard.press('Space');
+
+    const result = await page.evaluate(() => ({
+      // @ts-ignore
+      played: window.__spacePlayCount,
+      // @ts-ignore
+      clicked: window.__modalBtnClicked,
+    }));
+    // Playback is NOT toggled behind the modal…
+    expect(result.played).toBe(0);
+    // …and Space activated the modal's focused button natively.
+    expect(result.clicked).toBe(1);
+  });
+
   test('should warn on invalid scope', async ({ page }) => {
     const messages: string[] = [];
     page.on('console', msg => {
