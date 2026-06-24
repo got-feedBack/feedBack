@@ -445,6 +445,12 @@ function _shortcutDispatchBlocked(e) {
     // the popover's own keydown listener) — suppress the player-scope
     // "back to library" Esc so the user doesn't get bounced out of the player.
     if (e.key === 'Escape' && _sectionPracticePopoverOpen()) return true;
+    // Space on the player screen should always play/pause, even if focus is on a
+    // sidebar nav link, player rail button, popover control, or any other
+    // interactive element — the shortcut handler calls preventDefault so the
+    // focused element won't also activate. Only text inputs (already exempted
+    // above) should keep their native Space behavior in the player.
+    if (_isSpaceKey(e) && _getCurrentContext().isPlayer) return false;
     return _isInsideInteractiveControl(e.target);
 }
 
