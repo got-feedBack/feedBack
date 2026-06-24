@@ -28,12 +28,12 @@ this module is the SQLite + HTTP shell.
 
 import json
 import logging
+import os
 import sqlite3
 import threading
 import time
 from pathlib import Path
 
-from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
 _lock = threading.Lock()
@@ -160,6 +160,87 @@ def _enqueue_feat_sync(conn, feat_id, unlocked_at):
         (json.dumps(payload),),
     )
     return True
+
+
+# ── Wall sync — background drain worker (dead-letter, never drop) ─────────────
+# Idle unless a wall URL is configured. POSTs pending rows to the hosted
+# feedback-achievements service; the decision state machine
+# (engine.drain_decision) is pure + tested. A row leaves the queue only on a
+# server ack (or a user opt-out wiping it) — never silently dropped.
+
+_WALL_URL = (os.environ.get("FEEDBACK_ACHIEVEMENTS_WALL_URL")
+             or os.environ.get("SLOPSMITH_ACHIEVEMENTS_WALL_URL") or "").rstrip("/")
+_WALL_TOKEN = os.environ.get("FEEDBACK_ACHIEVEMENTS_CLIENT_TOKEN", "fb-wall-v1")
+_DRAIN_INTERVAL_S = int(os.environ.get("FEEDBACK_ACHIEVEMENTS_DRAIN_INTERVAL", "30"))
+_drain_started = False
+
+
+def _post_to_wall(kind, payload):
+    """POST one queued item; return the HTTP status code, or None on a network
+    error. Mirrors the lib/lyrics_transcribe outbound pattern (explicit timeout,
+    no raise on non-2xx — the caller's state machine decides)."""
+    import requests  # local import: only needed when a wall is configured
+
+    path = "/api/unlock" if kind == "unlock" else "/api/remove"
+    try:
+        resp = requests.post(
+            _WALL_URL + path, json=payload,
+            headers={"X-Client-Token": _WALL_TOKEN, "Content-Type": "application/json"},
+            timeout=10,
+        )
+        return resp.status_code
+    except requests.RequestException:
+        return None
+
+
+def _drain_once(post_fn=None):
+    """Process all pending queue rows once. ``post_fn(kind, payload) -> status``
+    is injectable for tests; defaults to the real wall POST."""
+    post_fn = post_fn or _post_to_wall
+    engine = _state["engine"]
+    with _lock:
+        conn = _conn()
+        try:
+            rows = conn.execute(
+                "SELECT id, kind, payload FROM sync_queue WHERE state='pending'").fetchall()
+        finally:
+            conn.close()
+    for row in rows:
+        try:
+            payload = json.loads(row["payload"]) if row["payload"] else {}
+        except ValueError:
+            payload = {}
+        status = post_fn(row["kind"], payload)
+        action = engine.drain_decision(status)
+        with _lock:
+            conn = _conn()
+            try:
+                if action == "ack":
+                    conn.execute("DELETE FROM sync_queue WHERE id=?", (row["id"],))
+                elif action == "dead":
+                    conn.execute("UPDATE sync_queue SET state='dead_letter' WHERE id=?", (row["id"],))
+                # 'retry' → leave it pending for the next pass
+                conn.commit()
+            finally:
+                conn.close()
+
+
+def _drain_loop():
+    while True:
+        try:
+            _drain_once()
+        except Exception as e:  # noqa: BLE001 — a worker crash must not kill the thread
+            _state["log"].warning("achievements wall drain error: %s", e)
+        time.sleep(_DRAIN_INTERVAL_S)
+
+
+def _maybe_start_drain():
+    global _drain_started
+    if _drain_started or not _WALL_URL:
+        return
+    _drain_started = True
+    threading.Thread(target=_drain_loop, name="ach-wall-drain", daemon=True).start()
+    _state["log"].info("achievements wall drain worker started → %s", _WALL_URL)
 
 
 def _read_counters(conn):
@@ -427,17 +508,24 @@ def setup(app, context):
         # Local removal works offline: drop the synced flag so nothing re-syncs,
         # and enqueue a wall removal (drained in PR3). The wall identity
         # (player_hash) is resolved server-side at drain time, not stored here.
+        _, player_hash = _identity()
         with _lock:
             conn = _conn()
             try:
                 conn.execute("UPDATE unlocks SET synced=0 WHERE cls='feat'")
-                conn.execute(
-                    "INSERT INTO sync_queue(kind, payload, state) VALUES ('remove', '{}', 'pending')")
+                # Enqueue a wall removal only when we have an identity to key it
+                # by; the drain worker (below) POSTs it. Idempotent server-side.
+                if player_hash:
+                    conn.execute(
+                        "INSERT INTO sync_queue(kind, payload, state) VALUES ('remove', ?, 'pending')",
+                        (json.dumps({"player_hash": player_hash}),),
+                    )
                 conn.commit()
                 return {"ok": True}
             finally:
                 conn.close()
 
+    _maybe_start_drain()
     log.info("achievements engine ready (%d feats, baseline v%s)",
              len(_state["feat_defs"]), str(_state["baseline"].get("version", "?")))
 
