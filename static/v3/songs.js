@@ -710,6 +710,10 @@
     async function loadTree() {
         const host = document.getElementById('v3-songs-tree');
         if (!host) return;
+        // Capture expanded groups BEFORE the "Loading…" wipe below, so a reload
+        // (e.g. toggling select mode) restores them instead of collapsing all.
+        const openArtists = new Set(
+            [...host.querySelectorAll('details[open]')].map((d) => d.getAttribute('data-artist')));
         host.innerHTML = '<p class="text-fb-textDim text-sm">Loading…</p>';
         // Page through ALL artists — the endpoint clamps size to 100, so a
         // single request would silently truncate libraries with >100 artists.
@@ -726,18 +730,33 @@
         if (!artists.length) { host.innerHTML = '<p class="text-fb-textDim text-sm">Nothing here.</p>'; return; }
         artists.forEach((a) => (a.albums || []).forEach((al) => (al.songs || []).forEach((s) => { state.songsById[cardKey(s)] = s; })));
         host.innerHTML = artists.map((a) =>
-            '<details class="border-b border-fb-border/40"><summary class="cursor-pointer py-2 text-fb-text flex items-center justify-between">' +
+            '<details data-artist="' + esc(a.name) + '"' + (openArtists.has(a.name) ? ' open' : '') + ' class="border-b border-fb-border/40"><summary class="cursor-pointer py-2 text-fb-text flex items-center justify-between">' +
             '<span>' + esc(a.name) + '</span><span class="text-xs text-fb-textDim">' + esc(a.song_count) + '</span></summary>' +
             '<div class="pl-3 pb-2 space-y-2">' + (a.albums || []).map((al) =>
                 '<div><div class="text-xs uppercase tracking-wider text-fb-textDim/70 mt-2 mb-1">' + esc(al.name || 'Unknown') + '</div>' +
-                (al.songs || []).map((s) => { const k = cardKey(s); const fl = fmtLabel(s); const chips = arrChipsHtml(s); return (
-                    '<div class="flex items-center gap-2 py-1 group" data-fn="' + esc(k) + '" data-library-song="' + esc(songId(s)) + '" data-library-provider="' + esc(state.provider) + '">' +
-                    '<img src="' + esc(artUrl(s)) + '" alt="" loading="lazy" decoding="async" class="w-8 h-8 rounded object-cover bg-fb-card cursor-pointer" data-v3-play onerror="this.style.visibility=\'hidden\'">' +
+                (al.songs || []).map((s) => {
+                    const k = cardKey(s); const fl = fmtLabel(s); const chips = arrChipsHtml(s); const sel = state.selected.has(k);
+                    // Display-only checkbox (pointer-events-none); the row's
+                    // capture-phase select handler (render()) owns the toggle.
+                    const checkbox = state.selectMode
+                        ? '<input type="checkbox" data-select class="shrink-0 w-5 h-5 accent-fb-primary pointer-events-none"' + (sel ? ' checked' : '') + '>'
+                        : '';
+                    return (
+                    '<div class="relative flex items-center gap-2 py-1 group" data-fn="' + esc(k) + '" data-library-song="' + esc(songId(s)) + '" data-library-provider="' + esc(state.provider) + '">' +
+                    checkbox +
+                    '<img src="' + esc(artUrl(s)) + '" alt="" loading="lazy" decoding="async" class="w-8 h-8 rounded object-cover bg-fb-card cursor-pointer' + (sel ? ' ring-2 ring-fb-primary' : '') + '" data-v3-play onerror="this.style.visibility=\'hidden\'">' +
                     '<span class="flex-1 min-w-0 cursor-pointer" data-v3-play><span class="block text-sm text-fb-text truncate">' + esc(s.title) + '</span></span>' +
                     (chips ? '<span class="hidden sm:flex items-center gap-1 shrink-0">' + chips + '</span>' : '') +
                     (fl ? '<span class="text-[9px] font-bold px-1 py-0.5 rounded shrink-0 ' + (fl === 'FEEDPAK' ? 'bg-fb-primary/20 text-fb-primary' : 'bg-fb-card text-fb-textDim') + '">' + fl + '</span>' : '') +
                     accuracyBadge(k, 'tree') +
-                    '<button data-fav class="opacity-0 group-hover:opacity-100 px-1 ' + (s.favorite ? 'text-fb-accent' : 'text-fb-textDim') + '">' + (s.favorite ? '♥' : '♡') + '</button>' +
+                    // Same fav / save-for-later / overflow-menu cluster as the grid
+                    // card. Always shown (like the arrangement chips), not hover-
+                    // revealed. wireCards() binds all three for any [data-fn].
+                    '<div class="flex items-center gap-0.5 shrink-0">' +
+                    '<button data-fav title="Favorite" aria-label="Favorite" aria-pressed="' + (s.favorite ? 'true' : 'false') + '" class="px-1 ' + (s.favorite ? 'text-fb-accent' : 'text-fb-textDim') + '">' + (s.favorite ? '♥' : '♡') + '</button>' +
+                    '<button data-save title="Save for later" aria-label="Save for later" class="px-1 text-fb-textDim hover:text-fb-text">🔖</button>' +
+                    '<button data-menu title="More" aria-label="More actions" class="px-1 text-fb-textDim hover:text-fb-text leading-none">⋮</button>' +
+                    '</div>' +
                     '</div>'); }).join('') + '</div>').join('') + '</div></details>').join('');
         wireCards(host);
     }
@@ -941,6 +960,21 @@
             if (!state.selectMode) return;
             const card = e.target.closest('[data-fn]');
             if (!card || !gridEl.contains(card)) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            toggleSelect(card.getAttribute('data-fn'), card);
+        }, true);
+
+        // Same bulletproof guard for the list/tree view. Without it, clicking a
+        // song row (or its arrangement chip) in select mode falls through to the
+        // per-card play handler and starts playback instead of selecting. The
+        // <summary> group headers sit OUTSIDE any [data-fn], so closest() is null
+        // for them and their native expand/collapse is left untouched.
+        const treeEl = byId('v3-songs-tree');
+        if (treeEl) treeEl.addEventListener('click', (e) => {
+            if (!state.selectMode) return;
+            const card = e.target.closest('[data-fn]');
+            if (!card || !treeEl.contains(card)) return;
             e.preventDefault();
             e.stopImmediatePropagation();
             toggleSelect(card.getAttribute('data-fn'), card);
