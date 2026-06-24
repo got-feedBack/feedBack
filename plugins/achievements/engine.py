@@ -155,6 +155,28 @@ def build_wall_payload(display_name, player_hash, achievement_id, unlocked_at):
     }
 
 
+def drain_decision(status):
+    """Dead-letter state machine for one wall-sync attempt (pure).
+
+    ``status`` is the HTTP status code, or ``None`` for a network error.
+    Returns one of:
+      'ack'   → server accepted; delete the row.
+      'retry' → keep it pending (network error, 429 backoff, or 5xx).
+      'dead'  → any other 4xx; move to dead_letter (diagnosable/replayable).
+    A row is NEVER silently dropped — it leaves the queue only on 'ack' (or a
+    user opt-out wiping it).
+    """
+    if status is None:
+        return "retry"
+    if 200 <= status < 300:
+        return "ack"
+    if status == 429:
+        return "retry"
+    if 400 <= status < 500:
+        return "dead"
+    return "retry"  # 5xx — transient server-side, try again later
+
+
 def diff_unlocks(prev_tiers, new_tiers):
     """Feat ids whose tier advanced (incl. first unlock).
 
