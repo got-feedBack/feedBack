@@ -332,7 +332,7 @@
 
         const stepDots = editing ? '' :
             '<div class="flex justify-center gap-1.5 mt-3" id="v3-ob-dots">' +
-            [1, 2, 3, 4].map((n) => '<span data-dot="' + n + '" class="w-2 h-2 rounded-full bg-fb-border"></span>').join('') +
+            [1, 2, 3, 4, 5].map((n) => '<span data-dot="' + n + '" class="w-2 h-2 rounded-full bg-fb-border"></span>').join('') +
             '</div>';
 
         const overlay = document.createElement('div');
@@ -365,13 +365,23 @@
             'class="flex-1 bg-gray-800/50 border border-gray-700 rounded-md px-3 py-2 text-sm text-fb-text outline-none focus:border-fb-primary focus:ring-1 focus:ring-fb-primary">' +
             '<button type="button" id="v3-ob-songdir-browse" class="hidden px-3 py-2 rounded-md text-sm bg-gray-800/50 border border-gray-700 text-fb-text hover:border-fb-primary whitespace-nowrap">Browse…</button>' +
             '</div></div>' +
-            // Step 3 — instrument paths (first-run only; tiles filled on entry).
+            // Step 3 — Achievements wall opt-in (first-run only; default OFF).
             '<div id="v3-ob-step3" class="hidden">' +
+            '<label class="block text-xs uppercase tracking-wider text-fb-textDim mb-2">Feats of Power</label>' +
+            '<p class="text-sm text-fb-textDim mb-3">As you practise you’ll earn rare <span class="text-fb-text">Feats of Power</span> — silly, bombastic activity trophies. Want to show them off on the public <span class="text-fb-text">Feats wall</span>?</p>' +
+            '<label class="flex items-start gap-3 cursor-pointer rounded-lg border border-fb-border/50 bg-fb-bg/40 p-3">' +
+            '<input type="checkbox" id="v3-ob-optin" class="mt-1 h-4 w-4 rounded border-gray-600 bg-gray-800 text-fb-primary focus:ring-fb-primary">' +
+            '<span class="text-sm text-fb-text">Share my Feats on the wall' +
+            '<span class="block text-xs text-fb-textDim mt-1">Publishes only your display name and the Feats you earn — never songs, skills, or scores. You can change this any time in Settings, and remove yourself with one click.</span></span>' +
+            '</label>' +
+            '<p class="text-xs text-fb-textDim mt-2">Leave it unticked to keep everything private. This is off by default.</p></div>' +
+            // Step 4 — instrument paths (first-run only; tiles filled on entry).
+            '<div id="v3-ob-step4" class="hidden">' +
             '<label class="block text-xs uppercase tracking-wider text-fb-textDim mb-2">Pick your instrument path(s)</label>' +
             '<p class="text-sm text-fb-textDim mb-3">Each path levels up by completing challenges — together they make up your Mastery Rank. You can add more later.</p>' +
             '<div id="v3-ob-paths" class="grid grid-cols-3 gap-2"></div></div>' +
-            // Step 4 — calibration offer (first-run only).
-            '<div id="v3-ob-step4" class="hidden">' +
+            // Step 5 — calibration offer (first-run only).
+            '<div id="v3-ob-step5" class="hidden">' +
             '<label class="block text-xs uppercase tracking-wider text-fb-textDim mb-2">Calibration challenge</label>' +
             '<p class="text-sm text-fb-textDim">Prove your setup: play the <span class="text-fb-text">fee[dB]ack Diagnostic</span> with note detection and finish at <span class="text-fb-text font-semibold">100% accuracy</span> to reach <span class="text-fb-text font-semibold">Mastery Rank 1</span>.</p>' +
             '<p class="text-sm text-fb-textDim mt-2">Not ready? Skip it and you’ll start at Rank 1 anyway — you can still play it later from the Progress screen.</p></div>' +
@@ -417,6 +427,9 @@
                 // for now" is available for users who'll set it later.
                 submit.disabled = !songDir.trim();
             } else if (step === 3) {
+                // Achievements opt-in — either choice is valid; always enabled.
+                submit.disabled = false;
+            } else if (step === 4) {
                 // ≥1 path required — unless none could be offered (offline /
                 // empty content), where blocking would strand onboarding.
                 submit.disabled = pathsAvailable && selectedPaths.length < 1;
@@ -428,7 +441,7 @@
         function setStep(n) {
             step = n;
             errEl.classList.add('hidden');
-            for (let i = 1; i <= 4; i++) {
+            for (let i = 1; i <= 5; i++) {
                 overlay.querySelector('#v3-ob-step' + i).classList.toggle('hidden', i !== n);
             }
             overlay.querySelectorAll('#v3-ob-dots [data-dot]').forEach((d) => {
@@ -439,13 +452,14 @@
             if (subtitle) {
                 subtitle.textContent = n === 1 ? 'Set up your player profile'
                     : n === 2 ? 'Point us at your songs'
-                    : n === 3 ? 'Choose your instrument paths'
+                    : n === 3 ? 'Feats of Power (optional)'
+                    : n === 4 ? 'Choose your instrument paths'
                     : 'One last thing — calibrate your setup';
             }
-            submit.textContent = n === 4 ? 'Play it now' : 'Next';
+            submit.textContent = n === 5 ? 'Play it now' : 'Next';
             // Skip is offered on the song-directory step (configure later) and
             // the calibration challenge.
-            skipBtn.classList.toggle('hidden', !(n === 2 || n === 4));
+            skipBtn.classList.toggle('hidden', !(n === 2 || n === 5));
             refreshSubmit();
         }
 
@@ -630,23 +644,42 @@
             }
             if (step === 2) {
                 // Save the song directory + kick a library scan, then continue
-                // to instrument paths. "Skip for now" leaves it unconfigured.
+                // to the achievements opt-in. "Skip for now" leaves it unconfigured.
                 submit.disabled = true;
                 try {
                     await saveSongDir();
                     setStep(3);
-                    loadPathTiles();
                 } catch (e) { showErr(e.message || 'Could not set the song directory.'); refreshSubmit(); }
                 return;
             }
             if (step === 3) {
+                // Persist the wall opt-in choice (default OFF) then continue to
+                // instrument paths. Best-effort — a failed write must not block
+                // onboarding; the user can still set it later in Settings.
+                submit.disabled = true;
+                try {
+                    const optEl = overlay.querySelector('#v3-ob-optin');
+                    const optedIn = !!(optEl && optEl.checked);
+                    try {
+                        await fetch('/api/settings', {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ achievements_enabled: optedIn }),
+                        });
+                        try { localStorage.setItem('achievementsEnabled', optedIn ? '1' : '0'); } catch (_) { /* noop */ }
+                    } catch (e) { /* best-effort — settable later */ }
+                    setStep(4);
+                    loadPathTiles();
+                } finally { refreshSubmit(); }
+                return;
+            }
+            if (step === 4) {
                 // Create the profile (onboarded=1) BEFORE the calibration choice
                 // so closing the overlay at the challenge can never lose the profile.
                 submit.disabled = true;
                 try {
                     _profile = await postProfile();
                     if (selectedPaths.length) {
-                        // A failed path save must NOT advance — step 3's skip
+                        // A failed path save must NOT advance — step 4's skip
                         // requires ≥1 selected path (spec invariant) and would
                         // otherwise leave a pathless rank-1 profile.
                         const res = await fetch('/api/progression/paths', {
@@ -662,11 +695,11 @@
                     // New step: input-device selection + calibration, between
                     // path selection and the note-detect calibration challenge.
                     await runInputSetup(selectedPaths);
-                    setStep(4);
+                    setStep(5);
                 } catch (e) { showErr(e.message || 'Could not save profile.'); refreshSubmit(); }
                 return;
             }
-            // Step 4 — "Play it now": leave calibration pending (it completes
+            // Step 5 — "Play it now": leave calibration pending (it completes
             // through the normal scored-stats path) and launch the diagnostic.
             const target = diagnosticFilename;
             await finish({ launchingSong: !!target });
@@ -675,13 +708,12 @@
 
         skipBtn.addEventListener('click', async () => {
             // Step 2 — skip the song directory (the user can set it later in
-            // Settings). Proceed straight to instrument paths.
+            // Settings). Proceed to the achievements opt-in.
             if (step === 2) {
                 setStep(3);
-                loadPathTiles();
                 return;
             }
-            // Step 4 — skip: Mastery Rank 1 immediately, calibration stays
+            // Step 5 — skip: Mastery Rank 1 immediately, calibration stays
             // replayable from the Progress screen.
             skipBtn.disabled = true;
             try {

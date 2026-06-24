@@ -40,6 +40,8 @@ _lock = threading.Lock()
 _state = {
     "db_path": None,
     "dir": None,            # plugin directory (for catalog JSON)
+    "config_dir": None,     # CONFIG_DIR (for reading the opt-in setting)
+    "meta_db": None,        # MetadataDB (for the profile identity: name + hash)
     "log": logging.getLogger("feedBack.plugin.achievements"),
     "engine": None,         # sibling engine.py module (pure helpers)
     "feat_defs": [],        # parsed feats.json -> list of feat defs
@@ -106,6 +108,58 @@ def _init_db():
 
 def _now_iso():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _opted_in():
+    """True only when the user has opted in (core setting ``achievements_enabled``).
+
+    Read straight from CONFIG_DIR/config.json — the single source of truth the
+    /api/settings endpoint persists. Default OFF on any read failure: nothing
+    leaves the device unless explicitly enabled.
+    """
+    try:
+        cfg_path = Path(_state["config_dir"]) / "config.json"
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        return bool(cfg.get("achievements_enabled") is True)
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def _identity():
+    """(display_name, player_hash) from the profile, or (None, None).
+
+    Reused as the wall identity (server.py's documented player_hash). Sync is
+    skipped entirely when either is missing.
+    """
+    db = _state["meta_db"]
+    if db is None or not hasattr(db, "get_profile"):
+        return None, None
+    try:
+        prof = db.get_profile() or {}
+        return (prof.get("display_name") or None), (prof.get("player_hash") or None)
+    except Exception:  # noqa: BLE001 — identity is best-effort; never break a request
+        return None, None
+
+
+def _enqueue_feat_sync(conn, feat_id, unlocked_at):
+    """Enqueue a wall-sync POST for a Feat unlock — opt-in gated, identity gated.
+
+    Builds the outbound payload through the SINGLE code-gated serializer
+    (engine.build_wall_payload, exactly four fields). Competency unlocks never
+    reach this path (integration law + data-minimization contract). The drain
+    worker (PR3) POSTs the queued rows; here we only persist intent.
+    """
+    if not _opted_in():
+        return False
+    display_name, player_hash = _identity()
+    if not display_name or not player_hash:
+        return False
+    payload = _state["engine"].build_wall_payload(display_name, player_hash, feat_id, unlocked_at)
+    conn.execute(
+        "INSERT INTO sync_queue(kind, payload, state) VALUES ('unlock', ?, 'pending')",
+        (json.dumps(payload),),
+    )
+    return True
 
 
 def _read_counters(conn):
@@ -218,6 +272,8 @@ def setup(app, context):
     base.mkdir(parents=True, exist_ok=True)
     _state["db_path"] = str(base / "achievements.db")
     _state["dir"] = str(Path(__file__).resolve().parent)
+    _state["config_dir"] = str(config_dir)
+    _state["meta_db"] = context.get("meta_db")
     _state["log"] = context.get("log") or _state["log"]
     # Pure helpers via the per-plugin sibling loader (constitution P-III), with a
     # plain-import fallback for pytest / standalone use.
@@ -277,7 +333,9 @@ def setup(app, context):
                 for fid in fresh:
                     f = _feat_by_id(fid) or {}
                     tier = new_tiers[fid]
-                    if _record_unlock(conn, fid, "feat", f.get("category"), f.get("sourceId"), tier, _now_iso()):
+                    at = _now_iso()
+                    if _record_unlock(conn, fid, "feat", f.get("category"), f.get("sourceId"), tier, at):
+                        _enqueue_feat_sync(conn, fid, at)
                         unlocked.append(_feat_payload(fid, f, tier))
                 conn.commit()
                 return {"ok": True, "unlocked": unlocked, "counters": new_counters}
@@ -287,11 +345,16 @@ def setup(app, context):
     @app.post("/api/plugins/achievements/report-unlock")
     def post_report_unlock(body: UnlockIn):
         cls = "feat" if body.kind == "feat" else "competency"
+        at = body.at or _now_iso()
         with _lock:
             conn = _conn()
             try:
                 changed = _record_unlock(
-                    conn, body.id, cls, body.category, body.sourceId, body.tier, body.at)
+                    conn, body.id, cls, body.category, body.sourceId, body.tier, at)
+                # Only Feats sync; competency never enqueues (integration law +
+                # data-minimization contract).
+                if changed and cls == "feat":
+                    _enqueue_feat_sync(conn, body.id, at)
                 conn.commit()
                 return {"ok": True, "changed": changed, "id": body.id, "tier": body.tier}
             finally:
