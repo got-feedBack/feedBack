@@ -135,6 +135,26 @@ def consecutive_run_length(dates):
     return best
 
 
+# ── Data-minimization contract (binding, code-enforced) ──────────────────────
+# The wall payload key-set is frozen here and asserted by a unit test. The
+# serializer below is the ONLY way outbound data is built — never dict(row) or
+# **model — so a stray field cannot leak. Adding a key makes the test go red.
+WALL_PAYLOAD_KEYS = ("display_name", "player_hash", "achievement_id", "unlocked_at")
+
+
+def build_wall_payload(display_name, player_hash, achievement_id, unlocked_at):
+    """Build the EXACT four-field wall payload. ``achievement_id`` must always be
+    a Feat id (the caller only ever invokes this for Feat unlocks — competency
+    never syncs). Explicit literal dict on purpose; do not refactor into a
+    row/model splat."""
+    return {
+        "display_name": display_name,
+        "player_hash": player_hash,
+        "achievement_id": achievement_id,
+        "unlocked_at": unlocked_at,
+    }
+
+
 def diff_unlocks(prev_tiers, new_tiers):
     """Feat ids whose tier advanced (incl. first unlock).
 

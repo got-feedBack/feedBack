@@ -3275,6 +3275,10 @@ async function loadSettings() {
     try { localStorage.setItem('countdownBeforeSong', countdownOn ? '1' : '0'); } catch (_) { /* private mode */ }
     const countdownEl = document.getElementById('setting-countdown-before-song');
     if (countdownEl) countdownEl.checked = countdownOn;
+    // Achievements epic: mirror the opt-in flag to localStorage so the
+    // onboarding card + the bundled achievements plugin can read the current
+    // state app-wide (the plugin's own settings panel still owns the toggle).
+    try { localStorage.setItem('achievementsEnabled', data.achievements_enabled === true ? '1' : '0'); } catch (_) { /* private mode */ }
     const missEl = document.getElementById('setting-miss-penalty');
     if (missEl) missEl.value = typeof data.miss_penalty === 'string' ? data.miss_penalty : 'none';
     const failEl = document.getElementById('setting-fail-behavior');
