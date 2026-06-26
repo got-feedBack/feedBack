@@ -29,11 +29,14 @@ A FeedBack (fee[dB]ack) plugin that organizes your `.sloppak` / `.feedpak` DLC s
 
 - **List & Grid views** — toggle between a compact list with thumbnails or a full album art card grid
 - **Album art** — pulls art automatically for every song in both views
-- **Drag-and-drop** — drag songs between folders with smooth auto-scroll; press `Esc` to cancel
-- **Move songs** — reassign any song to a different folder on the fly; press `Esc` to cancel
+- **One-click playback** — click any song to start playing immediately
 - **Sort options** — sort songs by title, artist, duration, year, tuning, or recently added with an asc/desc toggle
 - **Advanced filters** — filter by arrangements, stems, lyrics, and tuning with include and exclude support
-- **One-click playback** — click any song to start playing immediately
+- **Folder management** — create, rename, and delete folders without leaving the plugin
+- **Nested subfolders** — organize as deep as you want; create a subfolder inside any folder, expand/collapse a whole branch in one click
+- **Collapsible folders** — expand/collapse individual folders, plus Expand All / Collapse All
+- **Move songs** — reassign any song to a different folder on the fly; press `Esc` to cancel
+- **Drag-and-drop** — drag songs between folders (including into nested folders) with smooth auto-scroll; press `Esc` to cancel
 - **Fast with big libraries** — folder song lists render lazily and metadata is cached so reopening folders is instant
 
 ---
@@ -56,10 +59,16 @@ Folder Organizer ships bundled with FeedBack as a core plugin (`"bundled": true`
 | Open filters | Click the filter icon in the toolbar |
 | Filter by arrangement/stem | Open filters → click a pill to include; click `✕` to exclude |
 | Clear all filters | Open filters → click "Clear all" |
+| Create a folder | Click the folder+ icon in the toolbar |
+| Create a subfolder | Hover a folder header → click the new-subfolder icon |
+| Rename a folder | Hover the folder header → click the pencil icon |
+| Delete a folder | Hover the folder header → click the trash icon (songs move up to Unsorted) |
 | Move a song | Hover the song row → click the folder icon |
-| Drag a song to a folder | Click and hold a song → drag to a folder header or body |
+| Drag a song to a folder | Click and hold a song → drag to a folder header or body (nested folders work too) |
 | Cancel a drag | Press `Esc` while holding a song |
 | Cancel a move dialog | Press `Esc` in the move prompt |
+| Expand / collapse a folder | Click the folder header |
+| Expand / collapse all subfolders | Use the expand/collapse-children buttons on a folder with subfolders |
 
 ---
 
@@ -73,9 +82,6 @@ Folder Organizer started life as a standalone plugin with its own version line, 
 
 Re-wiring for core (previously shipped in the standalone plugin, not currently working):
 
-- [ ] Folder management — create, rename, and delete folders from the plugin
-- [ ] Nested subfolders — organize folders to any depth
-- [ ] Collapsible folders, including Expand All / Collapse All
 - [ ] Live search — filter by title, artist, album, or filename across all folders
 - [ ] Keyboard shortcut — press `/` to jump to the search box
 

@@ -886,7 +886,7 @@ function _songRow(song, folderName) {
     const moveBtn = document.createElement('button');
     moveBtn.className = 'shrink-0 p-1 rounded text-gray-600 hover:text-white hover:bg-dark-400 opacity-0 group-hover:opacity-100 transition-opacity';
     moveBtn.title = 'Move to folder…';
-    moveBtn.innerHTML = `<svg viewBox="0 0 20 20" fill="currentColor" class="w-3.5 h-3.5">
+    moveBtn.innerHTML = `<svg viewBox="0 0 20 20" fill="currentColor" style="width:14px;height:14px">
         <path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/>
         <path fill-rule="evenodd" d="M10 11a1 1 0 011 1v2h2a1 1 0 110 2h-2v2a1 1 0 11-2 0v-2H7a1 1 0 110-2h2v-2a1 1 0 011-1z" clip-rule="evenodd"/></svg>`;
 
@@ -1164,7 +1164,7 @@ function _folderSection(folder, depth) {
     const subBtn = document.createElement('button');
     subBtn.className = 'shrink-0 p-1 rounded text-gray-600 hover:text-white hover:bg-dark-400';
     subBtn.title = 'New subfolder';
-    subBtn.innerHTML = `<svg viewBox="0 0 20 20" fill="currentColor" class="w-3.5 h-3.5">
+    subBtn.innerHTML = `<svg viewBox="0 0 20 20" fill="currentColor" style="width:14px;height:14px">
         <path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/>
         <path fill-rule="evenodd" d="M10 11a1 1 0 011 1v2h2a1 1 0 110 2h-2v2a1 1 0 11-2 0v-2H7a1 1 0 110-2h2v-2a1 1 0 011-1z" clip-rule="evenodd"/>
     </svg>`;
@@ -1177,7 +1177,7 @@ function _folderSection(folder, depth) {
     const renameBtn = document.createElement('button');
     renameBtn.className = 'shrink-0 p-1 rounded text-gray-600 hover:text-white hover:bg-dark-400';
     renameBtn.title = 'Rename folder';
-    renameBtn.innerHTML = `<svg viewBox="0 0 20 20" fill="currentColor" class="w-3.5 h-3.5">
+    renameBtn.innerHTML = `<svg viewBox="0 0 20 20" fill="currentColor" style="width:14px;height:14px">
         <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z"/></svg>`;
     renameBtn.addEventListener('click', function (e) {
         e.stopPropagation();
@@ -1188,7 +1188,7 @@ function _folderSection(folder, depth) {
     const delBtn = document.createElement('button');
     delBtn.className = 'shrink-0 p-1 rounded text-gray-600 hover:text-red-400 hover:bg-dark-400';
     delBtn.title = 'Delete folder';
-    delBtn.innerHTML = `<svg viewBox="0 0 20 20" fill="currentColor" class="w-3.5 h-3.5">
+    delBtn.innerHTML = `<svg viewBox="0 0 20 20" fill="currentColor" style="width:14px;height:14px">
         <path fill-rule="evenodd"
               d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z"
               clip-rule="evenodd"/></svg>`;
@@ -1203,7 +1203,7 @@ function _folderSection(folder, depth) {
     if (folder.children && folder.children.length) {
         expandChildrenBtn.className = 'shrink-0 p-1 rounded text-gray-600 hover:text-white hover:bg-dark-400';
         expandChildrenBtn.title = 'Expand all subfolders';
-        expandChildrenBtn.innerHTML = `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" class="w-3.5 h-3.5">
+        expandChildrenBtn.innerHTML = `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" style="width:14px;height:14px">
             <path d="M5 8l5 5 5-5"/>
             <path d="M5 4l5 5 5-5" opacity=".4"/>
         </svg>`;
@@ -1217,7 +1217,7 @@ function _folderSection(folder, depth) {
 
         collapseChildrenBtn.className = 'shrink-0 p-1 rounded text-gray-600 hover:text-white hover:bg-dark-400';
         collapseChildrenBtn.title = 'Collapse all subfolders';
-        collapseChildrenBtn.innerHTML = `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" class="w-3.5 h-3.5">
+        collapseChildrenBtn.innerHTML = `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" style="width:14px;height:14px">
             <path d="M5 12l5-5 5 5"/>
             <path d="M5 16l5-5 5 5" opacity=".4"/>
         </svg>`;
@@ -1283,7 +1283,7 @@ function _folderSection(folder, depth) {
     // song list/grid — only populated for open folders to keep initial render fast
     const list = document.createElement('div');
     if (_view === 'grid') {
-        list.style.cssText = 'display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:12px; padding:8px 4px 8px 24px;';
+        list.style.cssText = 'display:grid; grid-template-columns:repeat(auto-fill,150px); justify-content:start; gap:12px; padding:8px 4px 8px 24px;';
     } else {
         list.className = 'ml-5 mt-0.5 space-y-0';
     }
@@ -1396,7 +1396,7 @@ function _unsortedSection(songs) {
 
     const list = document.createElement('div');
     if (_view === 'grid') {
-        list.style.cssText = 'display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:12px; padding:8px 4px 8px 24px;';
+        list.style.cssText = 'display:grid; grid-template-columns:repeat(auto-fill,150px); justify-content:start; gap:12px; padding:8px 4px 8px 24px;';
     } else {
         list.className = 'ml-5 mt-0.5 space-y-0';
     }
@@ -2129,7 +2129,7 @@ function _songRow(song, folderName) {
     var moveBtn = document.createElement('button');
     moveBtn.className = 'shrink-0 p-1 rounded text-gray-600 hover:text-white hover:bg-dark-400 opacity-0 group-hover:opacity-100 transition-opacity';
     moveBtn.title = 'Move to folder…';
-    moveBtn.innerHTML = '<svg viewBox="0 0 20 20" fill="currentColor" class="w-3.5 h-3.5"><path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/><path fill-rule="evenodd" d="M10 11a1 1 0 011 1v2h2a1 1 0 110 2h-2v2a1 1 0 11-2 0v-2H7a1 1 0 110-2h2v-2a1 1 0 011-1z" clip-rule="evenodd"/></svg>';
+    moveBtn.innerHTML = '<svg viewBox="0 0 20 20" fill="currentColor" style="width:14px;height:14px"><path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/><path fill-rule="evenodd" d="M10 11a1 1 0 011 1v2h2a1 1 0 110 2h-2v2a1 1 0 11-2 0v-2H7a1 1 0 110-2h2v-2a1 1 0 011-1z" clip-rule="evenodd"/></svg>';
     moveBtn.addEventListener('click', function (e) { e.stopPropagation(); _moveSong(song, folderName); });
 
     row.appendChild(thumb); row.appendChild(meta); row.appendChild(icon);
@@ -2188,19 +2188,19 @@ function _folderSection(folder, depth) {
     var subBtn = document.createElement('button');
     subBtn.className = 'shrink-0 p-1 rounded text-gray-600 hover:text-white hover:bg-dark-400';
     subBtn.title = 'New subfolder';
-    subBtn.innerHTML = '<svg viewBox="0 0 20 20" fill="currentColor" class="w-3.5 h-3.5"><path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/><path fill-rule="evenodd" d="M10 11a1 1 0 011 1v2h2a1 1 0 110 2h-2v2a1 1 0 11-2 0v-2H7a1 1 0 110-2h2v-2a1 1 0 011-1z" clip-rule="evenodd"/></svg>';
+    subBtn.innerHTML = '<svg viewBox="0 0 20 20" fill="currentColor" style="width:14px;height:14px"><path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/><path fill-rule="evenodd" d="M10 11a1 1 0 011 1v2h2a1 1 0 110 2h-2v2a1 1 0 11-2 0v-2H7a1 1 0 110-2h2v-2a1 1 0 011-1z" clip-rule="evenodd"/></svg>';
     subBtn.addEventListener('click', function (e) { e.stopPropagation(); _createFolder(folder.path); });
 
     var renameBtn = document.createElement('button');
     renameBtn.className = 'shrink-0 p-1 rounded text-gray-600 hover:text-white hover:bg-dark-400';
     renameBtn.title = 'Rename folder';
-    renameBtn.innerHTML = '<svg viewBox="0 0 20 20" fill="currentColor" class="w-3.5 h-3.5"><path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z"/></svg>';
+    renameBtn.innerHTML = '<svg viewBox="0 0 20 20" fill="currentColor" style="width:14px;height:14px"><path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z"/></svg>';
     renameBtn.addEventListener('click', function (e) { e.stopPropagation(); _renameFolder(folder.path); });
 
     var delBtn = document.createElement('button');
     delBtn.className = 'shrink-0 p-1 rounded text-gray-600 hover:text-red-400 hover:bg-dark-400';
     delBtn.title = 'Delete folder';
-    delBtn.innerHTML = '<svg viewBox="0 0 20 20" fill="currentColor" class="w-3.5 h-3.5"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>';
+    delBtn.innerHTML = '<svg viewBox="0 0 20 20" fill="currentColor" style="width:14px;height:14px"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>';
     delBtn.addEventListener('click', function (e) { e.stopPropagation(); _deleteFolder(folder.path, _countDeep(folder), _countFoldersDeep(folder)); });
 
     var expandChildBtn  = document.createElement('button');
@@ -2208,7 +2208,7 @@ function _folderSection(folder, depth) {
     if (folder.children && folder.children.length) {
         expandChildBtn.className = 'shrink-0 p-1 rounded text-gray-600 hover:text-white hover:bg-dark-400';
         expandChildBtn.title = 'Expand all subfolders';
-        expandChildBtn.innerHTML = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" class="w-3.5 h-3.5"><path d="M5 8l5 5 5-5"/><path d="M5 4l5 5 5-5" opacity=".4"/></svg>';
+        expandChildBtn.innerHTML = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" style="width:14px;height:14px"><path d="M5 8l5 5 5-5"/><path d="M5 4l5 5 5-5" opacity=".4"/></svg>';
         expandChildBtn.addEventListener('click', function (e) {
             e.stopPropagation();
             _openFolders.add(folder.path);
@@ -2217,7 +2217,7 @@ function _folderSection(folder, depth) {
         });
         collapseChildBtn.className = 'shrink-0 p-1 rounded text-gray-600 hover:text-white hover:bg-dark-400';
         collapseChildBtn.title = 'Collapse all subfolders';
-        collapseChildBtn.innerHTML = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" class="w-3.5 h-3.5"><path d="M5 12l5-5 5 5"/><path d="M5 16l5-5 5 5" opacity=".4"/></svg>';
+        collapseChildBtn.innerHTML = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" style="width:14px;height:14px"><path d="M5 12l5-5 5 5"/><path d="M5 16l5-5 5 5" opacity=".4"/></svg>';
         collapseChildBtn.addEventListener('click', function (e) {
             e.stopPropagation();
             (folder.children || []).forEach(function (c) { _openFolders.delete(c.path); });
@@ -2263,7 +2263,7 @@ function _folderSection(folder, depth) {
 
     var list = document.createElement('div');
     if (_view === 'grid') {
-        list.style.cssText = 'display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:12px; padding:8px 4px 8px 24px;';
+        list.style.cssText = 'display:grid; grid-template-columns:repeat(auto-fill,150px); justify-content:start; gap:12px; padding:8px 4px 8px 24px;';
     } else {
         list.className = 'ml-5 mt-0.5 space-y-0';
     }
@@ -2352,7 +2352,7 @@ function _unsortedSection(songs) {
 
     var list = document.createElement('div');
     if (_view === 'grid') {
-        list.style.cssText = 'display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:12px; padding:8px 4px 8px 24px;';
+        list.style.cssText = 'display:grid; grid-template-columns:repeat(auto-fill,150px); justify-content:start; gap:12px; padding:8px 4px 8px 24px;';
     } else {
         list.className = 'ml-5 mt-0.5 space-y-0';
     }
