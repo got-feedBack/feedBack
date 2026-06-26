@@ -7225,7 +7225,7 @@
                         color: '#66c7ff',
                     });
                 }
-                return { s: note.s, f: note.f, noteTime: d.noteTime, labels };
+                return { s: note.s, f: note.f, noteTime: d.noteTime, labels, timingState: d.timingState || null };
             };
             const _ndPushMark = (arr, d) => {
                 const mark = _ndNormalizeMark(d);
@@ -7833,6 +7833,14 @@
             if (!ambLight || !dirLight) return;
             ambLight.intensity = _cinematic ? 0.35 : 0.85;
             dirLight.intensity = _cinematic ? 1.15 : 0.8;
+        }
+        // #5 early/late: tint the hit feedback by timing — on-time green, early cyan,
+        // late amber. Falls back to green when timing is unknown (pure-provider path).
+        function _timingHex(ts) {
+            if (!_timingFx || !ts || ts === 'OK') return 0x22ff88;
+            if (ts === 'EARLY') return 0x35d6ff;
+            if (ts === 'LATE')  return 0xffb84d;
+            return 0x22ff88;
         }
         function _sparkBurst(x, y, z, hex, count) {
             if (!_sparkPts || count <= 0) return;
@@ -12891,7 +12899,7 @@
                         _ndFaceMat = mHitBrightArrays[s] ?? null;
                         if (_vAlpha > _ndHitFlash) _ndHitFlash = _vAlpha;
                         _hitPunch = 1 + 0.22 * _hitFx * _vAlpha;   // #3 scale-punch (biggest at strike, eases)
-                        if (_verdictMarks) _ndLabels.push({ x, y: y + NH * 1.7, z: noteZ + 0.02, labels: [{ text: '✓', color: '#22ff88' }] });  // #6
+                        if (_verdictMarks) { const _tc = _timingHex(_ndMatchedMark && _ndMatchedMark.timingState); _ndLabels.push({ x, y: y + NH * 1.7, z: noteZ + 0.02, labels: [{ text: '✓', color: '#' + _tc.toString(16).padStart(6, '0') }] }); }  // #6 + #5
                         if (_hitFx > 0 && _vAlpha > 0.5) {
                             const _spk = s + '|' + n.f + '|' + n.t.toFixed(2);
                             if (!(_sparkSeen.get(_spk) > now)) {
@@ -12899,7 +12907,7 @@
                                 if (_sparkSeen.size > 600) _sparkSeen.clear();
                                 _streakHits++;
                                 const _heatMul = _streakFx ? (1 + 0.85 * _streakHeat) : 1;   // #7 escalate
-                                _sparkBurst(x, y, noteZ, 0x22ff88, Math.round((7 + 13 * _hitFx) * _heatMul));
+                                _sparkBurst(x, y, noteZ, _timingHex(_ndMatchedMark && _ndMatchedMark.timingState), Math.round((7 + 13 * _hitFx) * _heatMul));
                             }
                         }
                     }
