@@ -4,9 +4,9 @@
 (function () {
 'use strict';
 
-const PLUGIN_ID  = 'folder_organizer';
+const PLUGIN_ID  = 'folder_library';
 const SCREEN_ID  = 'plugin-' + PLUGIN_ID;
-const API        = '/api/plugin/folder_organizer';
+const API        = '/api/plugin/folder_library';
 
 // ── Safe localStorage helpers ─────────────────────────────────────────
 function _store(key, val) {
@@ -1703,7 +1703,7 @@ if (document.readyState === 'loading') {
 
 })();
 
-/* Folder Organizer — Library Integration (window.folderOrganizerLibrary)
+/* Folder Library — Library Integration (window.folderLibrary)
  * Renders the folder tree into #lib-folder-tree and injects toolbar
  * controls into #lib-folder-controls when the user activates Folder view
  * in the main library. All logic is isolated in this IIFE so it never
@@ -1712,7 +1712,7 @@ if (document.readyState === 'loading') {
 (function () {
 'use strict';
 
-const _LAPI = '/api/plugin/folder_organizer';
+const _LAPI = '/api/plugin/folder_library';
 const _PFX  = 'fo:lib:';
 
 // ── Safe localStorage ─────────────────────────────────────────────────
@@ -2622,14 +2622,14 @@ async function _load(force) {
 }
 
 // ── Public interface ──────────────────────────────────────────────────
-window.folderOrganizerLibrary = {
+window.folderLibrary = {
     load:   function (force) { return _load(force); },
     unload: function ()      { _unload(); },
 };
 
 // Auto-load if folder view was already active when this script was injected.
 // On a hard refresh, setLibView() runs before plugins load, so
-// window.folderOrganizerLibrary didn't exist yet and loadLibrary() silently
+// window.folderLibrary didn't exist yet and loadLibrary() silently
 // skipped. Now that we're defined, kick off the load if #lib-folder-tree is
 // currently visible.
 (function () {

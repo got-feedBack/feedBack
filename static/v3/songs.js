@@ -861,11 +861,11 @@
         { const _fc = document.getElementById('lib-folder-controls'); if (_fc) _fc.style.display = state.view === 'folder' ? 'flex' : 'none'; }
         if (state.view === 'folder') {
             _applyMainScrollTop(0);
-            if (window.folderOrganizerLibrary && window._foLibVer === 9) return window.folderOrganizerLibrary.load();
-            delete window.folderOrganizerLibrary;
+            if (window.folderLibrary && window._flLibVer === 9) return window.folderLibrary.load();
+            delete window.folderLibrary;
             const s = document.createElement('script');
-            s.src = '/api/plugins/folder_organizer/screen.js?v=9';
-            s.onload = () => { window._foLibVer = 9; window.folderOrganizerLibrary?.load(); };
+            s.src = '/api/plugins/folder_library/screen.js?v=9';
+            s.onload = () => { window._flLibVer = 9; window.folderLibrary?.load(); };
             document.head.appendChild(s);
             return;
         }
@@ -1000,12 +1000,12 @@
             byId('v3-songs-grid-btn').className = 'px-3 py-2 text-sm ' + (v === 'grid' ? 'bg-fb-primary text-white' : 'text-fb-textDim');
             byId('v3-songs-tree-btn').className = 'px-3 py-2 text-sm ' + (v === 'tree' ? 'bg-fb-primary text-white' : 'text-fb-textDim');
             byId('v3-songs-folder-btn').className = 'px-3 py-2 text-sm ' + (v === 'folder' ? 'bg-fb-primary text-white' : 'text-fb-textDim');
-            if (v === 'folder' && (!window.folderOrganizerLibrary || window._foLibVer !== 9)) {
-                delete window.folderOrganizerLibrary;
+            if (v === 'folder' && (!window.folderLibrary || window._flLibVer !== 9)) {
+                delete window.folderLibrary;
                 await new Promise((resolve, reject) => {
                     const s = document.createElement('script');
-                    s.src = '/api/plugins/folder_organizer/screen.js?v=9';
-                    s.onload = () => { window._foLibVer = 9; resolve(); };
+                    s.src = '/api/plugins/folder_library/screen.js?v=9';
+                    s.onload = () => { window._flLibVer = 9; resolve(); };
                     s.onerror = reject;
                     document.head.appendChild(s);
                 });

@@ -1,4 +1,4 @@
-# Folder Organizer — AI Agent Guide
+# Folder Library — AI Agent Guide
 
 A FeedBack (fee[dB]ack) plugin that adds a **Folders** nav screen showing your `.sloppak` / `.feedpak` DLC songs grouped by the folder tree on disk. Create, rename, and delete folders (including **nested subfolders**) directly in the UI, move songs by drag-and-drop, and browse with live search, sort, and metadata filters.
 
@@ -20,7 +20,7 @@ README.md       User-facing docs
 
 This plugin follows the standard FeedBack plugin pattern (see the repo-root `CLAUDE.md` for the full plugin system reference).
 
-- **Backend** (`routes.py`) — registers routes under `GET/POST /api/plugin/folder_organizer/`. Uses `context["get_dlc_dir"]()`, `context["extract_meta"]()`, and `context["log"]`. Scans `<dlc>/sloppak/` if it exists, otherwise `<dlc>/`. Recursively walks the tree and handles create/rename/delete folder and move-song operations on slash-separated folder paths.
+- **Backend** (`routes.py`) — registers routes under `GET/POST /api/plugin/folder_library/`. Uses `context["get_dlc_dir"]()`, `context["extract_meta"]()`, and `context["log"]`. Scans `<dlc>/sloppak/` if it exists, otherwise `<dlc>/`. Recursively walks the tree and handles create/rename/delete folder and move-song operations on slash-separated folder paths.
 - **Frontend** (`screen.js`) — plain vanilla JS in an IIFE. Fetches the tree from the backend on screen load, recursively renders collapsible folder sections (any depth) and song rows or cards (grid view). Uses `window.feedBack.on('screen:changed', ...)` (via the `window.slopsmith` alias) to trigger load when the user navigates here. Calls `window.playSong(filename)` on song click with the full relative path from the DLC root.
 - **No dependencies** — no npm, no build step. Tailwind utility classes available globally from the host; the plugin uses only core-guaranteed utilities and inline styles, so it ships **no** `styles` manifest key.
 
@@ -29,11 +29,11 @@ This plugin follows the standard FeedBack plugin pattern (see the repo-root `CLA
 These are non-obvious behaviours of the FeedBack desktop app (Electron) that took significant debugging to discover. They still apply unchanged.
 
 ### 1. Do NOT put an outer wrapper div in screen.html
-The host automatically creates `<div id="plugin-folder_organizer" class="screen">` and injects `screen.html` content inside it. If you add your own outer div with `class="screen"`, you get a nested screen element which gets `display:none` applied, hiding all content.
+The host automatically creates `<div id="plugin-folder_library" class="screen">` and injects `screen.html` content inside it. If you add your own outer div with `class="screen"`, you get a nested screen element which gets `display:none` applied, hiding all content.
 
 **Wrong:**
 ```html
-<div id="plugin-folder_organizer" class="screen">
+<div id="plugin-folder_library" class="screen">
   <div>toolbar</div>
   <div>content</div>
 </div>
@@ -68,10 +68,10 @@ When navigating to a plugin screen via the Plugins dropdown, the dropdown stays 
 Routes that receive a JSON body must import `Request` from fastapi explicitly and use `async def route(request: Request)` with `body = await request.json()`. Missing this import crashes the server on plugin load.
 
 ### 9. Plugin id must be consistent everywhere
-The plugin id (`folder_organizer`) must match in:
+The plugin id (`folder_library`) must match in:
 - `plugin.json` → `"id"` and `"nav.screen"`
-- `screen.js` → `PLUGIN_ID` constant and `API` constant (`/api/plugin/folder_organizer`)
-- `routes.py` → `APIRouter(prefix="/api/plugin/folder_organizer")`
+- `screen.js` → `PLUGIN_ID` constant and `API` constant (`/api/plugin/folder_library`)
+- `routes.py` → `APIRouter(prefix="/api/plugin/folder_library")`
 
 A mismatch in any of these causes silent failures (blank screen, 404 API calls).
 
@@ -95,11 +95,11 @@ The plugin treats both `.sloppak` and `.feedpak` as songs (`_is_song()` in `rout
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/plugin/folder_organizer/tree` | Returns the folder tree. Accepts optional filter query params (below) applied server-side. |
-| POST | `/api/plugin/folder_organizer/folder/create` | Body: `{name, parent?}` — creates a subfolder; `parent` (slash path) nests it inside an existing folder, omit/empty for top level |
-| POST | `/api/plugin/folder_organizer/folder/rename` | Body: `{old, new}` — `old` is a slash path, `new` is a bare name; renames within the same parent |
-| POST | `/api/plugin/folder_organizer/folder/delete` | Body: `{name}` (slash path) — moves all songs at any depth to the scan root, then removes the folder |
-| POST | `/api/plugin/folder_organizer/song/move` | Body: `{filename, folder}` — moves a song to `folder` (slash path; empty = scan root / "Unsorted") |
+| GET | `/api/plugin/folder_library/tree` | Returns the folder tree. Accepts optional filter query params (below) applied server-side. |
+| POST | `/api/plugin/folder_library/folder/create` | Body: `{name, parent?}` — creates a subfolder; `parent` (slash path) nests it inside an existing folder, omit/empty for top level |
+| POST | `/api/plugin/folder_library/folder/rename` | Body: `{old, new}` — `old` is a slash path, `new` is a bare name; renames within the same parent |
+| POST | `/api/plugin/folder_library/folder/delete` | Body: `{name}` (slash path) — moves all songs at any depth to the scan root, then removes the folder |
+| POST | `/api/plugin/folder_library/song/move` | Body: `{filename, folder}` — moves a song to `folder` (slash path; empty = scan root / "Unsorted") |
 
 ### `/tree` filter query params
 
@@ -197,7 +197,7 @@ To add more grouping options (by artist, album, etc.), build an alternative proj
 
 ## Library Provider Scaffolding (not yet wired)
 
-`routes.py` defines a `FolderLibraryProvider` class implementing the source-aware library provider contract (`query_page`, `query_artists`, `query_stats`, `tuning_names`) that maps top-level folder → "artist" and subfolder → "album". **It is not registered in `setup()` today** — `setup()` only mounts the `/api/plugin/folder_organizer` router. If you want the Folders source to appear in the host's main library browser, call `context["register_library_provider"](FolderLibraryProvider(...))` in `setup()` and `unregister_library_provider("folder_organizer")` on teardown. Until then it's inert scaffolding kept in sync with the scan logic.
+`routes.py` defines a `FolderLibraryProvider` class implementing the source-aware library provider contract (`query_page`, `query_artists`, `query_stats`, `tuning_names`) that maps top-level folder → "artist" and subfolder → "album". **It is not registered in `setup()` today** — `setup()` only mounts the `/api/plugin/folder_library` router. If you want the Folders source to appear in the host's main library browser, call `context["register_library_provider"](FolderLibraryProvider(...))` in `setup()` and `unregister_library_provider("folder_library")` on teardown. Until then it's inert scaffolding kept in sync with the scan logic.
 
 ## View Modes (List / Grid)
 

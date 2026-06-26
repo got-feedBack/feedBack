@@ -1769,7 +1769,7 @@ function setLibView(view) {
     const folderCtrlEl = document.getElementById('lib-folder-controls');
     if (folderCtrlEl) folderCtrlEl.classList.toggle('hidden', view !== 'folder');
     document.getElementById('view-folder-btn').className = `px-3 py-2.5 text-sm transition ${view === 'folder' ? 'text-accent-light' : 'text-gray-600 hover:text-gray-400'}`;
-    if (libView === 'folder' && view !== 'folder') window.folderOrganizerLibrary?.unload?.();
+    if (libView === 'folder' && view !== 'folder') window.folderLibrary?.unload?.();
     if (view !== 'grid') stopInfiniteScroll();
     _libEpoch++;
     // View toggle changes which container `_libNavItems` resolves
@@ -1785,21 +1785,21 @@ async function loadLibrary(page) {
     } else if (libView === 'tree') {
         await loadTreeView();
     } else if (libView === 'folder') {
-        if (window.folderOrganizerLibrary) await window.folderOrganizerLibrary.load();
+        if (window.folderLibrary) await window.folderLibrary.load();
     }
     // v3 Songs page manages its own view state independently of libView — if
     // lib-folder-tree is visible, the folder library must also react to filter changes.
-    if (libView !== 'folder' && window.folderOrganizerLibrary) {
+    if (libView !== 'folder' && window.folderLibrary) {
         const treeEl = document.getElementById('lib-folder-tree');
         if (treeEl && !treeEl.classList.contains('hidden')) {
-            await window.folderOrganizerLibrary.load();
+            await window.folderLibrary.load();
         }
     }
 }
 
-// ── Folder Organizer: filter bridge ─────────────────────────────────────────
+// ── Folder Library: filter bridge ─────────────────────────────────────────
 // Serialises the active lib filter state as URL params so the plugin can pass
-// them to /api/plugin/folder_organizer/tree — the same pattern grid and tree
+// them to /api/plugin/folder_library/tree — the same pattern grid and tree
 // views use when sending filter params to their own backend endpoints.
 window.slopsmithLibFilterParams = function() {
     var p = new URLSearchParams();

@@ -17,7 +17,7 @@ class FolderLibraryProvider:
     Root-level songs (no folder) land under the "(Unsorted)" artist.
     """
 
-    id = "folder_organizer"
+    id = "folder_library"
     label = "Folders"
     kind = "local"
     capabilities = ("library.read",)
@@ -50,7 +50,7 @@ class FolderLibraryProvider:
                 elif entry.is_dir():
                     self._scan_into(entry, root, dlc, songs)
         except PermissionError:
-            self._log.warning("folder_organizer provider: permission denied: %s", path)
+            self._log.warning("folder_library provider: permission denied: %s", path)
 
     def _song_dict(self, p, root, dlc):
         """Build a library-compatible song dict; artist = top folder, album = subfolder."""
@@ -152,7 +152,7 @@ class FolderLibraryProvider:
                             d["has_lyrics"] = bool(_val)
                         break
         except Exception as exc:
-            self._log.debug("folder_organizer provider: meta failed for %s: %s", p.name, exc)
+            self._log.debug("folder_library provider: meta failed for %s: %s", p.name, exc)
 
         return d
 
@@ -320,7 +320,7 @@ class FolderLibraryProvider:
 
 def setup(app, context):
     log = context["log"]
-    router = APIRouter(prefix="/api/plugin/folder_organizer")
+    router = APIRouter(prefix="/api/plugin/folder_library")
 
     # ── Two-level cache ────────────────────────────────────────────────
     # _meta_cache  — expensive extract_meta() results keyed by abs path

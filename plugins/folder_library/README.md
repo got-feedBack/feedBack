@@ -1,4 +1,4 @@
-# Folder Organizer — FeedBack Plugin
+# Folder Library — FeedBack Plugin
 
 ![Core plugin](https://img.shields.io/badge/fee%5BdB%5Dack-core%20plugin-blue)
 ![Platform](https://img.shields.io/badge/platform-fee%5BdB%5Dack-darkblue)
@@ -23,7 +23,7 @@ A FeedBack (fee[dB]ack) plugin that organizes your `.sloppak` / `.feedpak` DLC s
 
 ---
 
-> **Status — migrating to core.** Folder Organizer is being reworked from a standalone plugin into a bundled core plugin, and several previously-shipped features are not currently wired up in core (see the Roadmap). The list below reflects what works today; if something here is wrong, it's because this rework is still in progress.
+> **Status — migrating to core.** Folder Library is being reworked from a standalone plugin into a bundled core plugin, and several previously-shipped features are not currently wired up in core (see the Roadmap). The list below reflects what works today; if something here is wrong, it's because this rework is still in progress.
 
 ## Features
 
@@ -43,7 +43,7 @@ A FeedBack (fee[dB]ack) plugin that organizes your `.sloppak` / `.feedpak` DLC s
 
 ## Installation
 
-Folder Organizer ships bundled with FeedBack as a core plugin (`"bundled": true`), so there's nothing to install — the **Folders** screen appears in the navbar under **Plugins** automatically.
+Folder Library ships bundled with FeedBack as a core plugin (`"bundled": true`), so there's nothing to install — the **Folders** screen appears in the navbar under **Plugins** automatically.
 
 ---
 
@@ -74,7 +74,7 @@ Folder Organizer ships bundled with FeedBack as a core plugin (`"bundled": true`
 
 ## Changelog
 
-Folder Organizer started life as a standalone plugin with its own version line, but it's now a **bundled core plugin** that ships with FeedBack. Its changes are tracked alongside the app in the repo-root [CHANGELOG.md](../../CHANGELOG.md), and it versions with the app rather than on its own. The **Features** section above reflects what's in the current build.
+Folder Library started life as a standalone plugin with its own version line, but it's now a **bundled core plugin** that ships with FeedBack. Its changes are tracked alongside the app in the repo-root [CHANGELOG.md](../../CHANGELOG.md), and it versions with the app rather than on its own. The **Features** section above reflects what's in the current build.
 
 ---
 
