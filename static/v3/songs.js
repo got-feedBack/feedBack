@@ -216,6 +216,8 @@
         const treeBtn = document.getElementById('v3-songs-tree-btn');
         if (gridBtn) gridBtn.className = 'px-3 py-2 text-sm ' + (state.view === 'grid' ? 'bg-fb-primary text-white' : 'text-fb-textDim');
         if (treeBtn) treeBtn.className = 'px-3 py-2 text-sm ' + (state.view === 'tree' ? 'bg-fb-primary text-white' : 'text-fb-textDim');
+        const folderBtn = document.getElementById('v3-songs-folder-btn');
+        if (folderBtn) folderBtn.className = 'px-3 py-2 text-sm ' + (state.view === 'folder' ? 'bg-fb-primary text-white' : 'text-fb-textDim');
         updateFilterBadge();
     }
 
@@ -853,9 +855,21 @@
         // Keep a handle on the load so callers (notably the scroll restore on
         // screen re-entry) can await page-0 actually landing before paging
         // deeper. The visibility/scroll resets below stay synchronous.
-        const loaded = state.view === 'grid' ? loadGrid(true) : loadTree();
         document.getElementById('v3-songs-grid')?.classList.toggle('hidden', state.view !== 'grid');
         document.getElementById('v3-songs-tree')?.classList.toggle('hidden', state.view !== 'tree');
+        document.getElementById('lib-folder-tree')?.classList.toggle('hidden', state.view !== 'folder');
+        { const _fc = document.getElementById('lib-folder-controls'); if (_fc) _fc.style.display = state.view === 'folder' ? 'flex' : 'none'; }
+        if (state.view === 'folder') {
+            _applyMainScrollTop(0);
+            if (window.folderOrganizerLibrary && window._foLibVer === 6) return window.folderOrganizerLibrary.load();
+            delete window.folderOrganizerLibrary;
+            const s = document.createElement('script');
+            s.src = '/api/plugins/folder_organizer/screen.js?v=6';
+            s.onload = () => { window._foLibVer = 6; window.folderOrganizerLibrary?.load(); };
+            document.head.appendChild(s);
+            return;
+        }
+        const loaded = state.view === 'grid' ? loadGrid(true) : loadTree();
         _applyMainScrollTop(0);
         return loaded;
     }
@@ -904,7 +918,7 @@
             (providers.length > 1 ? '<select id="v3-songs-provider" class="' + ctrl + '">' + provOpts + '</select>' : '') +
             '<select id="v3-songs-artist" class="' + ctrl + ' max-w-[11rem]" aria-label="Artist">' + artistSelectHtml() + '</select>' +
             '<select id="v3-songs-album" class="' + ctrl + ' max-w-[11rem]" aria-label="Album"' + (state.artist ? '' : ' disabled') + '>' + albumSelectHtml() + '</select>' +
-            '<div class="flex rounded-md overflow-hidden border border-gray-700"><button id="v3-songs-grid-btn" class="px-3 py-2 text-sm">▦</button><button id="v3-songs-tree-btn" class="px-3 py-2 text-sm">≣</button></div>' +
+            '<div class="flex rounded-md overflow-hidden border border-gray-700"><button id="v3-songs-grid-btn" class="px-3 py-2 text-sm">▦</button><button id="v3-songs-tree-btn" class="px-3 py-2 text-sm">≣</button><button id="v3-songs-folder-btn" class="px-3 py-2 text-sm" style="display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;width:2.25rem"><svg fill="currentColor" viewBox="0 0 16 16" style="width:12px;height:12px;flex-shrink:0"><path d="M1 3.5A1.5 1.5 0 012.5 2h3.086a1.5 1.5 0 011.06.44l.915.914H13.5A1.5 1.5 0 0115 4.914V12.5a1.5 1.5 0 01-1.5 1.5h-11A1.5 1.5 0 011 12.5v-9z"/></svg></button></div>' +
             '<select id="v3-songs-sort" class="' + ctrl + '">' + opt(SORTS, state.sort) + '</select>' +
             '<select id="v3-songs-format" class="' + ctrl + '">' + opt(FORMATS, state.format) + '</select>' +
             '<button id="v3-songs-filters" class="relative ' + ctrl + ' flex items-center gap-2">Filters<span id="v3-songs-filter-count" class="hidden bg-fb-primary text-white text-xs rounded-full px-1.5">0</span></button>' +
@@ -913,6 +927,8 @@
             '</div></div></div>' +
             '<div id="v3-songs-grid" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4"></div>' +
             '<div id="v3-songs-tree" class="hidden"></div>' +
+            '<div id="lib-folder-controls" style="display:none"></div>' +
+            '<div id="lib-folder-tree" class="space-y-1 hidden"></div>' +
             '<div id="v3-songs-sentinel" class="h-8"></div>' +
             // Filter drawer + overlay
             '<div id="v3-songs-overlay" class="fixed inset-0 bg-black/50 z-40 hidden"></div>' +
@@ -979,14 +995,26 @@
             e.stopImmediatePropagation();
             toggleSelect(card.getAttribute('data-fn'), card);
         }, true);
-        const setView = (v) => {
+        const setView = async (v) => {
             state.view = v;
             byId('v3-songs-grid-btn').className = 'px-3 py-2 text-sm ' + (v === 'grid' ? 'bg-fb-primary text-white' : 'text-fb-textDim');
             byId('v3-songs-tree-btn').className = 'px-3 py-2 text-sm ' + (v === 'tree' ? 'bg-fb-primary text-white' : 'text-fb-textDim');
+            byId('v3-songs-folder-btn').className = 'px-3 py-2 text-sm ' + (v === 'folder' ? 'bg-fb-primary text-white' : 'text-fb-textDim');
+            if (v === 'folder' && (!window.folderOrganizerLibrary || window._foLibVer !== 4)) {
+                delete window.folderOrganizerLibrary;
+                await new Promise((resolve, reject) => {
+                    const s = document.createElement('script');
+                    s.src = '/api/plugins/folder_organizer/screen.js?v=6';
+                    s.onload = () => { window._foLibVer = 6; resolve(); };
+                    s.onerror = reject;
+                    document.head.appendChild(s);
+                });
+            }
             return reload();
         };
         byId('v3-songs-grid-btn').addEventListener('click', () => setView('grid'));
         byId('v3-songs-tree-btn').addEventListener('click', () => setView('tree'));
+        byId('v3-songs-folder-btn').addEventListener('click', () => setView('folder'));
         // Await the initial load so a caller awaiting render() (the scroll
         // restore on screen re-entry) sees a populated grid + real state.total
         // before it tries to page deeper.
@@ -1042,6 +1070,8 @@
             if (state.renderedHash !== _libraryStateHash()) { reload(); return; }
             document.getElementById('v3-songs-grid')?.classList.toggle('hidden', state.view !== 'grid');
             document.getElementById('v3-songs-tree')?.classList.toggle('hidden', state.view !== 'tree');
+            document.getElementById('lib-folder-tree')?.classList.toggle('hidden', state.view !== 'folder');
+            { const _fc = document.getElementById('lib-folder-controls'); if (_fc) _fc.style.display = state.view === 'folder' ? 'flex' : 'none'; }
             return;
         }
 
@@ -1093,6 +1123,20 @@
         reload: reload,
         search: search,
         setQuery: (q) => { state.q = q || ''; },
+        getSort: () => state.sort,
+        getArtist: () => state.artist,
+        getAlbum: () => state.album,
+        filterParams: () => {
+            const f = state.filters;
+            const p = new URLSearchParams();
+            if (f.arr_has.length)   p.set('arrangements_has',   f.arr_has.join(','));
+            if (f.arr_lacks.length) p.set('arrangements_lacks', f.arr_lacks.join(','));
+            if (f.stem_has.length)  p.set('stems_has',          f.stem_has.join(','));
+            if (f.stem_lacks.length) p.set('stems_lacks',       f.stem_lacks.join(','));
+            if (f.lyrics)           p.set('has_lyrics',         f.lyrics);
+            if (f.tunings.length)   p.set('tunings',            f.tunings.join(','));
+            return p.toString();
+        },
         _scrollHelpers: {
             SCROLL_STATE_KEY,
             buildLibraryStateHash,

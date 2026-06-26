@@ -1,0 +1,159 @@
+<!-- Folder Browser — screen.html
+     Slopsmith injects this into a div#plugin-folder_organizer.screen automatically.
+     Do NOT add an outer wrapper div with class="screen". -->
+
+<!-- ── toolbar ──────────────────────────────────────────────────────── -->
+<div class="flex items-center gap-2 px-4 py-3 border-b border-dark-400 flex-wrap"
+     style="position:fixed; top:64px; left:0; right:0; z-index:40; background-color:#0f1117; border-bottom: 1px solid #1f2937;">
+
+  <h2 class="text-base font-semibold text-white mr-1">Folders</h2>
+
+  <!-- search -->
+  <div class="relative flex-1 min-w-40 max-w-xs">
+    <svg class="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500 pointer-events-none"
+         viewBox="0 0 20 20" fill="currentColor">
+      <path fill-rule="evenodd"
+            d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z"
+            clip-rule="evenodd"/>
+    </svg>
+    <input id="fb-search" type="text" placeholder="Search songs…"
+           class="w-full pl-8 pr-3 py-1.5 rounded bg-dark-500 border border-dark-400
+                  text-sm text-gray-200 placeholder-gray-500
+                  focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"/>
+  </div>
+
+  <!-- new folder -->
+  <button id="fb-new-folder" title="New parent folder"
+          class="p-1.5 rounded text-gray-400 hover:text-white hover:bg-dark-400 transition-colors">
+    <svg viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+      <path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/>
+      <path fill-rule="evenodd" d="M10 9a1 1 0 011 1v1h1a1 1 0 110 2h-1v1a1 1 0 11-2 0v-1H8a1 1 0 110-2h1v-1a1 1 0 011-1z" clip-rule="evenodd"/>
+    </svg>
+  </button>
+
+  <!-- expand all -->
+  <button id="fb-expand-all" title="Expand all"
+          class="p-1.5 rounded text-gray-400 hover:text-white hover:bg-dark-400 transition-colors">
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"
+         stroke-linecap="round" class="w-4 h-4">
+      <path d="M5 8l5 5 5-5"/>
+      <path d="M5 4l5 5 5-5" opacity=".4"/>
+    </svg>
+  </button>
+
+  <!-- collapse all -->
+  <button id="fb-collapse-all" title="Collapse all"
+          class="p-1.5 rounded text-gray-400 hover:text-white hover:bg-dark-400 transition-colors">
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"
+         stroke-linecap="round" class="w-4 h-4">
+      <path d="M5 12l5-5 5 5"/>
+      <path d="M5 16l5-5 5 5" opacity=".4"/>
+    </svg>
+  </button>
+
+  <!-- sort -->
+  <select id="fb-sort" title="Sort songs within folders"
+          style="padding:4px 8px; border-radius:6px; border:1px solid #374151;
+                 background:#1f2937; color:#d1d5db; font-size:12px; cursor:pointer; outline:none;">
+    <option value="default">Default</option>
+    <option value="title">Title</option>
+    <option value="artist">Artist</option>
+    <option value="duration">Duration</option>
+    <option value="year">Year</option>
+    <option value="tuning">Tuning</option>
+    <option value="added">Recently Added</option>
+  </select>
+
+  <!-- sort direction -->
+  <button id="fb-sort-dir" title="Ascending"
+          class="p-1.5 rounded text-gray-400 hover:text-white hover:bg-dark-400 transition-colors">
+    <svg id="fb-sort-dir-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor"
+         stroke-width="1.8" stroke-linecap="round" class="w-4 h-4">
+      <path d="M5 12l5-5 5 5"/>
+    </svg>
+  </button>
+
+  <!-- view toggle -->
+  <button id="fb-view-list" title="List view"
+          class="p-1.5 rounded text-gray-400 hover:text-white hover:bg-dark-400 transition-colors">
+    <svg viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+      <path fill-rule="evenodd"
+            d="M3 4a1 1 0 000 2h14a1 1 0 100-2H3zm0 4a1 1 0 000 2h14a1 1 0 100-2H3zm0 4a1 1 0 000 2h14a1 1 0 100-2H3z"
+            clip-rule="evenodd"/>
+    </svg>
+  </button>
+  <button id="fb-view-grid" title="Grid view"
+          class="p-1.5 rounded text-gray-400 hover:text-white hover:bg-dark-400 transition-colors">
+    <svg viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+      <path d="M5 3a2 2 0 00-2 2v2a2 2 0 002 2h2a2 2 0 002-2V5a2 2 0 00-2-2H5zM5 11a2 2 0 00-2 2v2a2 2 0 002 2h2a2 2 0 002-2v-2a2 2 0 00-2-2H5zM11 5a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V5zM11 13a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/>
+    </svg>
+  </button>
+
+  <!-- filters -->
+  <button id="fb-filter" title="Filters"
+          class="p-1.5 rounded text-gray-400 hover:text-white hover:bg-dark-400 transition-colors"
+          style="position:relative;">
+    <svg viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+      <path fill-rule="evenodd"
+            d="M3 3a1 1 0 011-1h12a1 1 0 011 1v3a1 1 0 01-.293.707L12 11.414V15a1 1 0 01-.293.707l-2 2A1 1 0 018 17v-5.586L3.293 6.707A1 1 0 013 6V3z"
+            clip-rule="evenodd"/>
+    </svg>
+    <span id="fb-filter-badge"
+          style="display:none; position:absolute; top:-2px; right:-2px; min-width:14px; height:14px;
+                 padding:0 3px; border-radius:7px; background:#3b82f6; color:#fff;
+                 font-size:9px; font-weight:700; line-height:14px; text-align:center;
+                 box-sizing:border-box;"></span>
+  </button>
+
+  <!-- reload -->
+  <button id="fb-reload" title="Reload"
+          class="p-1.5 rounded text-gray-400 hover:text-white hover:bg-dark-400 transition-colors">
+    <svg viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+      <path fill-rule="evenodd"
+            d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z"
+            clip-rule="evenodd"/>
+    </svg>
+  </button>
+
+  <span id="fb-status" class="text-xs text-gray-500 ml-1"></span>
+</div>
+
+<!-- ── tree ─────────────────────────────────────────────────────────── -->
+<div id="fb-tree" class="px-2 py-2" style="padding-top: 120px;"></div>
+
+<!-- ── filter backdrop ───────────────────────────────────────────────── -->
+<div id="fb-filter-backdrop"
+     style="display:none; position:fixed; inset:0; z-index:44;"></div>
+
+<!-- ── filter panel ──────────────────────────────────────────────────── -->
+<div id="fb-filter-panel"
+     style="display:none; position:fixed; top:64px; right:0; bottom:0; width:300px;
+            z-index:45; background:#0f1117; border-left:1px solid #1f2937;
+            flex-direction:column; overflow:hidden;"></div>
+
+<!-- ── custom modal ──────────────────────────────────────────────────── -->
+<div id="fb-modal" style="display:none; position:fixed; inset:0; z-index:9999;
+     background:rgba(0,0,0,0.6); align-items:center; justify-content:center;">
+  <div style="background:#1e2130; border:1px solid #374151; border-radius:8px;
+              padding:24px; width:360px; max-width:90vw; box-shadow:0 20px 60px rgba(0,0,0,0.5);">
+    <p id="fb-modal-msg" style="color:#e5e7eb; font-size:14px; margin:0 0 16px 0;
+       white-space:pre-wrap; line-height:1.5;"></p>
+    <input id="fb-modal-input" type="text"
+           style="display:none; width:100%; box-sizing:border-box; padding:8px 12px;
+                  background:#111827; border:1px solid #374151; border-radius:6px;
+                  color:#e5e7eb; font-size:14px; outline:none; margin-bottom:16px;"
+           placeholder=""/>
+    <div style="display:flex; gap:8px; justify-content:flex-end;">
+      <button id="fb-modal-cancel"
+              style="padding:6px 16px; border-radius:6px; border:1px solid #374151;
+                     background:transparent; color:#9ca3af; font-size:13px; cursor:pointer;">
+        Cancel
+      </button>
+      <button id="fb-modal-ok"
+              style="padding:6px 16px; border-radius:6px; border:none;
+                     background:#3b82f6; color:#fff; font-size:13px; cursor:pointer; font-weight:500;">
+        OK
+      </button>
+    </div>
+  </div>
+</div>
