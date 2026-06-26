@@ -160,6 +160,109 @@
         </p>
     </div>
 
+    <!-- Butterchurn (visualizer) options. These drive the 'butterchurn'
+         Background style. They used to live in a floating in-canvas panel; the
+         on/off + slider controls now live here in the standard settings UI.
+         The live preset browser (pick / favorite / ban / cycle) stays in-canvas.
+         Persisted in the 'viz3d_settings' localStorage blob (shared with the
+         in-canvas preset controls); window.h3dBcApplySettings() pushes changes
+         to a mounted highway live. -->
+    <div id="h3d-bc-section" class="mt-4">
+        <h3 class="text-sm font-medium text-gray-400 mb-2">Butterchurn (visualizer)</h3>
+        <p class="text-xs text-gray-500 mb-2">Active when Background style is set to <em>Butterchurn (visualizer)</em>.</p>
+        <div class="flex items-center gap-3 mt-3">
+            <label class="flex items-center gap-2 text-sm text-gray-300">
+                <input type="checkbox" id="h3d-bc-enabled" class="accent-accent"> Background on
+            </label>
+        </div>
+        <div class="mt-3">
+            <label for="h3d-bc-opacity" class="text-xs font-medium text-gray-400 mb-1 block">Opacity: <span id="h3d-bc-opacity-label">100%</span></label>
+            <input type="range" id="h3d-bc-opacity" min="0" max="100" class="w-full accent-accent">
+        </div>
+        <div class="flex items-center gap-3 mt-3">
+            <label class="flex items-center gap-2 text-sm text-gray-300">
+                <input type="checkbox" id="h3d-bc-laneDim" class="accent-accent"> Dim behind lane
+            </label>
+        </div>
+        <div class="mt-3">
+            <label for="h3d-bc-laneDimStrength" class="text-xs font-medium text-gray-400 mb-1 block">Dim strength</label>
+            <input type="range" id="h3d-bc-laneDimStrength" min="0" max="100" class="w-full accent-accent">
+        </div>
+        <div class="flex items-center gap-3 mt-3">
+            <label class="flex items-center gap-2 text-sm text-gray-300">
+                <input type="checkbox" id="h3d-bc-chartAccents" class="accent-accent"> Chart accents
+            </label>
+        </div>
+        <div class="mt-3">
+            <label for="h3d-bc-chartStrength" class="text-xs font-medium text-gray-400 mb-1 block">Chart strength</label>
+            <input type="range" id="h3d-bc-chartStrength" min="0" max="200" class="w-full accent-accent">
+        </div>
+        <div class="flex items-center gap-3 mt-3">
+            <label class="flex items-center gap-2 text-sm text-gray-300">
+                <input type="checkbox" id="h3d-bc-colorTint" class="accent-accent"> Color tint
+            </label>
+        </div>
+        <div class="mt-3">
+            <label for="h3d-bc-tintStrength" class="text-xs font-medium text-gray-400 mb-1 block">Tint strength</label>
+            <input type="range" id="h3d-bc-tintStrength" min="0" max="100" class="w-full accent-accent">
+        </div>
+        <div class="mt-3">
+            <label for="h3d-bc-guitarGain" class="text-xs font-medium text-gray-400 mb-1 block">Guitar gain: <span id="h3d-bc-guitarGain-label">×6</span></label>
+            <input type="range" id="h3d-bc-guitarGain" min="1" max="12" step="0.5" class="w-full accent-accent">
+        </div>
+        <div class="mt-3">
+            <label for="h3d-bc-songGain" class="text-xs font-medium text-gray-400 mb-1 block">Song gain: <span id="h3d-bc-songGain-label">×1.8</span></label>
+            <input type="range" id="h3d-bc-songGain" min="0" max="5" step="0.1" class="w-full accent-accent">
+        </div>
+    </div>
+    <script>
+        // Self-contained Butterchurn settings wiring. Reads/writes the same
+        // 'viz3d_settings' blob the in-canvas preset controls use (read-modify-
+        // write preserves cyclePool/hold and the favorites/bans lists), then
+        // calls window.h3dBcApplySettings() so a mounted highway applies the
+        // change live. Guarded so it no-ops if the section isn't present.
+        (function () {
+            const BC_LS = 'viz3d_settings';
+            const BC_DEFAULTS = { enabled: true, opacity: 1.0, laneDim: true, laneDimStrength: 0.45, chartAccents: true, colorTint: true, chartStrength: 1.0, tintStrength: 0.65, guitarGain: 6, songGain: 1.8 };
+            function readBlob() { let s = {}; try { s = JSON.parse(localStorage.getItem(BC_LS) || '{}') || {}; } catch (e) {} return s; }
+            function patch(p) {
+                const s = readBlob();
+                Object.assign(s, p);
+                try { localStorage.setItem(BC_LS, JSON.stringify(s)); } catch (e) {}
+                try { if (typeof window.h3dBcApplySettings === 'function') window.h3dBcApplySettings(); } catch (e) {}
+            }
+            const s = Object.assign({}, BC_DEFAULTS, readBlob());
+            const $ = (id) => document.getElementById(id);
+            const en = $('h3d-bc-enabled');
+            if (!en) return;
+            const op = $('h3d-bc-opacity'), opv = $('h3d-bc-opacity-label');
+            const ld = $('h3d-bc-laneDim'), lds = $('h3d-bc-laneDimStrength');
+            const ca = $('h3d-bc-chartAccents'), cs = $('h3d-bc-chartStrength');
+            const ct = $('h3d-bc-colorTint'), ts = $('h3d-bc-tintStrength');
+            const gg = $('h3d-bc-guitarGain'), ggv = $('h3d-bc-guitarGain-label');
+            const sg = $('h3d-bc-songGain'), sgv = $('h3d-bc-songGain-label');
+            // Hydrate from saved settings.
+            en.checked = !!s.enabled;
+            op.value = Math.round((s.opacity != null ? s.opacity : 1) * 100); if (opv) opv.textContent = op.value + '%';
+            ld.checked = !!s.laneDim; lds.value = Math.round((s.laneDimStrength != null ? s.laneDimStrength : 0.45) * 100);
+            ca.checked = !!s.chartAccents; cs.value = Math.round((s.chartStrength != null ? s.chartStrength : 1) * 100);
+            ct.checked = !!s.colorTint; ts.value = Math.round((s.tintStrength != null ? s.tintStrength : 0.65) * 100);
+            gg.value = s.guitarGain != null ? s.guitarGain : 6; if (ggv) ggv.textContent = '×' + gg.value;
+            sg.value = s.songGain != null ? s.songGain : 1.8; if (sgv) sgv.textContent = '×' + sg.value;
+            // Wire changes (read-modify-write + live apply).
+            en.addEventListener('change', () => patch({ enabled: en.checked }));
+            op.addEventListener('input', () => { if (opv) opv.textContent = op.value + '%'; patch({ opacity: op.value / 100 }); });
+            ld.addEventListener('change', () => patch({ laneDim: ld.checked }));
+            lds.addEventListener('input', () => patch({ laneDimStrength: lds.value / 100 }));
+            ca.addEventListener('change', () => patch({ chartAccents: ca.checked }));
+            cs.addEventListener('input', () => patch({ chartStrength: cs.value / 100 }));
+            ct.addEventListener('change', () => patch({ colorTint: ct.checked }));
+            ts.addEventListener('input', () => patch({ tintStrength: ts.value / 100 }));
+            gg.addEventListener('input', () => { if (ggv) ggv.textContent = '×' + gg.value; patch({ guitarGain: parseFloat(gg.value) }); });
+            sg.addEventListener('input', () => { if (sgv) sgv.textContent = '×' + sg.value; patch({ songGain: parseFloat(sg.value) }); });
+        })();
+    </script>
+
     <!-- Intensity -->
     <div class="mt-3">
         <label for="h3d-bg-intensity" class="text-xs font-medium text-gray-400 mb-1 block">

@@ -81,7 +81,7 @@
         let polling = true, songLevel = 0, chartLevel = 0;
         let node = null, sp = null, silent = null;
         const api = (window.feedBackDesktop || window.slopsmithDesktop).audio;
-        const gainNow = () => (_bcSettings && _bcSettings.guitarGain) || 6;
+        const gainNow = () => (_bcLoadSettings().guitarGain) || 6;
 
         // Keep the source node processing (silently — JUCE already monitors the
         // guitar), and hand it to Butterchurn via the onReady callback.
@@ -148,7 +148,7 @@
             if (!polling) return;
             Promise.resolve(api.getLevels && api.getLevels()).then((L) => {
                 if (L && typeof L.outputLevel === 'number') {
-                    songLevel = Math.min(1, L.outputLevel * ((_bcSettings && _bcSettings.songGain) || 1.8));
+                    songLevel = Math.min(1, L.outputLevel * ((_bcLoadSettings().songGain) || 1.8));
                     _bcMeters.song = songLevel;
                     if (node) node.port.postMessage({ song: songLevel, chart: chartLevel, gain: gainNow() });
                 }
@@ -187,6 +187,18 @@
     function _bcSaveSettings() { try { localStorage.setItem(BC_LS, JSON.stringify(_bcSettings)); } catch (e) {} }
     const _bcControllers = new Set();
     function _bcApplyAll() { _bcControllers.forEach((c) => { try { c.applySettings(); } catch (e) {} }); }
+    // Live-apply hook for the plugin's settings.html. The visualizer's on/off +
+    // slider controls now live in the standard settings panel (settings.html),
+    // which persists them into the BC_LS blob and then calls this so a mounted
+    // highway re-reads and applies them immediately. Defined on window at module
+    // scope so it's available regardless of whether a highway is mounted yet;
+    // settings.html guards the call with `?.` for the not-yet-loaded case.
+    window.h3dBcApplySettings = function () {
+        _bcSettings = null;        // drop the cache so the next read reloads from localStorage
+        _bcLoadSettings();
+        _bcApplyAll();
+        try { _bcUpdatePanelPreset(); } catch (e) {}
+    };
 
     // Preset curation: favorites / bans (persisted globally) + the "primary"
     // controller the panel's preset buttons drive.
@@ -335,17 +347,10 @@
             'box-shadow:0 2px 12px rgba(0,0,0,0.5);user-select:none;transition:transform 0.28s ease;';
         p.innerHTML =
             '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:7px"><span style="font-weight:600">🌀 Visualizer</span><button id="vz-listbtn" title="Show / hide full preset list" style="' + BC_BTN + ';padding:1px 7px">&lt;&lt;</button></div>' +
-            '<label style="display:flex;align-items:center;gap:7px;margin:6px 0"><input type="checkbox" id="vz-on"> Background on</label>' +
-            '<label style="display:block;margin:6px 0">Opacity <span id="vz-opv" style="opacity:.6"></span><input type="range" id="vz-op" min="0" max="100" style="width:100%"></label>' +
-            '<label style="display:flex;align-items:center;gap:7px;margin:6px 0"><input type="checkbox" id="vz-ld"> Dim behind lane</label>' +
-            '<label style="display:block;margin:6px 0">Dim strength <input type="range" id="vz-lds" min="0" max="100" style="width:100%"></label>' +
-            '<label style="display:flex;align-items:center;gap:7px;margin:6px 0"><input type="checkbox" id="vz-ca"> Chart accents</label>' +
-            '<label style="display:block;margin:6px 0">Chart strength <input type="range" id="vz-cs" min="0" max="200" style="width:100%"></label>' +
-            '<label style="display:flex;align-items:center;gap:7px;margin:6px 0"><input type="checkbox" id="vz-ct"> Color tint</label>' +
-            '<label style="display:block;margin:6px 0">Tint strength <input type="range" id="vz-ts" min="0" max="100" style="width:100%"></label>' +
-            '<label style="display:block;margin:6px 0">Guitar gain <span id="vz-ggv" style="opacity:.6"></span><input type="range" id="vz-gg" min="1" max="12" step="0.5" style="width:100%"></label>' +
-            '<label style="display:block;margin:6px 0">Song gain <span id="vz-sgv" style="opacity:.6"></span><input type="range" id="vz-sg" min="0" max="5" step="0.1" style="width:100%"></label>' +
-            '<div style="border-top:1px solid rgba(255,255,255,.12);margin:8px 0 5px"></div>' +
+            // On/off + opacity/dim/chart/tint/gain controls now live in the
+            // plugin's Settings panel (settings.html). This in-canvas panel is
+            // only the LIVE preset browser (pick / favorite / ban / cycle).
+            '<div style="opacity:.55;font-size:11px;margin:2px 0 6px">Background &amp; reactivity options are in Settings ▸ 3D Highway.</div>' +
             '<div style="display:flex;align-items:center;gap:6px;margin:4px 0">' +
               '<button id="vz-prev" style="' + BC_BTN + '">◀</button>' +
               '<div id="vz-pname" style="flex:1;text-align:center;font-size:11px;opacity:.9;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer" title="">—</div>' +
@@ -398,31 +403,15 @@
         pane.querySelector('#vz-defaults').addEventListener('click', _bcRestoreDefaults);
 
         const q = (id) => p.querySelector(id);
-        const on = q('#vz-on'), op = q('#vz-op'), opv = q('#vz-opv'), ld = q('#vz-ld'), lds = q('#vz-lds');
-        const ca = q('#vz-ca'), tn = q('#vz-ct'), cs = q('#vz-cs'), ts = q('#vz-ts'), gg = q('#vz-gg'), ggv = q('#vz-ggv'), sg = q('#vz-sg'), sgv = q('#vz-sgv');
-        on.checked = s.enabled; op.value = Math.round(s.opacity * 100); opv.textContent = op.value + '%';
-        ld.checked = s.laneDim; lds.value = Math.round(s.laneDimStrength * 100);
-        ca.checked = s.chartAccents; tn.checked = s.colorTint;
-        cs.value = Math.round((s.chartStrength != null ? s.chartStrength : 1) * 100);
-        ts.value = Math.round((s.tintStrength != null ? s.tintStrength : 0.65) * 100);
-        gg.value = s.guitarGain != null ? s.guitarGain : 6; ggv.textContent = '×' + gg.value;
-        sg.value = s.songGain != null ? s.songGain : 1.8; sgv.textContent = '×' + sg.value;
-        const commit = () => {
-            s.enabled = on.checked; s.opacity = op.value / 100;
-            s.laneDim = ld.checked; s.laneDimStrength = lds.value / 100;
-            s.chartAccents = ca.checked; s.colorTint = tn.checked;
-            s.chartStrength = cs.value / 100; s.tintStrength = ts.value / 100; s.guitarGain = parseFloat(gg.value); s.songGain = parseFloat(sg.value);
-            opv.textContent = op.value + '%'; ggv.textContent = '×' + gg.value; sgv.textContent = '×' + sg.value;
-            _bcSaveSettings(); _bcApplyAll();
-        };
-        [on, op, ld, lds, ca, tn, cs, ts, gg, sg].forEach((el) => el.addEventListener('input', commit));
         _bcPanel = p;
 
         // Preset curation wiring (favorites / bans / cycle / reset)
         _bcLoadLists();
         const cyc = q('#vz-cyc');
         cyc.value = s.cyclePool || 'all';
-        cyc.addEventListener('change', () => { s.cyclePool = cyc.value; _bcSaveSettings(); });
+        // Read fresh: settings.html writes can replace _bcSettings, so the `s`
+        // captured at panel creation may be stale by the time this fires.
+        cyc.addEventListener('change', () => { _bcLoadSettings().cyclePool = cyc.value; _bcSaveSettings(); });
         _bcSetHold(!!s.hold); // sync the Hold button label to the saved state
         q('#vz-hold').addEventListener('click', () => _bcSetHold(!_bcLoadSettings().hold));
         q('#vz-listbtn').addEventListener('click', () => _bcSetPane(!_bcPaneOpen));
