@@ -57,7 +57,20 @@
         return !!(d && d.isDesktop && d.audio && typeof d.audio.getRawAudioFrame === 'function');
     }
     // Fast-forward an index to the first entry after time `ct` (used on seek/loop).
-    function _bcFfIdx(arr, ct, key) { if (!arr) return 0; let i = 0; while (i < arr.length && (arr[i][key] || 0) <= ct) i++; return i; }
+    // Position at the first entry whose time is >= ct (strict <), so an event
+    // landing exactly on the seek/loop target time is still fired by the update
+    // walkers (which consume `<= ct`) instead of being skipped past here.
+    function _bcFfIdx(arr, ct, key) { if (!arr) return 0; let i = 0; while (i < arr.length && (arr[i][key] || 0) < ct) i++; return i; }
+    // Force-free a canvas's WebGL context so the GPU resources are released
+    // immediately instead of lingering until GC — repeated Butterchurn
+    // mount/unmount cycles otherwise pile up live contexts toward the browser cap.
+    function _bcReleaseCanvasGL(canvas) {
+        if (!canvas || typeof canvas.getContext !== 'function') return;
+        let gl = null;
+        try { gl = canvas.getContext('webgl2') || canvas.getContext('webgl'); } catch (e) { gl = null; }
+        if (!gl || typeof gl.getExtension !== 'function') return;
+        try { const lose = gl.getExtension('WEBGL_lose_context'); if (lose) lose.loseContext(); } catch (e) {}
+    }
 
     // Desktop: bridge GUITAR input PCM + SONG output level into a Web Audio node
     // Butterchurn can tap. Guitar gives spectral texture from your playing; the
@@ -567,10 +580,37 @@
             const pool0 = ctrl.pool();
             ctrl.loadByName(pool0.length ? pool0[(Math.random() * pool0.length) | 0] : (ctrl.keys[0] || null), 0.0);
             ctrl.cycle = setInterval(() => ctrl.autoTick(), 30000);
+            ctrl.connectedAnalyser = (fogAudio && fogAudio.analyser) || null;
             console.log('[viz3d] Butterchurn ready, presets:', ctrl.keys.length);
-        }).catch((e) => console.error('[viz3d] Butterchurn load failed', e));
+        }).catch((e) => {
+            // Async init failed (lib load, WebGL/context creation, etc.). Clean up
+            // the half-mounted controller so we don't leak an owned AudioContext /
+            // DOM layers, and mark it dead so _bcSyncMode can retry on a later
+            // mount instead of seeing a live-looking but non-functional bcCtrl.
+            console.error('[viz3d] Butterchurn load/init failed', e);
+            try { _bcReleaseCanvasGL(ctrl.canvas); } catch (_) {}
+            try { if (ctrl.guitar) { ctrl.guitar.stop(); ctrl.guitar = null; } } catch (_) {}
+            try { [ctrl.canvas, ctrl.backdrop, ctrl.scrim, ctrl.tint].forEach((el) => { if (el && el.parentNode) el.parentNode.removeChild(el); }); } catch (_) {}
+            if (ctrl.ownsActx && ctrl.actx && typeof ctrl.actx.close === 'function') { try { ctrl.actx.close(); } catch (_) {} }
+            ctrl.actx = null; ctrl.viz = null; ctrl.dead = true;
+            _bcControllers.delete(ctrl);
+        });
         return {
             applySettings() { ctrl.applySettings(); },
+            dead() { return ctrl.dead; },
+            ready() { return !!ctrl.viz; },
+            boundAnalyser() { return ctrl.connectedAnalyser || null; },
+            audioCtx() { return ctrl.actx; },
+            // Re-bind audio when the shared analyser changes (e.g. a stems song
+            // swap replaces the analyser). Same context → cheap reconnect; the
+            // caller handles a context change with a full rebuild (cross-context
+            // connectAudio is impossible — the visualizer is bound to one ctx).
+            reconnectAudio(a) {
+                if (!a || !a.analyser || !ctrl.viz) return false;
+                if (a.analyser === ctrl.connectedAnalyser) return true;
+                if (a.ctx && a.ctx !== ctrl.actx) return false; // needs rebuild
+                try { ctrl.viz.connectAudio(a.analyser); ctrl.connectedAnalyser = a.analyser; return true; } catch (e) { return false; }
+            },
             chart(v) { if (ctrl.guitar && ctrl.guitar.setChart) ctrl.guitar.setChart(v); },
             tint(hex, alpha) {
                 if (!ctrl.tint) return;
@@ -601,8 +641,13 @@
                 if (_bcPrimary === ctrl) { _bcPrimary = _bcControllers.values().next().value || null; _bcUpdatePanelPreset(); }
                 if (ctrl.cycle) { clearInterval(ctrl.cycle); ctrl.cycle = 0; }
                 if (ctrl.guitar) { ctrl.guitar.stop(); ctrl.guitar = null; }
+                // Release the Butterchurn WebGL context deterministically (don't
+                // wait for GC) so repeated mounts/toggles can't exhaust the
+                // browser's WebGL context cap (~16). Do it before removing the
+                // canvas from the DOM.
+                _bcReleaseCanvasGL(ctrl.canvas);
                 [ctrl.canvas, ctrl.backdrop, ctrl.scrim, ctrl.tint].forEach((el) => { if (el && el.parentNode) el.parentNode.removeChild(el); });
-                ctrl.viz = null;
+                ctrl.viz = null; ctrl.connectedAnalyser = null;
                 // Close the AudioContext only if we own it (desktop, or the
                 // browser fallback). The browser path normally reuses the
                 // highway's shared context, which the fog system owns — never
@@ -7564,7 +7609,11 @@
         function _bcActive() { return bgStyleId === 'butterchurn'; }
         function _bcSyncMode() {
             if (_bcActive()) {
-                if (!bcCtrl && wrap) {
+                // Recreate when there's no controller, or the last one died during
+                // async init (lib/WebGL failure) — a dead controller self-cleaned,
+                // so retry here instead of leaving the style permanently broken.
+                if ((!bcCtrl || (bcCtrl.dead && bcCtrl.dead())) && wrap) {
+                    if (bcCtrl) bcCtrl = null;
                     // audioProvider reuses this instance's shared analyser (the
                     // fog scenery's #audio / stems tap) so the browser path never
                     // opens a second createMediaElementSource on #audio.
@@ -14218,6 +14267,32 @@
                     }
                 }
 
+                // Browser: the shared analyser can change between songs (a sloppak
+                // stems swap replaces it, often on a new context) — or may not have
+                // existed when the controller mounted. Keep the visualizer bound to
+                // the LIVE analyser by comparing against what the controller
+                // actually bound (boundAnalyser()), not a separately-tracked guess:
+                // cheap reconnect when it's the same context, full controller
+                // rebuild when the context changed (cross-context connectAudio is
+                // impossible). Only act once the viz is ready (ready()), so we
+                // don't thrash a controller that's still loading async. Done before
+                // the render block so a rebuild this frame just skips one bc frame
+                // (bcCtrl goes null) without affecting the highway's own render.
+                if (bcCtrl && !_bcIsDesktop() && bcCtrl.ready && bcCtrl.ready()) {
+                    let a = null;
+                    try { a = _bgGetAnalyser(); } catch (e) { a = null; }
+                    const an = a && a.analyser;
+                    const bound = bcCtrl.boundAnalyser ? bcCtrl.boundAnalyser() : null;
+                    if (an && an !== bound) {
+                        if (!(bcCtrl.reconnectAudio && bcCtrl.reconnectAudio(a))) {
+                            // Context changed (or reconnect failed) — rebuild via the
+                            // proven destroy/create paths so the new context binds.
+                            try { bcCtrl.destroy(); } catch (e) {}
+                            bcCtrl = null;
+                            _bcSyncMode();
+                        }
+                    }
+                }
                 if (bcCtrl) {
                     const cfg = _bcLoadSettings();
                     const _ct = bundle.currentTime || 0;
