@@ -80,13 +80,6 @@ Folder Library started life as a standalone plugin with its own version line, bu
 
 ## Roadmap
 
-Re-wiring for core (previously shipped in the standalone plugin, not currently working):
-
-- [ ] Live search — filter by title, artist, album, or filename across all folders
-- [ ] Keyboard shortcut — press `/` to jump to the search box
-
-New ideas:
-
 - [ ] Auto play song on hover (with an on/off toggle)
 - [ ] Bulk move — select multiple songs and move them at once
 - [ ] Thumbnail performance — faster loading and smoother scrolling with large song libraries

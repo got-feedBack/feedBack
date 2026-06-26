@@ -1679,21 +1679,6 @@ if (window.slopsmith && typeof window.slopsmith.on === 'function') {
     }, 100);
 }
 
-// ── Keyboard shortcut ─────────────────────────────────────────────────
-if (typeof window.registerShortcut === 'function') {
-    window.registerShortcut({
-        key: '/',
-        description: 'Focus folder search',
-        scope: 'plugin-' + PLUGIN_ID,
-        handler: function (e) {
-            e.preventDefault();
-            _closeDropdown();
-            var s = _el('fb-search');
-            if (s) { s.focus(); s.select(); }
-        },
-    });
-}
-
 // ── Boot ──────────────────────────────────────────────────────────────
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', _init, { once: true });

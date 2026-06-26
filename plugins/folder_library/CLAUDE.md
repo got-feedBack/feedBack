@@ -1,10 +1,10 @@
 # Folder Library — AI Agent Guide
 
-A FeedBack (fee[dB]ack) plugin that adds a **Folders** nav screen showing your `.sloppak` / `.feedpak` DLC songs grouped by the folder tree on disk. Create, rename, and delete folders (including **nested subfolders**) directly in the UI, move songs by drag-and-drop, and browse with live search, sort, and metadata filters.
+A FeedBack (fee[dB]ack) plugin that adds a **Folders** nav screen showing your `.sloppak` / `.feedpak` DLC songs grouped by the folder tree on disk. Create, rename, and delete folders (including **nested subfolders**) directly in the UI, move songs by drag-and-drop, and browse with sort and metadata filters.
 
 > The host app is **FeedBack** (formerly "Slopsmith"). The frontend talks to the host through `window.feedBack`; `window.slopsmith` is a back-compat alias the host still exposes (`window.slopsmith = window.feedBack` in `static/app.js`). New code should prefer `window.feedBack`.
 
-> ⚠️ **Status — mid-migration to core; code ≠ runtime.** This plugin began as a standalone plugin and is being reworked into a bundled core plugin. The sections below document what the **code on disk implements**, but a couple of features are **not currently working** in the integrated core build and need re-wiring against the current host APIs — known not-working: live search and the `/` keyboard shortcut. Hover metadata badges have been dropped. Everything else (folder management, nested subfolders, collapsible folders + expand/collapse-all, drag-and-drop, move-song, sort, filters) is treated as working; verify against a running build before relying on any of it.
+> ⚠️ **Status — mid-migration to core; code ≠ runtime.** This plugin began as a standalone plugin and is being reworked into a bundled core plugin. The sections below document what the **code on disk implements**, but a couple of features are **not currently working** in the integrated core build and need re-wiring against the current host APIs — known not-working: folder search. (In the library Folder view, `_query()` reads the host search box `#v3-search` / `#lib-filter` and `_filtered()` would filter by it, but this is **not currently functional** — don't assume it works without verifying. The standalone Folders nav-tab has its own `#fb-search` box.) Hover metadata badges have been dropped. Everything else (folder management, nested subfolders, collapsible folders + expand/collapse-all, drag-and-drop, move-song, sort, filters) is treated as working; verify against a running build before relying on any of it.
 
 ## File Structure
 
@@ -85,7 +85,6 @@ Tailwind's `grid` and `grid-cols-*` classes may not apply reliably inside the pl
 - **Safe storage access** — all `localStorage` reads/writes wrapped in try/catch
 - **Logging** — backend uses `context["log"]`, never `print()`
 - **Sibling imports** — use `context["load_sibling"]("name")` not bare `import name` (none needed today; keep this in mind if you add helper modules)
-- **Keyboard shortcut** — `/` focuses the search box, registered via `window.registerShortcut()` with `scope: 'plugin-' + PLUGIN_ID`
 
 ## Song Formats
 
