@@ -136,20 +136,11 @@
          original look on both. -->
     <div class="mt-3">
         <label for="h3d-bg-theme" class="text-xs font-medium text-gray-400 mb-1 block">Background</label>
+        <!-- Options are populated from SCENE_THEMES (the single id+label source)
+             in the hydration script below, so the two dropdowns can't drift. -->
         <select id="h3d-bg-theme"
             onchange="window.h3dBgSetBgTheme && window.h3dBgSetBgTheme(this.value)"
             class="w-full bg-dark-700 border border-gray-800 rounded-lg px-3 py-2 text-xs text-gray-300 outline-none">
-            <option value="default">Default (blue-black)</option>
-            <option value="midnight">Midnight (deep blue)</option>
-            <option value="charcoal">Charcoal (neutral gray)</option>
-            <option value="deeppurple">Deep purple</option>
-            <option value="forest">Forest (dark green)</option>
-            <option value="warmslate">Warm Slate (espresso)</option>
-            <option value="deepfocus">Deep Focus (near-black)</option>
-            <option value="deepsea">Deep Sea (dark teal)</option>
-            <option value="cathode">Cathode (amber CRT)</option>
-            <option value="cathodegreen">Cathode Green (green CRT)</option>
-            <option value="hearth">Hearth (warm red)</option>
         </select>
         <p class="text-[10px] text-gray-500 mt-1">
             Tints the background + distance fog. Applies to the 3D highway immediately.
@@ -157,20 +148,11 @@
     </div>
     <div class="mt-3">
         <label for="h3d-hw-theme" class="text-xs font-medium text-gray-400 mb-1 block">Highway (surface + lane)</label>
+        <!-- Options populated from SCENE_THEMES (see below), same source as the
+             Background dropdown so the two stay in lockstep. -->
         <select id="h3d-hw-theme"
             onchange="window.h3dBgSetHwTheme && window.h3dBgSetHwTheme(this.value)"
             class="w-full bg-dark-700 border border-gray-800 rounded-lg px-3 py-2 text-xs text-gray-300 outline-none">
-            <option value="default">Default (blue-black)</option>
-            <option value="midnight">Midnight (deep blue)</option>
-            <option value="charcoal">Charcoal (neutral gray)</option>
-            <option value="deeppurple">Deep purple</option>
-            <option value="forest">Forest (dark green)</option>
-            <option value="warmslate">Warm Slate (espresso)</option>
-            <option value="deepfocus">Deep Focus (near-black)</option>
-            <option value="deepsea">Deep Sea (dark teal)</option>
-            <option value="cathode">Cathode (amber CRT)</option>
-            <option value="cathodegreen">Cathode Green (green CRT)</option>
-            <option value="hearth">Hearth (warm red)</option>
         </select>
         <p class="text-[10px] text-gray-500 mt-1">
             Tints the fretboard surface + the lit lane. Applies to the 3D highway immediately.
@@ -798,8 +780,25 @@
         (function () {
             const DEFAULTS = { style: 'particles', intensity: 0.5, reactive: true, palette: 'default', bgTheme: 'default', hwTheme: 'default', showFretOnNote: true, fretNumberGhostScope: 'chords', cameraSmoothing: 0.5, zoomSmoothing: 0.5, tiltSmoothing: 0.5, cameraLockLow: false, cameraLockZoom: 0.5, cameraMode: 'lookahead', nutHeadstockVisible: true, tuningLabelsVisible: true, nutColor: '#f5f3f0', headstockColor: '#d4b48a', textSize: 0.5, vibrancy: 0.85, glow: 0.25, customImageDataUrl: '', customImageName: '', customVideoName: '', chordDiagramVisible: true, chordDiagramSize: 0.5, chordDiagramPosition: 'tl', fretColumnMarkerCadence: 1, projectionVisible: true, inlayLabelsVisible: false, sectionLabelsOnHighway: false, sectionHudVisible: false, sectionHudPosition: 'tr', sectionHudSize: 0.5, toneHudVisible: false, toneHudPosition: 'tl', toneHudSize: 0.5, fpsVisible: false, fretDividersVisible: true, slideArrowApproachVisible: true, slideArrowNeckVisible: true, slideArrowChainPreviewVisible: true };
             const VALID_STYLES = new Set(['off', 'particles', 'silhouettes', 'lights', 'geometric', 'image', 'video']);
-            // Scene color themes — mirror screen.js BG_THEME_IDS.
-            const VALID_BG_THEMES = new Set(['default', 'midnight', 'charcoal', 'deeppurple', 'forest', 'warmslate', 'deepfocus', 'deepsea', 'cathode', 'cathodegreen', 'hearth']);
+            // Scene color themes — the single id+label source for BOTH the
+            // Background and Highway dropdowns AND the validator below. The
+            // <option>s are generated from this list (see hydration), so the two
+            // dropdowns can't drift from each other or from VALID_BG_THEMES.
+            // Mirror these ids with screen.js BG_THEMES (the color table).
+            const SCENE_THEMES = [
+                { id: 'default',      label: 'Default (blue-black)' },
+                { id: 'midnight',     label: 'Midnight (deep blue)' },
+                { id: 'charcoal',     label: 'Charcoal (neutral gray)' },
+                { id: 'deeppurple',   label: 'Deep purple' },
+                { id: 'forest',       label: 'Forest (dark green)' },
+                { id: 'warmslate',    label: 'Warm Slate (espresso)' },
+                { id: 'deepfocus',    label: 'Deep Focus (near-black)' },
+                { id: 'deepsea',      label: 'Deep Sea (dark teal)' },
+                { id: 'cathode',      label: 'Cathode (amber CRT)' },
+                { id: 'cathodegreen', label: 'Cathode Green (green CRT)' },
+                { id: 'hearth',       label: 'Hearth (warm red)' },
+            ];
+            const VALID_BG_THEMES = new Set(SCENE_THEMES.map((t) => t.id));
             const VALID_CAMERA_MODES = new Set(['steady', 'lookahead']);
             // Chord diagram is top-only (bl/br removed).
             const VALID_CHORD_DIAG_POSITIONS = new Set(['tl', 'tr']);
@@ -981,11 +980,13 @@
 
             const style = coerceStyle(storedStyle);
             const bgTheme = coerceBgTheme(storedBgTheme);
-            // Highway axis. BACKWARD-COMPAT MIGRATION: when hwTheme was never
-            // written (pre-split installs), inherit the background pick so the
-            // dropdown shows what's actually being rendered (screen.js applies
-            // the same fallback). Once the user picks a Highway value it persists
-            // independently.
+            // Highway axis. BACKWARD-COMPAT: when hwTheme was never written
+            // (pre-split installs, or the panel opened before the highway has
+            // mounted and run its one-time backfill), show the background pick —
+            // exactly the value screen.js will persist on first load — so the
+            // dropdown matches what's rendered. Once hwTheme is stored (which the
+            // renderer's backfill or any explicit pick does) it reads
+            // independently and the two axes no longer track each other.
             const hwTheme = (storedHwTheme == null) ? bgTheme : coerceHwTheme(storedHwTheme);
             const intensity = coerceIntensity(storedI);
             const reactive = coerceBool(storedR, DEFAULTS.reactive);
@@ -1059,6 +1060,18 @@
             const sel = document.getElementById('h3d-bg-style');
             const bgThemeSel = document.getElementById('h3d-bg-theme');
             const hwThemeSel = document.getElementById('h3d-hw-theme');
+            // Populate both scene-theme dropdowns from the single SCENE_THEMES
+            // source so they can't drift. (Values are selected further below.)
+            for (const selEl of [bgThemeSel, hwThemeSel]) {
+                if (!selEl) continue;
+                selEl.innerHTML = '';
+                for (const t of SCENE_THEMES) {
+                    const opt = document.createElement('option');
+                    opt.value = t.id;
+                    opt.textContent = t.label;
+                    selEl.appendChild(opt);
+                }
+            }
             const sli = document.getElementById('h3d-bg-intensity');
             const lbl = document.getElementById('h3d-bg-intensity-label');
             const rea = document.getElementById('h3d-bg-reactive');

@@ -6661,17 +6661,24 @@
                 _applyPaletteToMaterials();
             }
             bgThemeId = _bgReadSetting(panelKey, 'bgTheme');
-            // Highway axis. BACKWARD-COMPAT MIGRATION: if the user has never
-            // written hwTheme (pre-split installs, or anyone who only ever
-            // touched the old single "Scene colors" control), inherit the
-            // background pick so an existing 'cathode' selection drives BOTH the
-            // background AND the highway = byte-identical to the pre-split look.
-            // Once the user moves the Highway dropdown, _bgHasStored flips true
-            // and the two axes read independently. (Same mirror-at-first-read
-            // pattern as zoomSmoothing/tiltSmoothing inheriting cameraSmoothing.)
-            hwThemeId = _bgHasStored(panelKey, 'hwTheme')
-                ? _bgReadSetting(panelKey, 'hwTheme')
-                : bgThemeId;
+            // Highway axis. ONE-TIME BACKWARD-COMPAT BACKFILL: the first time we
+            // load with no stored hwTheme (pre-split installs, or anyone who only
+            // ever touched the old single "Scene colors" control), seed hwTheme
+            // FROM the background pick AND PERSIST it, so an existing 'cathode'
+            // selection looks byte-identical right after the upgrade. Persisting
+            // immediately (rather than re-inheriting on every read) is what keeps
+            // the two axes truly INDEPENDENT thereafter: once hwTheme is stored,
+            // changing the Background dropdown no longer drags the Highway
+            // surface along, and the settings UI's Highway value can never
+            // disagree with what's rendered. Written without _bgEmitChange so the
+            // backfill can't re-enter the change listener.
+            if (_bgHasStored(panelKey, 'hwTheme')) {
+                hwThemeId = _bgReadSetting(panelKey, 'hwTheme');
+            } else {
+                hwThemeId = bgThemeId;
+                _bgMemFallback.hwTheme = String(bgThemeId);
+                try { localStorage.setItem('h3d_bg_hwTheme', String(bgThemeId)); } catch (_) { /* storage blocked — mem fallback still seeds the read */ }
+            }
             showFretOnNote = _bgReadSetting(panelKey, 'showFretOnNote');
             fretNumberGhostScope = _bgReadSetting(panelKey, 'fretNumberGhostScope');
             cameraSmoothing = _bgReadSetting(panelKey, 'cameraSmoothing');
