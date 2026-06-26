@@ -1768,7 +1768,7 @@
         return _bgBandsCache;
     }
 
-    const BG_DEFAULTS = { style: 'particles', intensity: 0.5, reactive: true, palette: 'default', bgTheme: 'default', hwTheme: 'default', showFretOnNote: true, fretNumberGhostScope: 'chords', cameraSmoothing: 0.5, zoomSmoothing: 0.5, tiltSmoothing: 0.5, cameraLockLow: false, cameraLockZoom: 0.5, cameraMode: 'lookahead', nutHeadstockVisible: true, tuningLabelsVisible: true, nutColor: '#f5f3f0', headstockColor: '#d4b48a', textSize: 0.5, vibrancy: 0.85, glow: 0.25, customImageDataUrl: '', customImageName: '', customVideoName: '', chordDiagramVisible: true, chordDiagramSize: 0.5, chordDiagramPosition: 'tl', fretColumnMarkerCadence: 1, projectionVisible: true, inlayLabelsVisible: false, sectionLabelsOnHighway: false, sectionHudVisible: false, sectionHudPosition: 'tr', sectionHudSize: 0.5, toneHudVisible: false, toneHudPosition: 'tl', toneHudSize: 0.5, fpsVisible: false, fretDividersVisible: true, slideArrowApproachVisible: true, slideArrowNeckVisible: true, slideArrowChainPreviewVisible: true, hitFx: 0.7, cinematic: true, verdictMarks: true, timingFx: true, streakFx: true };
+    const BG_DEFAULTS = { style: 'particles', intensity: 0.5, reactive: true, palette: 'default', bgTheme: 'default', hwTheme: 'default', showFretOnNote: true, fretNumberGhostScope: 'chords', cameraSmoothing: 0.5, zoomSmoothing: 0.5, tiltSmoothing: 0.5, cameraLockLow: false, cameraLockZoom: 0.5, cameraMode: 'lookahead', nutHeadstockVisible: true, tuningLabelsVisible: true, nutColor: '#f5f3f0', headstockColor: '#d4b48a', textSize: 0.5, vibrancy: 0.85, glow: 0.25, customImageDataUrl: '', customImageName: '', customVideoName: '', chordDiagramVisible: true, chordDiagramSize: 0.5, chordDiagramPosition: 'tl', fretColumnMarkerCadence: 1, projectionVisible: true, inlayLabelsVisible: false, sectionLabelsOnHighway: false, sectionHudVisible: false, sectionHudPosition: 'tr', sectionHudSize: 0.5, toneHudVisible: false, toneHudPosition: 'tl', toneHudSize: 0.5, fpsVisible: false, fretDividersVisible: true, slideArrowApproachVisible: true, slideArrowNeckVisible: true, slideArrowChainPreviewVisible: true, hitFx: 0.7, cinematic: true, verdictMarks: true, timingFx: true, streakFx: true, bloom: true };
     // User-selectable, persistable bg styles — must mirror settings.html's
     // VALID_STYLES. 'venue' is deliberately NOT here: it is an internal effective
     // style reached only via _venueSceneOverride (the viz-picker Venue flow), so
@@ -2115,7 +2115,7 @@
     // means (fall back to default rather than silently flipping to
     // false). Add new boolean keys to BG_DEFAULTS and they pick this
     // up via the dispatch below.
-    const _BG_BOOL_KEYS = new Set(['reactive', 'showFretOnNote', 'cameraLockLow', 'inlayLabelsVisible', 'sectionLabelsOnHighway', 'sectionHudVisible', 'nutHeadstockVisible', 'tuningLabelsVisible', 'projectionVisible', 'chordDiagramVisible', 'fpsVisible', 'toneHudVisible', 'fretDividersVisible', 'slideArrowApproachVisible', 'slideArrowNeckVisible', 'slideArrowChainPreviewVisible', 'cinematic', 'verdictMarks', 'timingFx', 'streakFx']);
+    const _BG_BOOL_KEYS = new Set(['reactive', 'showFretOnNote', 'cameraLockLow', 'inlayLabelsVisible', 'sectionLabelsOnHighway', 'sectionHudVisible', 'nutHeadstockVisible', 'tuningLabelsVisible', 'projectionVisible', 'chordDiagramVisible', 'fpsVisible', 'toneHudVisible', 'fretDividersVisible', 'slideArrowApproachVisible', 'slideArrowNeckVisible', 'slideArrowChainPreviewVisible', 'cinematic', 'verdictMarks', 'timingFx', 'streakFx', 'bloom']);
     function _bgCoerceBool(val, fallback) {
         if (val === 'true' || val === '1') return true;
         if (val === 'false' || val === '0') return false;
@@ -2264,6 +2264,7 @@
     window.h3dBgSetVerdictMarks = (v) => _bgWriteGlobal('verdictMarks', !!v);
     window.h3dBgSetTimingFx     = (v) => _bgWriteGlobal('timingFx', !!v);
     window.h3dBgSetStreakFx     = (v) => _bgWriteGlobal('streakFx', !!v);
+    window.h3dBgSetBloom        = (v) => _bgWriteGlobal('bloom', !!v);
     window.h3dBgSetToneHudVisible   = (v) => _bgWriteGlobal('toneHudVisible', !!v);
     window.h3dBgSetToneHudPosition  = (v) => _bgWriteGlobal('toneHudPosition', v);
     window.h3dBgSetToneHudSize      = (v) => _bgWriteGlobal('toneHudSize', v);
@@ -3562,6 +3563,8 @@
         let _verdictMarks       = BG_DEFAULTS.verdictMarks;
         let _timingFx           = BG_DEFAULTS.timingFx;
         let _streakFx           = BG_DEFAULTS.streakFx;
+        let _bloom              = BG_DEFAULTS.bloom;
+        let _composer = null, _bloomPass = null, _bloomLoad = null, _bloomW = 0, _bloomH = 0;
         let _strikeLine         = null;   // #1 glowing bar at the hit line
         let _ndHitFlash         = 0;      // eased hit pulse for the strike line
         let _ndMissFlash        = 0;      // eased miss pulse for the strike line
@@ -7383,6 +7386,7 @@
             _verdictMarks        = _bgReadSetting(panelKey, 'verdictMarks');
             _timingFx            = _bgReadSetting(panelKey, 'timingFx');
             _streakFx            = _bgReadSetting(panelKey, 'streakFx');
+            _bloom               = _bgReadSetting(panelKey, 'bloom');
             _applyCinematic();
             fpsVisible           = _bgReadSetting(panelKey, 'fpsVisible');
             fretDividersVisible  = _bgReadSetting(panelKey, 'fretDividersVisible');
@@ -7860,6 +7864,33 @@
             _sparkPts.geometry.attributes.position.needsUpdate = true;
             _sparkPts.geometry.attributes.color.needsUpdate = true;
             _sparkPts.visible = any;
+        }
+        // #4 Bloom: lazy-load the vendored postprocessing addons and build an
+        // EffectComposer (RenderPass -> UnrealBloomPass -> OutputPass/ACES). Returns
+        // the composer once ready, or null (caller falls back to a direct render).
+        function _bloomEnsure() {
+            if (_composer) return _composer;
+            if (_bloomLoad || !ren || !scene || !cam) return null;
+            const A = '/static/vendor/three/addons/';
+            _bloomLoad = Promise.all([
+                import(A + 'postprocessing/EffectComposer.js'),
+                import(A + 'postprocessing/RenderPass.js'),
+                import(A + 'postprocessing/UnrealBloomPass.js'),
+                import(A + 'postprocessing/OutputPass.js'),
+            ]).then(([EC, RP, UB, OP]) => {
+                try {
+                    const sz = canvasSize(highwayCanvas) || { w: 1280, h: 720 };
+                    const w = Math.max(2, sz.w | 0), h = Math.max(2, sz.h | 0);
+                    const comp = new EC.EffectComposer(ren);
+                    comp.addPass(new RP.RenderPass(scene, cam));
+                    _bloomPass = new UB.UnrealBloomPass(new T.Vector2(w, h), 0.65, 0.5, 0.82); // strength, radius, threshold (high → only emissive blooms)
+                    comp.addPass(_bloomPass);
+                    comp.addPass(new OP.OutputPass());
+                    comp.setSize(w, h);
+                    _bloomW = w; _bloomH = h; _composer = comp;
+                } catch (e) { console.warn('[3D-Hwy] bloom init failed', e); _composer = null; }
+            }).catch((e) => console.warn('[3D-Hwy] bloom modules failed', e));
+            return null;
         }
         function buildBoard() {
             // Dispose before clearing (traverse: nut/headstock may live in a Group).
@@ -14119,6 +14150,7 @@
             _ownedSharedGeos.length = 0;
             txtCache = {};
             if (_sparkPts) { try { _sparkPts.geometry.dispose(); _sparkPts.material.dispose(); } catch (e) {} _sparkPts = null; }
+            if (_composer) { try { _composer.dispose(); if (_bloomPass && _bloomPass.dispose) _bloomPass.dispose(); } catch (e) {} _composer = null; _bloomPass = null; }
             if (ren) { ren.dispose(); ren = null; }
             scene = cam = noteG = beatG = lblG = fretG = tuningLblG = null;
             ambLight = dirLight = null;
@@ -14460,7 +14492,20 @@
                         _ndHitFlash *= 0.82; _ndMissFlash *= 0.82;
                     }
                 }
-                pbBeg(6); ren.render(scene, cam); pbEnd(6);
+                {
+                    const comp = (_bloom && !_ssActive()) ? _bloomEnsure() : null;
+                    if (comp) {
+                        const bsz = canvasSize(highwayCanvas);
+                        if (bsz && bsz.w > 0 && bsz.h > 0 && (bsz.w !== _bloomW || bsz.h !== _bloomH)) {
+                            comp.setSize(bsz.w | 0, bsz.h | 0); _bloomW = bsz.w | 0; _bloomH = bsz.h | 0;
+                        }
+                        if (ren.toneMapping !== T.ACESFilmicToneMapping) ren.toneMapping = T.ACESFilmicToneMapping;
+                        pbBeg(6); comp.render(); pbEnd(6);
+                    } else {
+                        if (ren.toneMapping !== T.NoToneMapping) ren.toneMapping = T.NoToneMapping;
+                        pbBeg(6); ren.render(scene, cam); pbEnd(6);
+                    }
+                }
                 if (lyricsCtx && lyricsCanvas) {
                     lyricsCtx.clearRect(0, 0, lyricsCanvas.width, lyricsCanvas.height);
                     // Capture the actual lyrics-banner bottom so overlay cards

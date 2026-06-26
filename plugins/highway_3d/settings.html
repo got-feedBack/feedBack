@@ -621,6 +621,16 @@
                     onchange="window.h3dBgSetVerdictMarks && window.h3dBgSetVerdictMarks(this.checked)"
                     class="accent-accent mt-0.5">
             </div>
+
+            <div class="mt-3 flex items-start justify-between gap-3">
+                <label for="h3d-bloom" class="text-xs font-medium text-gray-400">
+                    Glow bloom
+                    <span class="block text-[10px] text-gray-500 font-normal">Real light-bleed around the glowing notes and hit flash (higher fidelity). Turns itself off in split-screen. If your machine struggles, turn this off first.</span>
+                </label>
+                <input type="checkbox" id="h3d-bloom" checked
+                    onchange="window.h3dBgSetBloom && window.h3dBgSetBloom(this.checked)"
+                    class="accent-accent mt-0.5">
+            </div>
         </div>
     </details>
 </div>
