@@ -1768,7 +1768,11 @@ function setLibView(view) {
     if (folderTreeEl) folderTreeEl.classList.toggle('hidden', view !== 'folder');
     const folderCtrlEl = document.getElementById('lib-folder-controls');
     if (folderCtrlEl) folderCtrlEl.classList.toggle('hidden', view !== 'folder');
-    document.getElementById('view-folder-btn').className = `px-3 py-2.5 text-sm transition ${view === 'folder' ? 'text-accent-light' : 'text-gray-600 hover:text-gray-400'}`;
+    // The folder-view toolbar button only exists in the classic (v2) markup;
+    // setLibView also runs at v3 startup where it's absent, so guard it (the
+    // grid/tree buttons above predate this and exist on both paths).
+    const folderBtnEl = document.getElementById('view-folder-btn');
+    if (folderBtnEl) folderBtnEl.className = `px-3 py-2.5 text-sm transition ${view === 'folder' ? 'text-accent-light' : 'text-gray-600 hover:text-gray-400'}`;
     if (libView === 'folder' && view !== 'folder') window.folderLibrary?.unload?.();
     if (view !== 'grid') stopInfiniteScroll();
     _libEpoch++;
@@ -1799,9 +1803,9 @@ async function loadLibrary(page) {
 
 // ── Folder Library: filter bridge ─────────────────────────────────────────
 // Serialises the active lib filter state as URL params so the plugin can pass
-// them to /api/plugin/folder_library/tree — the same pattern grid and tree
+// them to /api/plugins/folder_library/tree — the same pattern grid and tree
 // views use when sending filter params to their own backend endpoints.
-window.slopsmithLibFilterParams = function() {
+window.feedBackLibFilterParams = function() {
     var p = new URLSearchParams();
     _applyLibFiltersToParams(p);
     return p.toString();

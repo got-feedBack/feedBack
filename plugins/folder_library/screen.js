@@ -18,7 +18,7 @@
 (function () {
 'use strict';
 
-const API = '/api/plugin/folder_library';
+const API = '/api/plugins/folder_library';
 
 // ════════════════════════════════════════════════════════════════════════
 //  Shared surface factory
@@ -195,7 +195,7 @@ function createFolderSurface(cfg) {
             var data = await _api(url);
             if (data.error) {
                 if (cfg.ownsStatus) _status('⚠ ' + data.error, true);
-                else if (treeEl) treeEl.innerHTML = '<div style="padding:48px;text-align:center;color:#ef4444;font-size:13px;">⚠ ' + data.error + '</div>';
+                else if (treeEl) { treeEl.innerHTML = ''; var _ed = document.createElement('div'); _ed.style.cssText = 'padding:48px;text-align:center;color:#ef4444;font-size:13px;'; _ed.textContent = '⚠ ' + data.error; treeEl.appendChild(_ed); }
                 return;
             }
             _tree             = data;
@@ -216,7 +216,7 @@ function createFolderSurface(cfg) {
             }
         } catch (err) {
             if (cfg.ownsStatus) _status('Load failed: ' + err.message, true);
-            else if (treeEl) treeEl.innerHTML = '<div style="padding:48px;text-align:center;color:#ef4444;font-size:13px;">⚠ Failed to load: ' + err.message + '</div>';
+            else if (treeEl) { treeEl.innerHTML = ''; var _ed = document.createElement('div'); _ed.style.cssText = 'padding:48px;text-align:center;color:#ef4444;font-size:13px;'; _ed.textContent = '⚠ Failed to load: ' + err.message; treeEl.appendChild(_ed); }
         }
     }
 

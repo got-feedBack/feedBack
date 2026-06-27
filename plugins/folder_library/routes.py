@@ -1,5 +1,9 @@
 """
-Folder Browser plugin — routes.py
+Folder Library plugin — routes.py
+
+Surfaces the DLC folder structure as a navigable tree and provides in-app
+folder management (create / rename / delete) and song moves. Every filesystem
+mutation is confined to DLC_DIR and validated against path traversal.
 """
 
 from pathlib import Path
@@ -9,318 +13,82 @@ import shutil
 import re
 
 
-class FolderLibraryProvider:
-    """Library provider that surfaces the DLC folder structure as artist/album grouping.
+# ── Pure, testable helpers ─────────────────────────────────────────────────
 
-    Each top-level folder becomes an "artist", each subfolder becomes an "album", and
-    songs sitting directly inside a folder land in a "(Unsorted)" album for that folder.
-    Root-level songs (no folder) land under the "(Unsorted)" artist.
-    """
+_UNSAFE_NAME_RE = re.compile(r'[\\/:*?"<>|]')
 
-    id = "folder_library"
-    label = "Folders"
-    kind = "local"
-    capabilities = ("library.read",)
 
-    def __init__(self, dlc_root_fn, scan_root_fn, is_song_fn, extract_meta_fn, log):
-        self._dlc_root_fn = dlc_root_fn
-        self._scan_root_fn = scan_root_fn
-        self._is_song_fn = is_song_fn
-        self._extract_meta_fn = extract_meta_fn
-        self._log = log
+def _safe_name(name: str) -> bool:
+    """A single path segment is safe: no separators, no traversal dot-names,
+    no surrounding whitespace, no characters illegal across filesystems."""
+    if not name or name.strip() != name:
+        return False
+    if _UNSAFE_NAME_RE.search(name):
+        return False
+    if name in (".", ".."):
+        return False
+    return True
 
-    # ── scanning ───────────────────────────────────────────────────────
 
-    def _get_all_songs(self):
-        dlc = self._dlc_root_fn()
-        if not dlc or not dlc.exists():
-            return []
-        root = self._scan_root_fn(dlc)
-        songs = []
-        self._scan_into(root, root, dlc, songs)
-        return songs
+def _safe_path(path_str: str) -> bool:
+    """A slash-separated path is safe iff every segment is a safe name."""
+    if not path_str:
+        return False
+    return all(_safe_name(p) for p in path_str.split("/"))
 
-    def _scan_into(self, path, root, dlc, songs):
+
+def _is_within(root: Path, candidate: Path) -> bool:
+    """True iff ``candidate`` resolves to a location inside ``root`` (after
+    normalising ``..`` and symlinks). Containment backstop for file moves so a
+    crafted filename can't escape DLC_DIR even past the segment validator."""
+    try:
+        candidate.resolve().relative_to(root.resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
+def _path_to_dir(root: Path, folder_path: str) -> Path:
+    """Resolve a slash-separated folder path relative to ``root``."""
+    result = root
+    for part in folder_path.split("/"):
+        result = result / part
+    return result
+
+
+def _load_is_loose_song():
+    """The host's authoritative loose-folder predicate (lib/loosefolder.py),
+    imported lazily so the plugin still loads if it's ever unavailable. A
+    loose-folder song is a directory carrying audio + an arrangement XML rather
+    than a ``.sloppak`` bundle, so the plain suffix check below misses it."""
+    try:
+        from loosefolder import is_loose_song
+        return is_loose_song
+    except Exception:
+        return None
+
+
+_IS_LOOSE_SONG = _load_is_loose_song()
+
+
+def _is_song(p: Path) -> bool:
+    """A song carrier is a ``.sloppak`` / ``.feedpak`` file or directory-form
+    bundle (extension on the leaf name), or a host-recognised loose-folder song
+    directory — so loose-folder charts surface in the tree like any other song
+    instead of being walked into as if they were ordinary folders."""
+    if p.suffix.lower() in (".sloppak", ".feedpak"):
+        return True
+    if _IS_LOOSE_SONG is not None and p.is_dir():
         try:
-            for entry in sorted(path.iterdir(), key=lambda p: p.name.lower()):
-                if entry.name.startswith("."):
-                    continue
-                if self._is_song_fn(entry):
-                    songs.append(self._song_dict(entry, root, dlc))
-                elif entry.is_dir():
-                    self._scan_into(entry, root, dlc, songs)
-        except PermissionError:
-            self._log.warning("folder_library provider: permission denied: %s", path)
-
-    def _song_dict(self, p, root, dlc):
-        """Build a library-compatible song dict; artist = top folder, album = subfolder."""
-        try:
-            rel = p.relative_to(dlc)
-            filename = "/".join(rel.parts)
-        except ValueError:
-            filename = p.name
-
-        # Map folder depth → artist / album
-        try:
-            parts = p.relative_to(root).parts  # excludes filename at end
-            if len(parts) == 1:
-                artist_folder = "(Unsorted)"
-                album_folder = "(Unsorted)"
-            elif len(parts) == 2:
-                artist_folder = parts[0]
-                album_folder = "(Unsorted)"
-            else:
-                artist_folder = parts[0]
-                album_folder = "/".join(parts[1:-1])
-        except ValueError:
-            artist_folder = "(Unsorted)"
-            album_folder = "(Unsorted)"
-
-        d = {
-            "filename": filename,
-            "title": p.stem,
-            "artist": artist_folder,
-            "album": album_folder,
-            "year": "",
-            "duration": None,
-            "tuning": None,
-            "tuning_name": "",
-            "arrangements": [],
-            "has_lyrics": False,
-            "mtime": None,
-            "format": p.suffix.lower().lstrip(".") or "feedpak",
-            "stem_count": 0,
-            "stem_ids": [],
-            "has_estd": False,
-            "favorite": False,
-        }
-
-        try:
-            d["mtime"] = p.stat().st_mtime
+            return bool(_IS_LOOSE_SONG(p))
         except Exception:
-            pass
-
-        try:
-            raw = self._extract_meta_fn(p)
-            if raw:
-                d["title"] = raw.get("title") or raw.get("name") or p.stem
-                d["duration"] = raw.get("duration")
-                raw_year = raw.get("year")
-                d["year"] = str(raw_year) if raw_year is not None else ""
-
-                tuning_raw = raw.get("tuning")
-                if isinstance(tuning_raw, list):
-                    d["tuning"] = tuning_raw
-                elif tuning_raw is not None:
-                    d["tuning"] = str(tuning_raw)
-
-                d["tuning_name"] = raw.get("tuning_name") or (
-                    raw.get("tuning") if isinstance(raw.get("tuning"), str) else ""
-                ) or ""
-
-                # arrangements — preserve full objects when available
-                raw_arr = raw.get("arrangements") or []
-                if isinstance(raw_arr, (list, tuple)):
-                    d["arrangements"] = [
-                        a if isinstance(a, dict) else {"index": i, "name": str(a), "notes": 0}
-                        for i, a in enumerate(raw_arr)
-                    ]
-
-                # stems
-                raw_stems = raw.get("stems") or []
-                for _key in ("stems", "stem_types", "available_stems", "stemTypes"):
-                    _v = raw.get(_key)
-                    if _v:
-                        raw_stems = _v
-                        break
-                if isinstance(raw_stems, (list, tuple)):
-                    stem_ids = [
-                        a["name"] if isinstance(a, dict) else str(a)
-                        for a in raw_stems
-                        if (isinstance(a, dict) and "name" in a) or isinstance(a, str)
-                    ]
-                    d["stem_count"] = len(stem_ids)
-                    d["stem_ids"] = stem_ids
-
-                # lyrics
-                for _key in ("lyrics", "hasLyrics", "has_lyrics", "lyric", "hasLyric"):
-                    _val = raw.get(_key)
-                    if _val is not None:
-                        if isinstance(_val, str):
-                            d["has_lyrics"] = _val.lower() not in ("", "false", "no", "0")
-                        else:
-                            d["has_lyrics"] = bool(_val)
-                        break
-        except Exception as exc:
-            self._log.debug("folder_library provider: meta failed for %s: %s", p.name, exc)
-
-        return d
-
-    # ── helpers ────────────────────────────────────────────────────────
-
-    def _filter_search(self, songs, q):
-        if not q:
-            return songs
-        ql = q.lower()
-        return [s for s in songs if
-                ql in (s.get("title") or "").lower() or
-                ql in (s.get("artist") or "").lower() or
-                ql in (s.get("album") or "").lower()]
-
-    def _apply_filters(self, songs, favorites_only=False, format_filter="",
-                       arrangements_has=None, arrangements_lacks=None,
-                       stems_has=None, stems_lacks=None,
-                       has_lyrics=None, tunings=None, **_ignored):
-        def _arr_set(s):
-            return {(a["name"] if isinstance(a, dict) else str(a)).lower()
-                    for a in s.get("arrangements", [])}
-
-        result = songs
-        if favorites_only:
-            result = [s for s in result if s.get("favorite")]
-        if format_filter:
-            result = [s for s in result if s.get("format") == format_filter]
-        if arrangements_has:
-            want = {n.lower() for n in arrangements_has}
-            result = [s for s in result if _arr_set(s) & want]
-        if arrangements_lacks:
-            excl = {n.lower() for n in arrangements_lacks}
-            result = [s for s in result if not (_arr_set(s) & excl)]
-        if stems_has:
-            result = [s for s in result if any(
-                n.lower() in [x.lower() for x in s.get("stem_ids", [])] for n in stems_has
-            )]
-        if stems_lacks:
-            result = [s for s in result if not any(
-                n.lower() in [x.lower() for x in s.get("stem_ids", [])] for n in stems_lacks
-            )]
-        if has_lyrics is not None:
-            result = [s for s in result if bool(s.get("has_lyrics")) == bool(has_lyrics)]
-        if tunings:
-            tl = {t.lower() for t in tunings}
-            result = [s for s in result if (s.get("tuning_name") or "").lower() in tl]
-        return result
-
-    def _sort_songs(self, songs, sort, direction):
-        reverse = (direction == "desc")
-        if sort == "title":
-            return sorted(songs, key=lambda s: (s.get("title") or "").lower(), reverse=reverse)
-        if sort == "recent":
-            return sorted(songs, key=lambda s: s.get("mtime") or 0, reverse=not reverse)
-        if sort in ("year", "year-desc"):
-            desc = (sort == "year-desc")
-            return sorted(songs, key=lambda s: (
-                not s.get("year"),
-                int(s["year"]) if s.get("year", "").lstrip("-").isdigit() else 0,
-            ), reverse=desc)
-        if sort == "tuning":
-            return sorted(songs, key=lambda s: (s.get("tuning_name") or "").lower())
-        # default / artist
-        return sorted(songs, key=lambda s: (s.get("artist") or "").lower(), reverse=reverse)
-
-    # ── provider API ───────────────────────────────────────────────────
-
-    def query_page(self, q="", page=0, size=24, sort="artist", direction="asc", **kwargs):
-        songs = self._get_all_songs()
-        songs = self._filter_search(songs, q)
-        songs = self._apply_filters(songs, **kwargs)
-        songs = self._sort_songs(songs, sort, direction)
-        total = len(songs)
-        return songs[page * size: page * size + size], total
-
-    def query_artists(self, letter="", q="", page=0, size=50, **kwargs):
-        from collections import OrderedDict
-        songs = self._get_all_songs()
-        songs = self._filter_search(songs, q)
-        songs = self._apply_filters(songs, **kwargs)
-
-        if letter == "#":
-            songs = [s for s in songs if not (s.get("artist") or "?")[0:1].isalpha()]
-        elif letter:
-            songs = [s for s in songs
-                     if (s.get("artist") or "?")[0:1].upper() == letter.upper()]
-
-        # group folder → subfolder → songs
-        artists = OrderedDict()
-        for s in sorted(songs, key=lambda s: (
-            (s.get("artist") or "").lower(),
-            (s.get("album") or "").lower(),
-            (s.get("title") or "").lower(),
-        )):
-            artist = s.get("artist") or "(Unsorted)"
-            album = s.get("album") or "(Unsorted)"
-            akey = artist.lower()
-            if akey not in artists:
-                artists[akey] = {"name": artist, "albums": OrderedDict()}
-            bkey = album.lower()
-            if bkey not in artists[akey]["albums"]:
-                artists[akey]["albums"][bkey] = {"name": album, "songs": []}
-            artists[akey]["albums"][bkey]["songs"].append(s)
-
-        total_artists = len(artists)
-        paged_keys = list(artists.keys())[page * size: (page + 1) * size]
-        result = []
-        for akey in paged_keys:
-            aval = artists[akey]
-            albums = [{"name": bval["name"], "songs": bval["songs"]}
-                      for bval in aval["albums"].values()]
-            result.append({
-                "name": aval["name"],
-                "album_count": len(albums),
-                "song_count": sum(len(a["songs"]) for a in albums),
-                "albums": albums,
-            })
-        return result, total_artists
-
-    def query_stats(self, q="", **kwargs):
-        from collections import defaultdict
-        songs = self._get_all_songs()
-        songs = self._filter_search(songs, q)
-        songs = self._apply_filters(songs, **kwargs)
-
-        total = len(songs)
-        all_artists = {(s.get("artist") or "(Unsorted)").lower() for s in songs}
-
-        letter_artists = defaultdict(set)
-        for s in songs:
-            artist = (s.get("artist") or "(Unsorted)").lower()
-            first = (s.get("artist") or "?")[0:1].upper()
-            if first.isascii() and first.isalpha():
-                letter_artists[first].add(artist)
-            else:
-                letter_artists["#"].add(artist)
-
-        return {
-            "total_songs": total,
-            "total_artists": len(all_artists),
-            "letters": {k: len(v) for k, v in letter_artists.items()},
-        }
-
-    def tuning_names(self):
-        from collections import defaultdict
-        songs = self._get_all_songs()
-        counts = defaultdict(int)
-        sort_keys = {}
-        for s in songs:
-            name = s.get("tuning_name") or ""
-            if not name:
-                continue
-            counts[name] += 1
-            tuning = s.get("tuning")
-            if isinstance(tuning, list) and name not in sort_keys:
-                sort_keys[name] = sum(tuning)
-        return {
-            "tunings": sorted(
-                [{"name": n, "sort_key": sort_keys.get(n, 0), "count": c}
-                 for n, c in counts.items()],
-                key=lambda x: (abs(x["sort_key"]), x["sort_key"], x["name"].lower()),
-            )
-        }
+            return False
+    return False
 
 
 def setup(app, context):
     log = context["log"]
-    router = APIRouter(prefix="/api/plugin/folder_library")
+    router = APIRouter(prefix="/api/plugins/folder_library")
 
     # ── Two-level cache ────────────────────────────────────────────────
     # _meta_cache  — expensive extract_meta() results keyed by abs path
@@ -345,37 +113,6 @@ def setup(app, context):
     def _scan_root(dlc: Path) -> Path:
         sloppak = dlc / "sloppak"
         return sloppak if sloppak.exists() else dlc
-
-    def _is_song(p: Path) -> bool:
-        ext = p.suffix.lower()
-        if ext in (".sloppak", ".feedpak"):
-            return True
-        if p.is_dir() and ext in (".sloppak", ".feedpak"):
-            return True
-        return False
-
-    def _safe_name(name: str) -> bool:
-        if not name or name.strip() != name:
-            return False
-        if re.search(r'[\\/:*?"<>|]', name):
-            return False
-        if name in ('.', '..'):
-            return False
-        return True
-
-    def _safe_path(path_str: str) -> bool:
-        """Validate a slash-separated folder path — each segment must be a safe name."""
-        if not path_str:
-            return False
-        return all(_safe_name(p) for p in path_str.split("/"))
-
-    def _path_to_dir(root: Path, folder_path: str) -> Path:
-        """Resolve a slash-separated folder path relative to root."""
-        parts = folder_path.split("/")
-        result = root
-        for part in parts:
-            result = result / part
-        return result
 
     def _meta(p: Path, dlc: Path) -> dict:
         # filename and added are always computed fresh — they change when files move.
@@ -535,7 +272,7 @@ def setup(app, context):
                 return JSONResponse({"folders": [], "root_songs": [],
                                      "error": "DLC directory not found"})
             root = _scan_root(dlc)
-            log.info("folder_browser: scanning %s", root)
+            log.info("folder_library: scanning %s", root)
             folders = []
             root_songs = []
             try:
@@ -633,16 +370,26 @@ def setup(app, context):
         if not target.exists():
             return JSONResponse({"error": "Folder not found"}, status_code=404)
         try:
-            # Move all songs (at any depth) to the scan root before deleting.
-            # Keep _meta_cache keys in sync so the warm cache survives.
+            # Relocate every song (at any depth) up to the scan root BEFORE
+            # removing the folder. Colliding filenames are de-duplicated so a
+            # name clash never leaves a song behind to be destroyed by rmtree
+            # (the folder is advertised as "moves its songs to Unsorted").
             for song_path in sorted(target.rglob("*")):
-                if _is_song(song_path):
-                    old_key = song_path.as_posix()
-                    dest = root / song_path.name
-                    if not dest.exists():
-                        song_path.rename(dest)
-                        if old_key in _meta_cache:
-                            _meta_cache[dest.as_posix()] = _meta_cache.pop(old_key)
+                if not song_path.exists():
+                    continue  # a parent song-dir was already relocated
+                if not _is_song(song_path):
+                    continue
+                old_key = song_path.as_posix()
+                dest = root / song_path.name
+                if dest.exists():
+                    stem, suffix = song_path.stem, song_path.suffix
+                    n = 1
+                    while dest.exists():
+                        dest = root / f"{stem} ({n}){suffix}"
+                        n += 1
+                song_path.rename(dest)
+                if old_key in _meta_cache:
+                    _meta_cache[dest.as_posix()] = _meta_cache.pop(old_key)
             shutil.rmtree(target)
             _invalidate()
             return JSONResponse({"ok": True})
@@ -654,10 +401,17 @@ def setup(app, context):
         body = await request.json()
         filename = (body.get("filename") or "").strip()
         dest_folder = (body.get("folder") or "").strip()
+        # Validate the source path like the folder ops, AND confirm it resolves
+        # inside DLC_DIR — without this a filename such as "../../etc/passwd"
+        # would be renamed (moved) into the served library and become readable.
+        if not filename or not _safe_path(filename):
+            return JSONResponse({"error": "Invalid filename"}, status_code=400)
         dlc = _dlc_root()
         if not dlc:
             return JSONResponse({"error": "DLC dir not found"}, status_code=500)
         src = dlc / Path(*filename.split("/"))
+        if not _is_within(dlc, src):
+            return JSONResponse({"error": "Invalid filename"}, status_code=400)
         if not src.exists():
             return JSONResponse({"error": "Song not found"}, status_code=404)
         root = _scan_root(dlc)
@@ -683,4 +437,4 @@ def setup(app, context):
             return JSONResponse({"error": str(e)}, status_code=500)
 
     app.include_router(router)
-    log.info("folder_browser routes registered")
+    log.info("folder_library routes registered")

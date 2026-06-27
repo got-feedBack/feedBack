@@ -845,6 +845,24 @@
     function closeDrawer() { document.getElementById('v3-songs-drawer')?.classList.add('translate-x-full'); document.getElementById('v3-songs-overlay')?.classList.add('hidden'); updateFilterBadge(); }
     function updateFilterBadge() { const b = document.getElementById('v3-songs-filter-count'); if (b) { const n = activeFilterCount(); b.textContent = n; b.classList.toggle('hidden', n === 0); } }
 
+    // The host loads the Folder Library plugin's screen.js at startup (defining
+    // window.folderLibrary). If it isn't present yet, inject it once; the
+    // plugin's IIFEs are idempotent so a redundant evaluation is a no-op. The
+    // promise is memoised so concurrent folder-view switches don't double-inject.
+    let _flLoadPromise = null;
+    function _ensureFolderLibrary() {
+        if (window.folderLibrary) return Promise.resolve();
+        if (_flLoadPromise) return _flLoadPromise;
+        _flLoadPromise = new Promise((resolve, reject) => {
+            const s = document.createElement('script');
+            s.src = '/api/plugins/folder_library/screen.js';
+            s.onload = () => resolve();
+            s.onerror = () => { _flLoadPromise = null; reject(new Error('Failed to load Folder Library')); };
+            document.head.appendChild(s);
+        });
+        return _flLoadPromise;
+    }
+
     function reload() {
         _clearLibraryScrollSnapshot();
         // Record the state this fetch reflects so a later sidebar return can
@@ -861,13 +879,7 @@
         { const _fc = document.getElementById('lib-folder-controls'); if (_fc) _fc.style.display = state.view === 'folder' ? 'flex' : 'none'; }
         if (state.view === 'folder') {
             _applyMainScrollTop(0);
-            if (window.folderLibrary && window._flLibVer === 9) return window.folderLibrary.load();
-            delete window.folderLibrary;
-            const s = document.createElement('script');
-            s.src = '/api/plugins/folder_library/screen.js?v=9';
-            s.onload = () => { window._flLibVer = 9; window.folderLibrary?.load(); };
-            document.head.appendChild(s);
-            return;
+            return _ensureFolderLibrary().then(() => window.folderLibrary?.load());
         }
         const loaded = state.view === 'grid' ? loadGrid(true) : loadTree();
         _applyMainScrollTop(0);
@@ -1000,16 +1012,7 @@
             byId('v3-songs-grid-btn').className = 'px-3 py-2 text-sm ' + (v === 'grid' ? 'bg-fb-primary text-white' : 'text-fb-textDim');
             byId('v3-songs-tree-btn').className = 'px-3 py-2 text-sm ' + (v === 'tree' ? 'bg-fb-primary text-white' : 'text-fb-textDim');
             byId('v3-songs-folder-btn').className = 'px-3 py-2 text-sm ' + (v === 'folder' ? 'bg-fb-primary text-white' : 'text-fb-textDim');
-            if (v === 'folder' && (!window.folderLibrary || window._flLibVer !== 9)) {
-                delete window.folderLibrary;
-                await new Promise((resolve, reject) => {
-                    const s = document.createElement('script');
-                    s.src = '/api/plugins/folder_library/screen.js?v=9';
-                    s.onload = () => { window._flLibVer = 9; resolve(); };
-                    s.onerror = reject;
-                    document.head.appendChild(s);
-                });
-            }
+            if (v === 'folder') await _ensureFolderLibrary();
             return reload();
         };
         byId('v3-songs-grid-btn').addEventListener('click', () => setView('grid'));

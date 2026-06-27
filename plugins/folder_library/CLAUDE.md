@@ -4,7 +4,7 @@ A FeedBack (fee[dB]ack) plugin that adds a **Folders** nav screen showing your `
 
 > The host app is **FeedBack** (formerly "Slopsmith"). The frontend talks to the host through `window.feedBack`; `window.slopsmith` is a back-compat alias the host still exposes (`window.slopsmith = window.feedBack` in `static/app.js`). New code should prefer `window.feedBack`.
 
-> ⚠️ **Status — mid-migration to core; code ≠ runtime.** This plugin began as a standalone plugin and is being reworked into a bundled core plugin. The sections below document what the **code on disk implements**, but a couple of features are **not currently working** in the integrated core build and need re-wiring against the current host APIs — known not-working: folder search. (In the library Folder view, `_query()` reads the host search box `#v3-search` / `#lib-filter` and `_filtered()` would filter by it, but this is **not currently functional** — don't assume it works without verifying. The standalone Folders nav-tab has its own `#fb-search` box.) Hover metadata badges have been dropped. Everything else (folder management, nested subfolders, collapsible folders + expand/collapse-all, drag-and-drop, move-song, sort, filters) is treated as working; verify against a running build before relying on any of it.
+> ⚠️ **Status — bundled core plugin.** This plugin began as a standalone plugin and is now a bundled core plugin. `screen.js` has been unified into a **single surface factory** driving two entry points: the v3 library Folder view (host chrome — host search `#v3-search`/`#lib-filter`, host filter params, renders into `#lib-folder-tree`) and the classic v2 standalone Folders nav-tab (its own `#fb-search` + toolbar, renders into `#fb-tree`). **Folder search works on both surfaces** — typing in the relevant search box re-renders the tree. **Loose-folder songs** (directories with audio + an arrangement XML) are recognised as songs via the host `loosefolder.is_loose_song` predicate, so they appear in the tree alongside `.sloppak`/`.feedpak` bundles. Folder management, nested subfolders, collapsible folders + expand/collapse-all, drag-and-drop, move-song, sort, filters, and the hover metadata badges are wired on both surfaces; verify against a running build before relying on any of it.
 
 ## File Structure
 
@@ -20,7 +20,7 @@ README.md       User-facing docs
 
 This plugin follows the standard FeedBack plugin pattern (see the repo-root `CLAUDE.md` for the full plugin system reference).
 
-- **Backend** (`routes.py`) — registers routes under `GET/POST /api/plugin/folder_library/`. Uses `context["get_dlc_dir"]()`, `context["extract_meta"]()`, and `context["log"]`. Scans `<dlc>/sloppak/` if it exists, otherwise `<dlc>/`. Recursively walks the tree and handles create/rename/delete folder and move-song operations on slash-separated folder paths.
+- **Backend** (`routes.py`) — registers routes under `GET/POST /api/plugins/folder_library/`. Uses `context["get_dlc_dir"]()`, `context["extract_meta"]()`, and `context["log"]`. Scans `<dlc>/sloppak/` if it exists, otherwise `<dlc>/`. Recursively walks the tree and handles create/rename/delete folder and move-song operations on slash-separated folder paths.
 - **Frontend** (`screen.js`) — plain vanilla JS in an IIFE. Fetches the tree from the backend on screen load, recursively renders collapsible folder sections (any depth) and song rows or cards (grid view). Uses `window.feedBack.on('screen:changed', ...)` (via the `window.slopsmith` alias) to trigger load when the user navigates here. Calls `window.playSong(filename)` on song click with the full relative path from the DLC root.
 - **No dependencies** — no npm, no build step. Tailwind utility classes available globally from the host; the plugin uses only core-guaranteed utilities and inline styles, so it ships **no** `styles` manifest key.
 
@@ -70,8 +70,8 @@ Routes that receive a JSON body must import `Request` from fastapi explicitly an
 ### 9. Plugin id must be consistent everywhere
 The plugin id (`folder_library`) must match in:
 - `plugin.json` → `"id"` and `"nav.screen"`
-- `screen.js` → `PLUGIN_ID` constant and `API` constant (`/api/plugin/folder_library`)
-- `routes.py` → `APIRouter(prefix="/api/plugin/folder_library")`
+- `screen.js` → `PLUGIN_ID` constant and `API` constant (`/api/plugins/folder_library`)
+- `routes.py` → `APIRouter(prefix="/api/plugins/folder_library")`
 
 A mismatch in any of these causes silent failures (blank screen, 404 API calls).
 
@@ -94,11 +94,11 @@ The plugin treats both `.sloppak` and `.feedpak` as songs (`_is_song()` in `rout
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/plugin/folder_library/tree` | Returns the folder tree. Accepts optional filter query params (below) applied server-side. |
-| POST | `/api/plugin/folder_library/folder/create` | Body: `{name, parent?}` — creates a subfolder; `parent` (slash path) nests it inside an existing folder, omit/empty for top level |
-| POST | `/api/plugin/folder_library/folder/rename` | Body: `{old, new}` — `old` is a slash path, `new` is a bare name; renames within the same parent |
-| POST | `/api/plugin/folder_library/folder/delete` | Body: `{name}` (slash path) — moves all songs at any depth to the scan root, then removes the folder |
-| POST | `/api/plugin/folder_library/song/move` | Body: `{filename, folder}` — moves a song to `folder` (slash path; empty = scan root / "Unsorted") |
+| GET | `/api/plugins/folder_library/tree` | Returns the folder tree. Accepts optional filter query params (below) applied server-side. |
+| POST | `/api/plugins/folder_library/folder/create` | Body: `{name, parent?}` — creates a subfolder; `parent` (slash path) nests it inside an existing folder, omit/empty for top level |
+| POST | `/api/plugins/folder_library/folder/rename` | Body: `{old, new}` — `old` is a slash path, `new` is a bare name; renames within the same parent |
+| POST | `/api/plugins/folder_library/folder/delete` | Body: `{name}` (slash path) — moves all songs at any depth to the scan root, then removes the folder |
+| POST | `/api/plugins/folder_library/song/move` | Body: `{filename, folder}` — moves a song to `folder` (slash path; empty = scan root / "Unsorted") |
 
 ### `/tree` filter query params
 
@@ -109,7 +109,7 @@ All optional, applied server-side over the cached full tree by `_apply_tree_filt
 - `has_lyrics` — `""` (any), `"1"`, or `"0"`
 - `tunings` — comma-separated tuning names to include
 
-The frontend forwards the host library's active filter params here (via `window.slopsmithLibFilterParams()` when present) so the Folders view can stay in sync with the main library filters, falling back to its own filter panel state otherwise.
+The frontend forwards the host library's active filter params here (via `window.feedBackLibFilterParams()` when present, with `window.slopsmithLibFilterParams()` as a legacy fallback) so the Folders view can stay in sync with the main library filters, falling back to its own filter panel state otherwise.
 
 ### Path safety
 
@@ -194,9 +194,18 @@ m["arrangements"] = [
 
 To add more grouping options (by artist, album, etc.), build an alternative projection over the scanned songs rather than the on-disk tree.
 
-## Library Provider Scaffolding (not yet wired)
+## Library provider (future, not implemented)
 
-`routes.py` defines a `FolderLibraryProvider` class implementing the source-aware library provider contract (`query_page`, `query_artists`, `query_stats`, `tuning_names`) that maps top-level folder → "artist" and subfolder → "album". **It is not registered in `setup()` today** — `setup()` only mounts the `/api/plugin/folder_library` router. If you want the Folders source to appear in the host's main library browser, call `context["register_library_provider"](FolderLibraryProvider(...))` in `setup()` and `unregister_library_provider("folder_library")` on teardown. Until then it's inert scaffolding kept in sync with the scan logic.
+This plugin surfaces folders as a dedicated **view** over the existing library;
+it does not (yet) register itself as a selectable library **source/provider**.
+If you want a "Folders" entry to appear in the host's main library-source
+picker (mapping top-level folder → "artist", subfolder → "album"), implement a
+provider exposing the source-aware contract (`query_page`, `query_artists`,
+`query_stats`, `tuning_names`) and register it in `setup()` via
+`context["register_library_provider"](...)`, unregistering on teardown. (An
+earlier inert `FolderLibraryProvider` scaffold was removed — it was never wired
+and only duplicated the scan logic; re-add it only alongside real registration
+and tests.)
 
 ## View Modes (List / Grid)
 
@@ -331,6 +340,6 @@ Not yet implemented, in rough priority order:
 - **Thumbnail performance** — faster loading and smoother scrolling with large libraries.
 - **Adjustable thumbnail/row sizes** — user-resizable song cards and list rows.
 - **Custom themes** — switchable colour schemes.
-- **Favoriting songs** — likely a new backend route plus a `fo:favorites` localStorage key. (`favorite` already appears in the unwired provider's song dict.)
+- **Favoriting songs** — likely a new backend route plus a `fo:favorites` localStorage key.
 - **Editing song metadata** — edit title, artist, album etc. in-plugin; needs new backend write routes.
-- **Wire up `FolderLibraryProvider`** — register it so the Folders source appears in the host's main library browser.
+- **Folders as a library source** — register a library provider so a "Folders" entry appears in the host's main library-source picker (see "Library provider (future)" above).
