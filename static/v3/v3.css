@@ -425,6 +425,13 @@ html[data-scoreboard="off"] #v3-live-performance-hud { display: none !important;
     width: 96px;
     pointer-events: auto;
 }
+/* The Section Map plugin pins a ~20px clickable bar to the very top of #player
+   (#section-map, z-index:5). The rail catcher above is full-height at z-index:30,
+   so its top-left corner swallows clicks on the section map's first section. When
+   the bar is present, drop the catcher below it so the top strip stays clickable;
+   the rail still reveals from anywhere below the bar. Mirrors the core
+   `#section-map ~ #player-hud` special-case in static/style.css. */
+#section-map ~ #v3-railzone::before { top: 20px; }
 
 .v3-rail {
     position: relative;
