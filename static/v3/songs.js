@@ -595,8 +595,13 @@
     async function batchAddToPlaylist() {
         const lists = (await jget('/api/playlists')) || [];
         const choices = lists.filter((p) => !p.system_key);
-        const labels = choices.map((p, i) => (i + 1) + '. ' + p.name).join('\n');
-        const ans = (window.prompt('Add ' + state.selected.size + ' song(s) to which playlist?\n' + labels + '\n\nEnter a number, or a new playlist name:', '') || '').trim();
+        const labels = choices.map((p, i) => (i + 1) + '. ' + p.name).join('   ');
+        const ans = ((await window.uiPrompt({
+            title: 'Add ' + state.selected.size + ' song(s) to a playlist',
+            label: (labels ? labels + ' ' : '') + 'Type a number above, or a new playlist name:',
+            okLabel: 'Add',
+            placeholder: 'Number or new playlist name',
+        })) || '').trim();
         if (!ans) return;
         let pid = null;
         const num = parseInt(ans, 10);

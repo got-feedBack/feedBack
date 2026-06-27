@@ -104,7 +104,7 @@
                 : '<p class="text-fb-textDim">No playlists yet. Create one to group songs.</p>') +
             '</div>';
         root.querySelector('#v3-pl-new')?.addEventListener('click', async () => {
-            const name = (window.prompt('Playlist name?') || '').trim();
+            const name = ((await window.uiPrompt({ title: 'New Playlist', label: 'Playlist name', okLabel: 'Create', placeholder: 'My Playlist' })) || '').trim();
             if (!name) return;
             await jsend('POST', '/api/playlists', { name });
             renderPlaylists();
@@ -137,7 +137,7 @@
         const listEl = root.querySelector('#v3-pl-songs');
         if (listEl) wireSongRows(listEl, pid, () => renderPlaylistDetail(pid));
         root.querySelector('#v3-pl-rename')?.addEventListener('click', async () => {
-            const name = (window.prompt('Rename playlist', pl.name) || '').trim();
+            const name = ((await window.uiPrompt({ title: 'Rename Playlist', label: 'Playlist name', value: pl.name, okLabel: 'Rename' })) || '').trim();
             if (!name) return;
             await jsend('PATCH', '/api/playlists/' + pid, { name });
             renderPlaylistDetail(pid);
