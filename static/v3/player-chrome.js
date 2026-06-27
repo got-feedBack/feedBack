@@ -172,6 +172,8 @@
     function updateUpNext() {
         const pill = $('v3-upnext');
         if (!pill) return;
+        // Gated by the core "Show 'Up Next'" pref (Gameplay tab, default ON).
+        if (window.feedBack && window.feedBack.showUpNext === false) { pill.classList.add('hidden'); return; }
         const hw = window.highway;
         const secs = (hw && typeof hw.getSections === 'function') ? hw.getSections() : null;
         const t = (hw && typeof hw.getTime === 'function') ? hw.getTime() : null;

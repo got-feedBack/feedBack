@@ -3359,6 +3359,8 @@ async function loadSettings() {
     if (leftyEl) leftyEl.checked = highway.getLefty();
     const autoplayExitEl = document.getElementById('setting-autoplay-exit');
     if (autoplayExitEl) autoplayExitEl.checked = _autoplayExitEnabled();
+    const showUpNextEl = document.getElementById('setting-show-upnext');
+    if (showUpNextEl) showUpNextEl.checked = _showUpNextEnabled();
     // Restore master-difficulty slider from persisted value (defaults
     // to 100 when the key is absent — no behaviour change for users
     // who've never touched the slider).
@@ -5849,6 +5851,32 @@ window.setAutoplayExit = function (on) {
 // auto-return after its results screen closes).
 Object.defineProperty(window.feedBack, 'autoplayExit', {
     get: _autoplayExitEnabled, configurable: true,
+});
+
+// ── "Up Next" pill (global option, default ON) ────────────────────────
+// Gates the v3 player chrome's persistent upcoming-section pill
+// (#v3-upnext, driven by player-chrome.js's updateUpNext). Client-only
+// localStorage pref (`showUpNext`); absence of the key means enabled.
+// player-chrome.js reads window.feedBack.showUpNext each tick and hides
+// the pill when off.
+function _showUpNextEnabled() {
+    try { return localStorage.getItem('showUpNext') !== '0'; } catch (_) { return true; }
+}
+// Settings checkbox setter (onchange="setShowUpNext(this.checked)").
+window.setShowUpNext = function (on) {
+    try { localStorage.setItem('showUpNext', on ? '1' : '0'); } catch (_) { /* private mode */ }
+    const el = document.getElementById('setting-show-upnext');
+    if (el && el.checked !== !!on) el.checked = !!on;
+    // Reflect immediately when disabling mid-playback; the chrome's rAF
+    // loop (~6 Hz) re-shows it when re-enabled and a section is upcoming.
+    if (!on) {
+        const pill = document.getElementById('v3-upnext');
+        if (pill) pill.classList.add('hidden');
+    }
+};
+// Read-only view for the player chrome (and any plugin) to gate the pill.
+Object.defineProperty(window.feedBack, 'showUpNext', {
+    get: _showUpNextEnabled, configurable: true,
 });
 
 // "Countdown before song" (Gameplay tab). Mirrored to localStorage by
