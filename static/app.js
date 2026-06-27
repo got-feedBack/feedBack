@@ -6270,6 +6270,14 @@ async function togglePlay() {
         } catch (err) {
             if (sessionGen !== _audioSeekGen) return;
             if (attempt !== _playAttemptGen) return;
+            // An engine reroute (HTML5 -> JUCE) deliberately pauses the <audio>
+            // element mid-migration, which rejects this in-flight play() with an
+            // AbortError even though playback continues on the JUCE transport.
+            // The reroute owns isPlaying / the button while it runs (same guard
+            // the <audio> 'play'/'pause' listeners use); resetting here would
+            // leave the button showing Play while the song keeps playing — the
+            // "two clicks to pause on the first song after a fresh load" bug.
+            if (window._juceRerouteInProgress) return;
             console.error('[app] audio.play() rejected:', err);
             isPlaying = false;
             setPlayButtonState(false);
@@ -8998,6 +9006,10 @@ async function startCountIn(opts = {}) {
                         setPlayButtonState(true);
                     }).catch((err) => {
                         if (gen !== _countInGen) return;
+                        // An engine reroute's deliberate pause aborts this play()
+                        // while playback continues on JUCE — don't reset the
+                        // button (mirrors the togglePlay guard).
+                        if (window._juceRerouteInProgress) return;
                         // Same rationale as togglePlay: don't claim playback
                         // started if the Promise rejected.
                         console.error('[app] audio.play() rejected after count-in:', err);
