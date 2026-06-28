@@ -51,15 +51,16 @@
             sources = sources.filter((s) => s
                 && !/midi/i.test(String(s.providerId || ''))
                 && !/^midi-input/i.test(String(s.label || '')));
-            // De-dupe by display label — the desktop engine enumerates the same
-            // device under several driver types, so the same name can repeat.
-            const seen = new Set();
-            sources = sources.filter((s) => {
-                const key = String(s.label || '').toLowerCase();
-                if (seen.has(key)) return false;
-                seen.add(key);
-                return true;
-            });
+            // No label de-dupe here. The audio-input capability already
+            // collapses exact duplicates by logicalSourceKey
+            // (_visibleInputSources), so nothing it returns shares a key. A
+            // device that enumerates under several driver types (ASIO / Windows
+            // Audio / DirectSound) has a DISTINCT key per type and is now
+            // labelled with its driver type (e.g. "Focusrite (ASIO)") — each is
+            // a real, separately-selectable input the user must be able to see.
+            // The old bare-label collapse also kept whichever variant sorted
+            // first, which could silently drop the one that was actually
+            // `selected` below.
             const selected = sources.find((s) => s && s.selected) || null;
             return { sources, selected };
         } catch (_) { return { sources: [], selected: null }; }
