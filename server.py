@@ -1995,10 +1995,18 @@ class MetadataDB:
                     stems_lacks: list[str] | None = None,
                     has_lyrics: int | None = None,
                     tunings: list[str] | None = None,
+                    sort: str = "artist",
                     naming_mode: str = "legacy") -> dict:
         """Aggregate stats for the letter bar. Accepts the same filter
         params as query_page so the letter counts stay synchronized
-        with the grid when filters are active."""
+        with the grid when filters are active.
+
+        `sort` selects the column the v3 jump rail's `sort_letters`
+        breakdown keys on (artist for artist sorts, title for title
+        sorts) so the rail's present-letters match the grid's actual
+        order; other sorts fall back to artist (the rail is hidden for
+        them client-side anyway). The legacy `letters` field is always
+        the artist breakdown, unchanged, for the dashboard + classic tree."""
         where, params = self._build_where(
             q=q, favorites_only=favorites_only, format_filter=format_filter,
             artist_filter=artist_filter, album_filter=album_filter,
@@ -2029,7 +2037,27 @@ class MetadataDB:
                 letters[key] = letters.get(key, 0) + count
             else:
                 letters["#"] = letters.get("#", 0) + count
-        return {"total_songs": total, "total_artists": artist_count, "letters": letters}
+        # Active-sort letter buckets for the v3 jump rail. Counts SONGS (the
+        # grid's unit, unlike `letters` which counts distinct artists) per
+        # first-letter bucket of the column the active sort keys on, so a tap
+        # on a present letter always finds a card. Non-A–Z first chars bucket
+        # under '#'. Only artist/title sorts are alphabetical; anything else
+        # keys on artist here but the client hides the rail for it.
+        sort_col = "title" if sort in ("title", "title-desc") else "artist"
+        sort_rows = self.conn.execute(
+            f"SELECT UPPER(SUBSTR(COALESCE({sort_col}, ''), 1, 1)) AS letter, COUNT(*) "
+            f"FROM songs {where} GROUP BY letter", params
+        ).fetchall()
+        sort_letters: dict[str, int] = {}
+        for letter, count in sort_rows:
+            count = int(count or 0)
+            if count <= 0:
+                continue
+            key = str(letter or "")
+            bucket = key if (key.isascii() and key.isalpha()) else "#"
+            sort_letters[bucket] = sort_letters.get(bucket, 0) + count
+        return {"total_songs": total, "total_artists": artist_count,
+                "letters": letters, "sort_letters": sort_letters}
 
 
 class AudioEffectsMappingDB:
@@ -4510,15 +4538,17 @@ async def library_stats(favorites: int = 0, q: str = "", format: str = "",
                         arrangements_has: str = "", arrangements_lacks: str = "",
                         stems_has: str = "", stems_lacks: str = "",
                         has_lyrics: str = "", tunings: str = "", provider: str = "local",
-                        naming_mode: str = "legacy"):
+                        sort: str = "artist", naming_mode: str = "legacy"):
     """Aggregate stats for the UI. Accepts the same filter params as
-    /api/library so the letter bar mirrors the active grid filter set."""
+    /api/library so the letter bar mirrors the active grid filter set.
+    `sort` selects the column the jump rail's `sort_letters` keys on."""
     library_provider = _get_library_provider(provider)
     _require_library_provider_capability(library_provider, "library.read")
     return await _call_library_provider_async(
         library_provider,
         "query_stats",
         naming_mode=naming_mode,
+        sort=sort,
         **_library_filter_args(
             q=q, favorites=favorites, format=format,
             artist=artist, album=album,
