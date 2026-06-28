@@ -1095,6 +1095,16 @@
     const CAM_FRAME_H_FAR  = 1.00;
     const CAM_FRAME_D_NEAR = 0.575;
     const CAM_FRAME_D_FAR  = 0.60;
+    // Fret-row fit guard. The heat-coloured fret-number row is a band drawn
+    // BELOW the board (at sY(lowest) - S_GAP*1.4). The lower-third framing
+    // anchors the board CENTRE, not that row, so a tight zoom on a centred span
+    // (worst mid-neck — fine pushed to either end of the neck) drops the row off
+    // the bottom edge. Tilt can't add vertical room there (it would only trade a
+    // bottom clip for a top clip), so camUpdate dollies the camera back just
+    // enough to bring the row back into frame — auto-sized, capped, hysteretic.
+    const FRET_ROW_FIT_NDC_MIN   = -0.86;  // keep the row anchor at/above this NDC y (>-1 = on screen)
+    const FRET_ROW_FIT_DEADBAND  = 0.06;   // headroom past the min before the dolly relaxes (anti-hunt)
+    const FRET_ROW_FIT_BOOST_MAX = 1.6;    // cap the pull-back so the zoom can't pop (never dolly back > +60%)
 
     // Camera-X targeting (issue #34). The visible AHEAD = 4.0 s window is
     // far too coarse for picking where the camera should sit — a single
@@ -4091,6 +4101,11 @@
 
         let tgtX = xFretMid(CAM_LOCK_CENTER_FRET), curX = xFretMid(CAM_LOCK_CENTER_FRET);
         let tgtDist = CAM_DIST_BASE, curDist = CAM_DIST_BASE;
+        // Dolly-back multiplier applied to the curDist lerp target by camUpdate's
+        // fret-row fit guard. 1 = no extra pull-back (the common case); rises
+        // toward FRET_ROW_FIT_BOOST_MAX only when a tight, centred zoom would push
+        // the fret-number row past the bottom edge, then relaxes back to 1.
+        let _fretRowFitBoost = 1;
         // Last committed lowFretBonus contribution baked into tgtDist
         // (see candidateDist block — bonus is applied on top of the
         // hysteresis-gated base).
@@ -13906,7 +13921,9 @@
             const lerp = CAM_LERP_BASE * Math.max(bpm, 60) / 120;
 
             curX += (tgtX - curX) * lerp;
-            curDist += (tgtDist - curDist) * lerp;
+            // The fret-row fit guard (end of camUpdate) may dolly the camera back
+            // via _fretRowFitBoost; the span-driven tgtDist still owns zooming IN.
+            curDist += (tgtDist * _fretRowFitBoost - curDist) * lerp;
             const dist = curDist * aspectScale;
             const h = CAM_H_BASE * (dist / CAM_DIST_BASE);
 
@@ -13977,6 +13994,38 @@
                 cam.lookAt(curX + _panX * K, curLookY + (_pitch + _panY) * K, _lookAtZ);
             } else {
                 cam.lookAt(curX, curLookY, _lookAtZ);
+            }
+
+            // ── Fret-row fit guard ────────────────────────────────────────────
+            // Project the fret-number-row band (just below the lowest string, at
+            // the play line) with the final camera. If it sits below the safe
+            // bottom line, dolly back (raise _fretRowFitBoost → applied to the
+            // curDist lerp target next frame) until it clears; relax lazily once
+            // there's comfortable headroom. Asymmetric + deadbanded so it
+            // converges without hunting, and capped so the zoom can't pop. It
+            // cooperates with the tilt loop above rather than fighting it: pulling
+            // back shrinks the scene, the tilt loop keeps the board centre anchored
+            // at DESIRED_NDC_Y, so only the row's bottom headroom changes. Skipped
+            // while the free-cam (Camera Director) owns the view.
+            if (_freeCam && _freeCam.enabled) {
+                if (_fretRowFitBoost !== 1) _fretRowFitBoost = 1;
+            } else {
+                cam.updateMatrixWorld();
+                const _rowY = Math.min(sY(0), sY(nStr - 1)) - S_GAP * 1.4;
+                _probe.set(curX, _rowY, 0.5 * K);
+                _probe.project(cam);                              // _probe.y → NDC; < -1 = off the bottom
+                const _rowNdcY = _probe.y;
+                if (_rowNdcY < FRET_ROW_FIT_NDC_MIN) {
+                    // Row below the safe line → pull back promptly, proportional to
+                    // the deficit so it converges in a few frames without overshoot.
+                    const _need = FRET_ROW_FIT_NDC_MIN - _rowNdcY;
+                    _fretRowFitBoost = Math.min(FRET_ROW_FIT_BOOST_MAX,
+                        _fretRowFitBoost + Math.min(0.05, _need * 0.4));
+                } else if (_rowNdcY > FRET_ROW_FIT_NDC_MIN + FRET_ROW_FIT_DEADBAND
+                           && _fretRowFitBoost > 1) {
+                    // Comfortable headroom → relax the dolly back toward normal, lazily.
+                    _fretRowFitBoost = Math.max(1, _fretRowFitBoost - 0.01);
+                }
             }
         }
 
@@ -14234,7 +14283,7 @@
             pFretColMarker = null;
             _fretMarkerWaveCache.clear();
             gNote = gSus = gBeat = gTapChevron = null;
-            tgtX = curX = xFretMid(CAM_LOCK_CENTER_FRET); tgtDist = curDist = CAM_DIST_BASE; tgtLookY = curLookY = 0; nStr = NSTR; _oobStringWarned = false;
+            tgtX = curX = xFretMid(CAM_LOCK_CENTER_FRET); tgtDist = curDist = CAM_DIST_BASE; tgtLookY = curLookY = 0; _fretRowFitBoost = 1; nStr = NSTR; _oobStringWarned = false;
             _lookaheadCamX = xFretMid(CAM_LOCK_CENTER_FRET);
             _lookaheadFretSpan = DEFAULT_LOOKAHEAD_FRET_SPAN;
             _lookaheadCamPrevNow = null;
