@@ -44,6 +44,7 @@ function buildSandbox(currentSong) {
     const sandbox = {
         document: { body, createElement: () => makeEl() },
         window: { feedBack: { currentSong, off() {} } },
+        setTimeout: () => 1,
         clearTimeout: () => {},
     };
     vm.createContext(sandbox);
@@ -51,6 +52,8 @@ function buildSandbox(currentSong) {
         let _creditsOverlay = null;
         let _creditsTimer = null;
         let _creditsHideOnPlay = null;
+        let _creditsMaxTimer = null;
+        const _CREDITS_MAX_MS = 12000;
         const _CREDIT_ROLE_VERBS = ${JSON.stringify({
             charter: 'Charted by', transcriber: 'Transcribed by',
             arranger: 'Arranged by', editor: 'Edited by', mixer: 'Mixed by',

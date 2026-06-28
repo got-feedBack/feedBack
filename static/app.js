@@ -6025,7 +6025,12 @@ window.feedBack.on('song:ready', () => {
         // a teardown / arrangement switch during the hold cancels this play.
         _creditsTimer = setTimeout(() => {
             _creditsTimer = null;
-            Promise.resolve(togglePlay()).catch((err) => console.warn('[app] autoplay failed:', err));
+            // If playback doesn't actually start (e.g. HTML5 autoplay rejection),
+            // song:play never fires — clear the credits promptly rather than
+            // waiting for the backstop. On success the song:play listener owns it.
+            Promise.resolve(togglePlay())
+                .then(() => { if (!isPlaying) hideSongCreditsOverlay(); })
+                .catch((err) => { console.warn('[app] autoplay failed:', err); hideSongCreditsOverlay(); });
         }, _CREDITS_HOLD_MS);
     } else {
         Promise.resolve(togglePlay()).catch((err) => console.warn('[app] autoplay failed:', err));
@@ -9325,7 +9330,13 @@ let _countInRaf = 0;
 let _creditsOverlay = null;
 let _creditsTimer = null;
 let _creditsHideOnPlay = null;
+let _creditsMaxTimer = null;
 const _CREDITS_HOLD_MS = 3000;
+// Backstop: the overlay's primary dismiss is song:play, but playback can fail
+// to start without emitting it (HTML5 autoplay rejection, JUCE start failure,
+// a count-in handoff that never plays). This hard cap guarantees the credits
+// never linger over the highway. Generous enough to outlast a normal count-in.
+const _CREDITS_MAX_MS = 12000;
 function _cancelCountIn() {
     _countInGen++;
     _countingIn = false;
@@ -9421,10 +9432,15 @@ function showSongCreditsOverlay(authors) {
         card.appendChild(row);
     }
     _creditsOverlay.appendChild(card);
+    // Arm the backstop so the overlay self-clears even if playback never starts
+    // / never emits song:play. song:play (or any teardown) clears it earlier.
+    if (_creditsMaxTimer) clearTimeout(_creditsMaxTimer);
+    _creditsMaxTimer = setTimeout(hideSongCreditsOverlay, _CREDITS_MAX_MS);
 }
 
 function hideSongCreditsOverlay() {
     if (_creditsTimer) { clearTimeout(_creditsTimer); _creditsTimer = null; }
+    if (_creditsMaxTimer) { clearTimeout(_creditsMaxTimer); _creditsMaxTimer = null; }
     if (_creditsHideOnPlay) {
         window.feedBack.off('song:play', _creditsHideOnPlay);
         _creditsHideOnPlay = null;
