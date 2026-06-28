@@ -1373,6 +1373,35 @@
             if (thsi)  thsi.value   = String(toneHudSize);
             if (thslbl) thslbl.textContent = toneHudSize.toFixed(2);
 
+            // Hit-feedback "juice" controls — hydrate from saved state so the
+            // panel reflects persistence on reopen (the renderer already reads
+            // these via _bgReadSetting; without this the controls always showed
+            // their default markup, misrepresenting a saved non-default). Reads
+            // h3d_bg_* directly; defaults mirror BG_DEFAULTS (all bools on,
+            // hitFx 0.70) and the _bgCoerceBool 'true'/'1' vs 'false'/'0' rules.
+            try {
+                const _bgBool = (k, def) => {
+                    const v = localStorage.getItem('h3d_bg_' + k);
+                    return v == null ? def : !(v === 'false' || v === '0');
+                };
+                const _setChk = (id, on) => { const el = document.getElementById(id); if (el) el.checked = on; };
+                _setChk('h3d-sparks',       _bgBool('sparks', true));
+                _setChk('h3d-cinematic',    _bgBool('cinematic', true));
+                _setChk('h3d-streakfx',     _bgBool('streakFx', true));
+                _setChk('h3d-verdictmarks', _bgBool('verdictMarks', true));
+                _setChk('h3d-bloom',        _bgBool('bloom', true));
+                _setChk('h3d-timingfx',     _bgBool('timingFx', true));
+                const _hf = document.getElementById('h3d-hitfx');
+                if (_hf) {
+                    let v = parseFloat(localStorage.getItem('h3d_bg_hitFx'));
+                    if (!isFinite(v)) v = 0.70;
+                    v = Math.max(0, Math.min(1, v));
+                    _hf.value = String(v);
+                    const _hfl = document.getElementById('h3d-hitfx-label');
+                    if (_hfl) _hfl.textContent = v.toFixed(2);
+                }
+            } catch (_) { /* storage blocked — controls keep their default markup */ }
+
             // (3D Highway palette picker removed — string colors are now set
             // via the core "Highway String Colors" UI above, which drives both
             // the 2D and 3D highways. The bg-settings 'palette' key still exists
