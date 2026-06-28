@@ -3530,6 +3530,13 @@ function createHighway() {
                                     // matchesArrangement on this rather than the
                                     // arrangement name.
                                     hasNotation: Boolean(msg.has_notation),
+                                    // Feedpak contributor credits (manifest
+                                    // `authors:`, spec §5.4): [{name, role}].
+                                    // Only real feedpak plays carry these; loose/
+                                    // archive sources and synthetic highway uses
+                                    // (minigames) get []. app.js shows a credits
+                                    // overlay on song load when this is non-empty.
+                                    authors: Array.isArray(msg.authors) ? msg.authors : [],
                                 };
                                 window.feedBack.emit('song:loaded', window.feedBack.currentSong);
                             }

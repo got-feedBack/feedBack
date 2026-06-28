@@ -5994,10 +5994,30 @@ window.feedBack.on('song:ready', () => {
     if (!_pendingAutostart) return;
     _pendingAutostart = false;
     if (!_autoplayExitEnabled() || isPlaying) return;
+    // Feedpak contributor credits: only real feedpak plays carry authors
+    // (loose/archive and minigames get []), so a non-empty list is the gate.
+    // Shown over the highway together with the count-in and dismissed the
+    // moment real playback begins (song:play). This fresh-load autostart path
+    // is the only place it fires — arrangement switches / seeks / manual
+    // replays never arm _pendingAutostart, and minigames never get here.
+    const authors = (window.feedBack.currentSong && window.feedBack.currentSong.authors) || [];
+    if (authors.length) {
+        showSongCreditsOverlay(authors);
+        _creditsHideOnPlay = () => { _creditsHideOnPlay = null; hideSongCreditsOverlay(); };
+        window.feedBack.on('song:play', _creditsHideOnPlay, { once: true });
+    }
     // "Countdown before song": play a 4-beat count-in, then start. Otherwise
     // reuse the Play button's start path directly (handles HTML5 + _juceMode).
     if (_countdownBeforeSongEnabled()) {
+        // The count-in (~2.5s) gives the credits their on-screen dwell.
         Promise.resolve(startSongCountIn()).catch((err) => console.warn('[app] song count-in failed:', err));
+    } else if (authors.length) {
+        // No count-in window — hold the credits a couple seconds, then start.
+        // Guarded by gen-free _creditsTimer so _cancelCountIn() can cancel it.
+        _creditsTimer = setTimeout(() => {
+            _creditsTimer = null;
+            Promise.resolve(togglePlay()).catch((err) => console.warn('[app] autoplay failed:', err));
+        }, _CREDITS_HOLD_MS);
     } else {
         Promise.resolve(togglePlay()).catch((err) => console.warn('[app] autoplay failed:', err));
     }
@@ -9285,10 +9305,21 @@ let _countOverlay = null;
 let _countInGen = 0;
 let _countInTimer = null;
 let _countInRaf = 0;
+// Feedpak credits overlay (manifest `authors:`, spec §5.4): shown on the
+// highway when a song is loaded, alongside the count-in. Torn down together
+// with the count-in via _cancelCountIn().
+let _creditsOverlay = null;
+let _creditsTimer = null;
+let _creditsHideOnPlay = null;
+const _CREDITS_HOLD_MS = 3000;
 function _cancelCountIn() {
     _countInGen++;
     _countingIn = false;
     hideCountOverlay();
+    // The credits overlay rides the count-in lifecycle (and its no-count-in
+    // hold timer), so a teardown — leaving the player, loading another song —
+    // must clear it too, or it lingers on the next screen.
+    hideSongCreditsOverlay();
     if (_countInTimer) { clearTimeout(_countInTimer); _countInTimer = null; }
     if (_countInRaf) { cancelAnimationFrame(_countInRaf); _countInRaf = 0; }
 }
@@ -9304,6 +9335,87 @@ function showCountOverlay(n) {
 
 function hideCountOverlay() {
     if (_countOverlay) { _countOverlay.remove(); _countOverlay = null; }
+}
+
+// Map a feedpak author `role` to a friendly "<verb> by" credit line. The
+// recommended vocabulary is from feedpak spec §5.4; unknown roles are
+// title-cased ("foo" → "Foo by"); a missing role shows the bare name.
+const _CREDIT_ROLE_VERBS = {
+    charter: 'Charted by',
+    transcriber: 'Transcribed by',
+    arranger: 'Arranged by',
+    editor: 'Edited by',
+    mixer: 'Mixed by',
+    engineer: 'Engineered by',
+    proofreader: 'Proofread by',
+};
+
+function _creditLineLabel(role) {
+    if (!role) return '';
+    const key = String(role).trim().toLowerCase();
+    if (_CREDIT_ROLE_VERBS[key]) return _CREDIT_ROLE_VERBS[key];
+    return key.charAt(0).toUpperCase() + key.slice(1) + ' by';
+}
+
+// Show the feedpak contributor credits over the highway. `authors` is the
+// sanitized [{name, role}] list from window.feedBack.currentSong.authors.
+// Anchored to the lower third (bottom-center) so it never collides with the
+// vertically-centered count-in number, and pointer-events-none so it never
+// intercepts clicks. No-op when there are no contributors to show.
+function showSongCreditsOverlay(authors) {
+    if (!Array.isArray(authors) || authors.length === 0) return;
+    if (!_creditsOverlay) {
+        _creditsOverlay = document.createElement('div');
+        _creditsOverlay.className = 'song-credits-overlay';
+        document.body.appendChild(_creditsOverlay);
+    }
+    // Build via DOM + textContent — author names are untrusted pack data and
+    // must never be interpolated as HTML.
+    _creditsOverlay.replaceChildren();
+    const card = document.createElement('div');
+    card.className = 'song-credits-card';
+
+    const eyebrow = document.createElement('div');
+    eyebrow.className = 'song-credits-eyebrow';
+    eyebrow.textContent = 'Credits';
+    card.appendChild(eyebrow);
+
+    const title = (window.feedBack && window.feedBack.currentSong
+        && window.feedBack.currentSong.title) || '';
+    if (title) {
+        const heading = document.createElement('div');
+        heading.className = 'song-credits-heading';
+        heading.textContent = title;
+        card.appendChild(heading);
+    }
+
+    for (const a of authors) {
+        if (!a || !a.name) continue;
+        const row = document.createElement('div');
+        row.className = 'song-credits-line';
+        const label = _creditLineLabel(a.role);
+        if (label) {
+            const lab = document.createElement('span');
+            lab.className = 'song-credits-role';
+            lab.textContent = label + ' ';
+            row.appendChild(lab);
+        }
+        const nm = document.createElement('span');
+        nm.className = 'song-credits-name';
+        nm.textContent = a.name;
+        row.appendChild(nm);
+        card.appendChild(row);
+    }
+    _creditsOverlay.appendChild(card);
+}
+
+function hideSongCreditsOverlay() {
+    if (_creditsTimer) { clearTimeout(_creditsTimer); _creditsTimer = null; }
+    if (_creditsHideOnPlay) {
+        window.feedBack.off('song:play', _creditsHideOnPlay);
+        _creditsHideOnPlay = null;
+    }
+    if (_creditsOverlay) { _creditsOverlay.remove(); _creditsOverlay = null; }
 }
 
 async function startCountIn(opts = {}) {

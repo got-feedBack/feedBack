@@ -863,3 +863,93 @@ html { scroll-behavior: smooth; }
   box-shadow: 0 0 0 2px rgba(64, 128, 224, 0.7);
   border-radius: 0.25rem;
 }
+
+/* Feedpak contributor credits shown over the highway when a song loads
+   (manifest `authors:`, spec §5.4). Anchored to the upper third so it sits
+   ABOVE the vertically-centered count-in number; click-through. */
+.song-credits-overlay {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 15%;
+  /* Above the modal layer (z-[200], incl. the "Loading audio" backdrop) and
+     the count-in number (z-[100]) so the credits stay prominent through the
+     whole load → count-in → play window. */
+  z-index: 205;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  animation: song-credits-fade-in 0.45s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.song-credits-card {
+  position: relative;
+  min-width: 16rem;
+  max-width: min(90vw, 34rem);
+  padding: 1.4rem 2.5rem 1.5rem;
+  text-align: center;
+  background:
+    radial-gradient(120% 140% at 50% 0%, rgb(56 78 130 / 0.45) 0%, transparent 60%),
+    linear-gradient(165deg, rgb(23 30 48 / 0.92) 0%, rgb(11 15 26 / 0.94) 100%);
+  border: 1px solid rgb(129 140 248 / 0.28);
+  border-radius: 1rem;
+  box-shadow:
+    0 18px 50px rgb(0 0 0 / 0.55),
+    0 0 0 1px rgb(0 0 0 / 0.35),
+    inset 0 1px 0 rgb(255 255 255 / 0.07);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+/* Accent bar across the top edge of the card. */
+.song-credits-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 3.25rem;
+  height: 3px;
+  border-radius: 0 0 3px 3px;
+  background: linear-gradient(90deg, #38bdf8, #818cf8);
+  box-shadow: 0 0 12px rgb(99 102 241 / 0.7);
+}
+
+.song-credits-eyebrow {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgb(165 180 252 / 0.9);
+  margin-bottom: 0.4rem;
+}
+
+.song-credits-heading {
+  font-size: 1.3rem;
+  font-weight: 800;
+  color: #f8fafc;
+  margin-bottom: 0.7rem;
+  letter-spacing: 0.01em;
+  text-shadow: 0 1px 8px rgb(0 0 0 / 0.5);
+}
+
+.song-credits-line {
+  font-size: 1.1rem;
+  line-height: 1.55;
+  color: #e2e8f0;
+}
+
+.song-credits-role {
+  color: rgb(148 163 184 / 0.95);
+  font-weight: 500;
+}
+
+.song-credits-name {
+  font-weight: 700;
+  color: #ffffff;
+}
+
+@keyframes song-credits-fade-in {
+  from { opacity: 0; transform: translateY(-12px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}

@@ -2898,6 +2898,35 @@ def _sanitized_song_offset(song) -> float:
     return v if math.isfinite(v) else 0.0
 
 
+def _sanitize_authors(manifest: dict | None) -> list[dict]:
+    """Extract a display-safe contributor list from a feedpak manifest.
+
+    The feedpak spec (§5.4) defines an OPTIONAL top-level `authors` list of
+    objects `{name (required), role?, email?, url?}`. We surface only `name`
+    and `role` to the highway — contact fields (email/url) are intentionally
+    dropped from the on-screen credits. Malformed entries (non-dict, missing /
+    blank name) are skipped; absent / non-list `authors` yields `[]`.
+    """
+    if not isinstance(manifest, dict):
+        return []
+    raw = manifest.get("authors")
+    if not isinstance(raw, list):
+        return []
+    out: list[dict] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        role = entry.get("role")
+        out.append({
+            "name": name.strip(),
+            "role": role.strip() if isinstance(role, str) and role.strip() else None,
+        })
+    return out
+
+
 def _stat_for_cache(f: Path) -> tuple[float, int]:
     """Return (mtime, size) for cache freshness checks.
 
@@ -7304,6 +7333,13 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
             # and break the frontend's song_info parsing.
             "offset": _sanitized_song_offset(song) if is_loose else 0.0,
             "format": "sloppak" if is_slop else ("loose" if is_loose else "archive"),
+            # Feedpak contributor credits (manifest `authors:`, spec §5.4) —
+            # name + role only, shown on the highway when a song is loaded.
+            # Only sloppak/feedpak packs carry a manifest; loose/archive
+            # sources get []. The frontend uses a non-empty list as the gate
+            # for the credits overlay, so minigames / synthetic highway uses
+            # (no manifest) never trigger it.
+            "authors": _sanitize_authors(loaded_slop.manifest) if (is_slop and loaded_slop is not None) else [],
             "stems": stems_payload,
             # Full-mix audio (sloppak `original_audio:`) served alongside the
             # separate `stems`. The stems plugin plays this single file while
