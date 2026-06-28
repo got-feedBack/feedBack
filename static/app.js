@@ -5993,18 +5993,26 @@ let _pendingAutostart = false;
 window.feedBack.on('song:ready', () => {
     if (!_pendingAutostart) return;
     _pendingAutostart = false;
-    if (!_autoplayExitEnabled() || isPlaying) return;
+    if (isPlaying) return;
     // Feedpak contributor credits: only real feedpak plays carry authors
     // (loose/archive and minigames get []), so a non-empty list is the gate.
-    // Shown over the highway together with the count-in and dismissed the
-    // moment real playback begins (song:play). This fresh-load autostart path
-    // is the only place it fires — arrangement switches / seeks / manual
-    // replays never arm _pendingAutostart, and minigames never get here.
+    // Shown over the highway and dismissed the moment real playback begins
+    // (song:play). This fresh-load path is the only place it fires —
+    // arrangement switches / seeks / manual replays never arm _pendingAutostart,
+    // and minigames never get here. Decoupled from autoplay below so credits
+    // show on load even when autoplay-exit is disabled.
     const authors = (window.feedBack.currentSong && window.feedBack.currentSong.authors) || [];
     if (authors.length) {
         showSongCreditsOverlay(authors);
         _creditsHideOnPlay = () => { _creditsHideOnPlay = null; hideSongCreditsOverlay(); };
         window.feedBack.on('song:play', _creditsHideOnPlay, { once: true });
+    }
+    // Autoplay-exit disabled: don't auto-start. Still let the credits dwell a
+    // couple seconds on the freshly-loaded song, then clear them (they also
+    // clear early if the user manually presses Play, via _creditsHideOnPlay).
+    if (!_autoplayExitEnabled()) {
+        if (authors.length) _creditsTimer = setTimeout(hideSongCreditsOverlay, _CREDITS_HOLD_MS);
+        return;
     }
     // "Countdown before song": play a 4-beat count-in, then start. Otherwise
     // reuse the Play button's start path directly (handles HTML5 + _juceMode).
@@ -6013,7 +6021,8 @@ window.feedBack.on('song:ready', () => {
         Promise.resolve(startSongCountIn()).catch((err) => console.warn('[app] song count-in failed:', err));
     } else if (authors.length) {
         // No count-in window — hold the credits a couple seconds, then start.
-        // Guarded by gen-free _creditsTimer so _cancelCountIn() can cancel it.
+        // _cancelCountIn() and changeArrangement() both clear _creditsTimer, so
+        // a teardown / arrangement switch during the hold cancels this play.
         _creditsTimer = setTimeout(() => {
             _creditsTimer = null;
             Promise.resolve(togglePlay()).catch((err) => console.warn('[app] autoplay failed:', err));
@@ -6415,6 +6424,11 @@ let _arrBusyTimeout = null;
 
 async function changeArrangement(index) {
     if (currentFilename) {
+        // Tear down any pending fresh-load credits before switching: the
+        // no-count-in hold timer would otherwise fire togglePlay() against the
+        // incoming (still-loading) arrangement. hideSongCreditsOverlay() clears
+        // the timer, the song:play listener, and the overlay node.
+        hideSongCreditsOverlay();
         window.feedBack.emit('song:arrangement-changed', { filename: currentFilename, arrangement: index });
         const wasPlaying = isPlaying;
         const time = _audioTime();
