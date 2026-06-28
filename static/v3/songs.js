@@ -15,6 +15,20 @@
     const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
         { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     const enc = encodeURIComponent;
+    // Inverse of `enc` for matching a played song's filename back to a library
+    // card. The `stats:recorded` event (like `song:loading`) carries the
+    // filename exactly as it was handed to `playSong` — i.e. encodeURIComponent'd
+    // (see `playCard`, and the highway WS which decodeURIComponent's it). But
+    // cards key on the DECODED library filename (`cardKey` → `localFilename`),
+    // and `/api/stats/best` is server-canonicalized to that same decoded key, so
+    // an encoded filename matches no card and the post-play badge repaint silently
+    // no-ops. Decode to land in the card/`state.accuracy` key space. Idempotent
+    // for already-decoded names (no '%'); on malformed input falls back to the
+    // original so a real filename containing a literal '%' is never corrupted.
+    function decFn(fn) {
+        if (typeof fn !== 'string' || fn.indexOf('%') === -1) return fn || '';
+        try { return decodeURIComponent(fn); } catch (_) { return fn; }
+    }
 
     const SORTS = [
         ['artist', 'Artist A–Z'], ['artist-desc', 'Artist Z–A'],
@@ -323,6 +337,12 @@
     // of any currently-rendered card/row in place (grid + tree). `_dirtyScores`
     // tracks filenames scored while the library was off-screen, applied on enter.
     const _dirtyScores = new Set();
+
+    // Set when a library scan / DLC-folder change happened while this screen was
+    // off (or showing a stale, e.g. pre-DLC empty, grid). The grid's cached DOM /
+    // snapshot would otherwise survive a sidebar return, so we force a full
+    // re-fetch on the next entry. (feedBack — "No DLC until restart".)
+    let _libraryDirty = false;
 
     function repaintAccuracy(key) {
         const apply = (el, variant) => {
@@ -1053,6 +1073,10 @@
     }
 
     async function onV3SongsScreenEnter() {
+        // A library scan / DLC-folder change marked the grid stale — re-fetch
+        // from scratch instead of restoring a cached (possibly empty, pre-DLC)
+        // snapshot. Must win over every fast-path below.
+        if (_libraryDirty) { _libraryDirty = false; await reload(); return; }
         // Pull in any scores recorded while the library was off-screen (the usual
         // play→return flow) before the fast-paths below restore the cached DOM,
         // so the just-played song's badge is current. The full render() path
@@ -1191,7 +1215,13 @@
         // If the library is visible right now, repaint immediately; otherwise
         // mark it dirty and onV3SongsScreenEnter applies it on return.
         sm.on('stats:recorded', (e) => {
-            const fn = e && e.detail && e.detail.filename;
+            // Decode to the library-card key space — the event carries the
+            // encodeURIComponent'd filename, but cards (data-fn) and
+            // state.accuracy key on the decoded library filename. Without this
+            // the repaint below (and applyScoreRefresh's repaintAccuracy) match
+            // no card, so a just-earned score stays invisible until a full
+            // render() (restart / search / re-enter), which is this bug.
+            const fn = decFn(e && e.detail && e.detail.filename);
             if (!fn) return;
             _dirtyScores.add(fn);
             // Only repaint now if the library is the active screen; otherwise
@@ -1199,6 +1229,17 @@
             // the set, so repainting against a hidden grid would drop the update).
             const active = document.querySelector('.screen.active');
             if (active && active.id === 'v3-songs') applyScoreRefresh();
+        });
+        // A library scan (rescan / full rescan from Settings, or a DLC-folder
+        // change) can add or remove songs while this grid is cached — the
+        // Settings rescan only refreshed the classic library, so the v3 grid
+        // stayed on its pre-scan (e.g. empty, pre-DLC) state until an app
+        // restart. Reload now if we're showing; otherwise mark dirty so the next
+        // entry re-fetches instead of restoring the stale snapshot.
+        sm.on('library:changed', () => {
+            const active = document.querySelector('.screen.active');
+            if (active && active.id === 'v3-songs') { _libraryDirty = false; reload(); }
+            else _libraryDirty = true;
         });
     }
 })();
