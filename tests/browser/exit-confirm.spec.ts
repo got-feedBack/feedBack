@@ -1,8 +1,12 @@
 import { test, expect } from '@playwright/test';
 
 // Opt-in "Ask before leaving a song" confirm. Default OFF → Escape/✕ leave
-// instantly. When ON, a true-modal confirm appears; Escape is monotonic (the
-// second Escape leaves), and Space/Enter activate the default-focused "Leave".
+// instantly. When ON, a true-modal confirm appears and PAUSES the song; Escape
+// (like every other modal) DISMISSES it → Stay, so a second Escape returns to
+// the song rather than leaving, and Space/Enter activate the default-focused
+// "Leave". (The mock song has no backing audio, so the pause-on-open /
+// resume-on-Stay is verified manually on web + desktop; these specs lock the
+// navigation + keyboard semantics.)
 
 const CONFIRM_KEY = 'confirmExitSong';
 
@@ -70,14 +74,27 @@ test.describe('Exit-confirm toggle', () => {
     await expect(page.locator('#fb-exit-confirm button', { hasText: 'Leave' })).toBeFocused();
   });
 
-  test('ON: a second Escape leaves (monotonic)', async ({ page }) => {
+  test('ON: a second Escape dismisses the prompt and stays in the song', async ({ page }) => {
     await page.evaluate(() => { /* @ts-ignore */ window.setConfirmExitSong(true); });
     await openPlayerWithMockSong(page);
     await page.keyboard.press('Escape');
     await expect(page.locator('#fb-exit-confirm')).toBeVisible();
+    // Escape = dismiss (Stay), matching every other modal — NOT leave.
     await page.keyboard.press('Escape');
     await expect(page.locator('#fb-exit-confirm')).toHaveCount(0);
-    await expect(page.locator('#player.active')).toHaveCount(0);
+    await expect(page.locator('#player.active')).toHaveCount(1);
+  });
+
+  test('ON: clicking the backdrop dismisses the prompt and stays', async ({ page }) => {
+    await page.evaluate(() => { /* @ts-ignore */ window.setConfirmExitSong(true); });
+    await openPlayerWithMockSong(page);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#fb-exit-confirm')).toBeVisible();
+    // mousedown on the overlay backdrop (top-left, away from the centered card)
+    // is Stay — never an accidental leave.
+    await page.locator('#fb-exit-confirm').click({ position: { x: 5, y: 5 } });
+    await expect(page.locator('#fb-exit-confirm')).toHaveCount(0);
+    await expect(page.locator('#player.active')).toHaveCount(1);
   });
 
   test('ON: "Stay" keeps you in the song; "Leave" exits', async ({ page }) => {

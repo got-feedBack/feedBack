@@ -6648,13 +6648,22 @@ if (window.feedBack) window.feedBack.requestExitSong = requestExitSong;
 
 // A *true* modal (role="dialog" aria-modal="true" + .feedBack-modal) so the
 // Escape/Space carve-outs classify it as a focus trap — they won't fire
-// player-back / play-pause while it's up. Monotonic Escape: this dialog's
-// Escape *leaves* (the opposite of the generic _confirmDialog's Esc=cancel),
-// so the user's second Escape — the first opened this — falls them out of the
-// song ("a double escape will also leave"). Space/Enter activate the
-// default-focused "Leave" button natively (= leave, "just get me out").
+// player-back / play-pause while it's up. Opening it PAUSES the song so it
+// isn't running (or being scored) behind the prompt; Stay resumes exactly what
+// we paused. Escape matches every other modal (and the generic _confirmDialog):
+// it *dismisses* the prompt → Stay → drops you back into the (resumed) song —
+// so a second Escape does NOT leave. Leaving is the explicit, default-focused
+// "Leave" button, so Space/Enter (or click) is the keyboard "just get me out".
 function _openExitConfirm() {
     _exitConfirmOpen = true;
+    // Freeze the song while the user decides: cancel any pending count-in (so it
+    // can't start playback behind the modal) and pause if we're playing. Stay
+    // resumes only what we paused (wasPlaying), and only if the same song is
+    // still live on the player — guarding a teardown/seek/end behind the prompt.
+    _cancelCountIn();
+    const _resumeGen = _audioSeekGen;
+    const _wasPlaying = isPlaying;
+    if (_wasPlaying) Promise.resolve(togglePlay()).catch(() => {});
     const overlay = document.createElement('div');
     overlay.id = 'fb-exit-confirm';
     overlay.className = 'feedBack-modal';
@@ -6700,14 +6709,23 @@ function _openExitConfirm() {
         _exitConfirmOpen = false;
         document.removeEventListener('keydown', onKey, true);
         overlay.remove();
-        if (leave) closeCurrentSong();
+        if (leave) { closeCurrentSong(); return; }
+        // Stay → resume exactly what we paused, but only if the session is still
+        // the same live song on the player (not torn down / ended / seeked away
+        // behind the modal). If the user was already paused, leave them paused.
+        if (_wasPlaying && !isPlaying &&
+            _audioSeekGen === _resumeGen &&
+            document.querySelector('.screen.active')?.id === 'player') {
+            Promise.resolve(togglePlay()).catch(() => {});
+        }
     }
-    // Capture-phase so this dialog owns Escape (Esc → leave) and it can't fall
-    // through to the player-scope back shortcut. Space/Enter are left to native
-    // activation of whichever button is focused (Leave by default), so the user
-    // can also choose Stay with the keyboard.
+    // Capture-phase so this dialog owns Escape and it can't fall through to the
+    // player-scope back shortcut. Escape = Stay (dismiss the prompt and resume
+    // the song) — consistent with every other modal, so a second Escape does
+    // NOT leave. Space/Enter stay on native activation of the focused button
+    // (Leave by default), so the keyboard "leave" is Space/Enter.
     function onKey(e) {
-        if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); close(true); }
+        if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); close(false); }
     }
     document.addEventListener('keydown', onKey, true);
     leaveBtn.addEventListener('click', () => close(true));
@@ -6721,6 +6739,9 @@ function _openExitConfirm() {
     card.appendChild(row);
     overlay.appendChild(card);
     (document.body || document.documentElement).appendChild(overlay);
+    // Trap Tab within the dialog (Stay ↔ Leave) so focus can't fall back to the
+    // player controls underneath while it's open.
+    _trapFocusInModal(overlay);
     // Default focus on "Leave" so Space/Enter leaves immediately.
     leaveBtn.focus();
 }
