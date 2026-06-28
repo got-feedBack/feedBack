@@ -156,6 +156,14 @@ def test_cover_rejects_non_image(client):
     assert client.post(f"/api/playlists/{pid}/cover", json={"image": ""}).status_code == 400
 
 
+def test_cover_rejects_non_string_image_with_400_not_500(client):
+    # A non-string `image` (number / null / object) must be a clean 400, not a
+    # 500 from `"," in <non-str>` raising TypeError before the type check.
+    pid = client.post("/api/playlists", json={"name": "Typed"}).json()["id"]
+    for bad in (123, None, {"x": 1}, ["a"]):
+        assert client.post(f"/api/playlists/{pid}/cover", json={"image": bad}).status_code == 400
+
+
 def test_deleting_playlist_removes_custom_cover(client, server):
     pid = client.post("/api/playlists", json={"name": "Doomed"}).json()["id"]
     client.post(f"/api/playlists/{pid}/cover", json={"image": _png_b64()})

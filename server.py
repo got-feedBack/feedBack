@@ -5182,7 +5182,9 @@ def _playlist_cover_url(pid) -> str | None:
     if not cover or not cover.exists():
         return None
     try:
-        mt = int(cover.stat().st_mtime)
+        # Nanosecond mtime so a same-second replace/remove/re-upload still
+        # changes the cache-bust token (int seconds could collide → stale image).
+        mt = cover.stat().st_mtime_ns
     except OSError:
         mt = 0
     return f"/api/playlists/{pid}/cover?v={mt}"
@@ -5298,6 +5300,11 @@ async def api_set_playlist_cover(pid: int, data: dict):
     import base64
     import io
     b64 = data.get("image", "")
+    # Guard the type before the `","` membership test — a non-string image
+    # (e.g. {"image": 123} / null) would otherwise raise TypeError → 500.
+    # Mirrors the avatar/song-art upload guard.
+    if not isinstance(b64, str) or not b64:
+        return JSONResponse({"error": "No image data"}, status_code=400)
     if "," in b64:
         b64 = b64.split(",", 1)[1]
     if not b64:
@@ -5325,7 +5332,9 @@ def api_get_playlist_cover(pid: int):
     cover = _playlist_cover_path(pid)
     if not cover or not cover.exists():
         return JSONResponse({"error": "not found"}, status_code=404)
-    return FileResponse(str(cover), media_type="image/png")
+    # no-cache (revalidate) like song art, so a replaced cover is never served
+    # stale — pairs with the mtime-ns cache-bust token on the URL.
+    return FileResponse(str(cover), media_type="image/png", headers=_ART_CACHE_HEADERS)
 
 
 @app.delete("/api/playlists/{pid}/cover")
