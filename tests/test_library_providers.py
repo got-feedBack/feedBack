@@ -213,7 +213,9 @@ def test_registered_provider_handles_library_endpoints(server_mod, client):
     assert stats["letters"] == {"R": 1}
     assert "page" not in provider.stats_kwargs
     assert "size" not in provider.stats_kwargs
-    assert "sort" not in provider.stats_kwargs
+    # `sort` is forwarded to query_stats now (the v3 jump rail keys its
+    # present-letter breakdown on the active sort column); defaults to "artist".
+    assert provider.stats_kwargs.get("sort") == "artist"
 
     tunings = client.get("/api/library/tuning-names", params={"provider": "remote:frodo"}).json()
     assert tunings["tunings"][0]["name"] == "E Standard"

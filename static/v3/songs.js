@@ -51,7 +51,33 @@
         artistCatalog: [], renderedHash: '',
         scrollBound: false,
         songsById: {}, selectMode: false, selected: new Set(),
+        railLetters: null, railJumping: false,
     };
+
+    // ── A–Z jump rail ───────────────────────────────────────────────────────
+    // Ordered buckets shown on the rail: '#' (non-alphabetic) first, then A–Z.
+    const RAIL_BUCKETS = ['#'].concat('ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split(''));
+    // The rail only makes sense for the alphabetical sorts; for recent/year/
+    // tuning a letter jump is meaningless, so it's hidden. Returns the column
+    // the active sort keys on ('artist' | 'title') or null when not alphabetical.
+    function railSortColumn() {
+        if (state.sort === 'artist' || state.sort === 'artist-desc') return 'artist';
+        if (state.sort === 'title' || state.sort === 'title-desc') return 'title';
+        return null;
+    }
+    // The bucket a song falls in for the active sort: first char of the sort
+    // column, uppercased; anything non-A–Z (digits, symbols, accents, blank)
+    // buckets under '#'. Mirrors the server's letter grouping in query_stats —
+    // which keys on raw SUBSTR(col, 1, 1) with no trim, and the grid ORDER BY
+    // is likewise raw, so we must NOT trim here either: a leading-space title
+    // sorts (and buckets) under '#' on both sides, keeping the rail consistent.
+    function songBucket(song) {
+        const col = railSortColumn();
+        if (!col) return '';
+        const raw = String((col === 'title' ? song.title : song.artist) || '');
+        const ch = raw.charAt(0).toUpperCase();
+        return (ch >= 'A' && ch <= 'Z') ? ch : '#';
+    }
 
     function activeFilterCount() {
         const f = state.filters;
@@ -463,7 +489,7 @@
         const overlay = overlayActs.length
             ? '<div class="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition pointer-events-none"><div class="flex flex-wrap gap-1 justify-center max-w-[90%] pointer-events-auto">' + overlayActs.map(actBtn).join('') + '</div></div>'
             : '';
-        return '<div class="group relative" data-fn="' + esc(key) + '" data-library-song="' + esc(songId(song)) + '" data-library-provider="' + esc(state.provider) + '">' +
+        return '<div class="group relative" data-fn="' + esc(key) + '" data-letter="' + esc(songBucket(song)) + '" data-library-song="' + esc(songId(song)) + '" data-library-provider="' + esc(state.provider) + '">' +
             '<div class="relative aspect-square rounded-lg overflow-hidden bg-fb-card cursor-pointer" data-v3-play>' +
             '<img src="' + esc(artUrl(song)) + '" alt="" loading="lazy" decoding="async" class="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105" onerror="this.style.visibility=\'hidden\'">' +
             tuning + checkbox + accuracyBadge(key) + fmtBadge(song) + overlay +
@@ -724,6 +750,169 @@
         }, { passive: true });
     }
 
+    // ── A–Z jump rail interaction ─────────────────────────────────────────────
+    // The rail jumps within the contiguous, server-paged grid. Because the grid
+    // is forward-only infinite scroll (no virtualization), reaching a letter that
+    // isn't loaded yet means paging forward until its first card exists, then
+    // scrolling to it — the same rows the user would have scrolled past. The rail
+    // only offers letters the server reports as present for the active sort+filter
+    // (so a tap always terminates at a real card). A keyset-seek + virtualized
+    // window is the scaling follow-up for very large libraries.
+    function railEl() { return document.getElementById('v3-songs-azrail'); }
+    function railBubbleEl() { return document.getElementById('v3-songs-azbubble'); }
+    function railVisible() { return state.view === 'grid' && !!railSortColumn(); }
+
+    let _railToken = 0;
+    async function refreshRail() {
+        const rail = railEl();
+        if (!rail) return;
+        if (!railVisible()) { rail.classList.add('hidden'); railBubbleEl()?.classList.add('hidden'); return; }
+        const col = railSortColumn();
+        // A newer refresh (sort/filter/search/provider change) supersedes this
+        // one — a slow stats response must not repaint a rail the grid moved on.
+        const myToken = ++_railToken;
+        // Present letters for the active sort+filter (filter-synced; counts
+        // songs). `sort_letters=1` opts into the active-sort breakdown so the
+        // dashboard / v2 tree (which read only `letters`) skip the extra query.
+        const stats = await jget('/api/library/stats?' + queryParams({ sort_letters: 1 }).toString());
+        if (_railToken !== myToken || !railVisible()) {                 // changed mid-fetch
+            if (_railToken === myToken) rail.classList.add('hidden');
+            return;
+        }
+        // Prefer the active-sort breakdown. `letters` is the artist distinct-
+        // count, so it only matches the cards on an artist sort; a legacy/third-
+        // party provider that predates `sort_letters` returns none, in which
+        // case a title sort would advertise wrong letters — hide the rail then.
+        let letters = stats && stats.sort_letters;
+        if (!letters) {
+            if (col === 'artist') letters = (stats && stats.letters) || {};
+            else { rail.classList.add('hidden'); railBubbleEl()?.classList.add('hidden'); return; }
+        }
+        state.railLetters = letters;
+        // No present letters (empty or fully-filtered grid) → nothing to jump
+        // to; hide the rail instead of rendering a column of disabled buttons.
+        if (!Object.keys(letters).length) { rail.classList.add('hidden'); railBubbleEl()?.classList.add('hidden'); return; }
+        const desc = state.sort.endsWith('-desc');
+        const order = desc ? RAIL_BUCKETS.slice().reverse() : RAIL_BUCKETS;
+        // Roving tabindex: only the first present letter is in the tab order;
+        // the rest are reached with the arrow keys (see bindRailOnce). Avoids
+        // dumping up to 27 tab stops into the page.
+        let firstPresent = true;
+        rail.innerHTML = order.map((L) => {
+            const n = letters[L] || 0;
+            const present = n > 0;
+            const tabbable = present && firstPresent;
+            if (tabbable) firstPresent = false;
+            const name = L === '#' ? 'non-alphabetical' : L;
+            return '<button type="button" class="v3-azrail-letter" data-letter="' + esc(L) + '"'
+                + (present ? '' : ' disabled') + ' tabindex="' + (tabbable ? '0' : '-1') + '"'
+                + ' aria-label="Jump to ' + esc(name) + (present ? ', ' + n + ' song' + (n === 1 ? '' : 's') : ' (none)') + '">'
+                + esc(L) + '</button>';
+        }).join('');
+        rail.classList.remove('hidden');
+        bindRailOnce();
+    }
+
+    function _setRailActive(letter) {
+        railEl()?.querySelectorAll('.v3-azrail-letter').forEach((b) => {
+            b.classList.toggle('is-active', b.getAttribute('data-letter') === letter);
+        });
+    }
+    function _showBubble(letter) { const b = railBubbleEl(); if (b) { b.textContent = letter; b.classList.remove('hidden'); } }
+    function _hideBubble() { railBubbleEl()?.classList.add('hidden'); }
+
+    async function _loadNextAwait() {
+        if (state.loading) { await _waitForGridIdle(); return loadedCount() < state.total; }
+        if (loadedCount() >= state.total) return false;
+        state.page++;
+        await loadGrid(false);
+        return loadedCount() < state.total;
+    }
+
+    let _jumpToken = 0;
+    async function jumpToLetter(letter) {
+        const grid = document.getElementById('v3-songs-grid');
+        if (!grid || state.view !== 'grid' || !letter) return;
+        _setRailActive(letter);
+        const sel = '[data-letter="' + ((window.CSS && CSS.escape) ? CSS.escape(letter) : letter) + '"]';
+        const myToken = ++_jumpToken;   // a newer jump supersedes this one
+        // Page forward until the bucket's first card is loaded (or list
+        // exhausted). The guard is the page count the current total implies
+        // (+2 slack) rather than a fixed cap, so even a very large library
+        // stays reachable while a runaway loop is still bounded.
+        let guard = 0;
+        const maxPages = Math.ceil((state.total || 0) / PAGE_SIZE) + 2;
+        while (!grid.querySelector(sel) && loadedCount() < state.total
+               && _jumpToken === myToken && guard++ < maxPages) {
+            const more = await _loadNextAwait();
+            if (!more) break;
+        }
+        if (_jumpToken !== myToken) return;
+        const target = grid.querySelector(sel);
+        if (!target) return;
+        const main = document.getElementById('v3-main');
+        const toolbar = document.getElementById('v3-songs-toolbar');
+        const pad = (toolbar ? toolbar.offsetHeight : 0) + 12; // clear the sticky toolbar
+        if (main) {
+            const top = target.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop - pad;
+            main.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+        } else {
+            target.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        }
+    }
+
+    function bindRailOnce() {
+        const rail = railEl();
+        if (!rail || rail._bound) return;
+        rail._bound = true;
+        let dragging = false, moved = false, lastDrag = null;
+        const letterAtY = (y) => {
+            const els = rail.querySelectorAll('.v3-azrail-letter');
+            if (!els.length) return null;
+            for (const el of els) { const r = el.getBoundingClientRect(); if (y >= r.top && y <= r.bottom) return el; }
+            return y < els[0].getBoundingClientRect().top ? els[0] : els[els.length - 1]; // clamp past ends
+        };
+        rail.addEventListener('click', (e) => {
+            const btn = e.target.closest('.v3-azrail-letter');
+            if (!btn || btn.disabled) return;
+            if (moved) { moved = false; return; }   // a drag already handled it
+            jumpToLetter(btn.getAttribute('data-letter'));
+        });
+        rail.addEventListener('pointerdown', (e) => {
+            const btn = e.target.closest('.v3-azrail-letter');
+            if (!btn) return;
+            dragging = true; moved = false; lastDrag = null;
+            try { rail.setPointerCapture(e.pointerId); } catch (_) { /* */ }
+            _showBubble(btn.getAttribute('data-letter'));
+        });
+        rail.addEventListener('pointermove', (e) => {
+            if (!dragging) return;
+            const el = letterAtY(e.clientY);
+            if (!el || el.disabled) return;
+            moved = true;
+            const L = el.getAttribute('data-letter');
+            _showBubble(L);
+            if (L !== lastDrag) { lastDrag = L; jumpToLetter(L); }  // only on change
+        });
+        const end = () => { dragging = false; _hideBubble(); };
+        rail.addEventListener('pointerup', end);
+        rail.addEventListener('pointercancel', end);
+        rail.addEventListener('keydown', (e) => {
+            if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+            const btns = [...rail.querySelectorAll('.v3-azrail-letter:not([disabled])')];
+            const i = btns.indexOf(document.activeElement);
+            if (i < 0) return;
+            e.preventDefault();
+            const next = btns[i + (e.key === 'ArrowDown' ? 1 : -1)];
+            if (next) {
+                btns[i].setAttribute('tabindex', '-1');   // roving tabindex follows focus
+                next.setAttribute('tabindex', '0');
+                next.focus();
+                jumpToLetter(next.getAttribute('data-letter'));
+            }
+        });
+    }
+
     // Pin the sticky toolbar directly beneath the sticky topbar. Both live in
     // the #v3-main scroller, so without an explicit offset they share top:0 and
     // the toolbar covers the topbar's song search. The topbar has two responsive
@@ -913,12 +1102,19 @@
         // state.q) and needs a refresh rather than a scroll-preserving no-op.
         state.renderedHash = _libraryStateHash();
         updateFilterBadge();
+        // A sort/filter/search/view change rebuilds the grid from page 0, so any
+        // in-flight letter jump is now paging through a dataset that's about to
+        // be discarded — supersede it so it can't scroll the rebuilt grid.
+        _jumpToken++;
         // Keep a handle on the load so callers (notably the scroll restore on
         // screen re-entry) can await page-0 actually landing before paging
         // deeper. The visibility/scroll resets below stay synchronous.
         document.getElementById('v3-songs-grid')?.classList.toggle('hidden', state.view !== 'grid');
         document.getElementById('v3-songs-tree')?.classList.toggle('hidden', state.view !== 'tree');
         document.getElementById('lib-folder-tree')?.classList.toggle('hidden', state.view !== 'folder');
+        // Refresh the A–Z jump rail (shows only for the grid + alphabetical
+        // sorts; hides itself otherwise). Independent of the grid load.
+        refreshRail();
         { const _fc = document.getElementById('lib-folder-controls'); if (_fc) _fc.style.display = state.view === 'folder' ? 'flex' : 'none'; }
         if (state.view === 'folder') {
             _applyMainScrollTop(0);
@@ -985,6 +1181,10 @@
             '<div id="lib-folder-controls" style="display:none"></div>' +
             '<div id="lib-folder-tree" class="space-y-1 hidden"></div>' +
             '<div id="v3-songs-sentinel" class="h-8"></div>' +
+            // A–Z jump rail (grid + alphabetical sorts only; populated by
+            // refreshRail). The bubble shows the current letter while dragging.
+            '<nav id="v3-songs-azrail" class="v3-azrail hidden" aria-label="Jump to letter"></nav>' +
+            '<div id="v3-songs-azbubble" class="v3-azbubble hidden" aria-hidden="true"></div>' +
             // Filter drawer + overlay
             '<div id="v3-songs-overlay" class="fixed inset-0 bg-black/50 z-40 hidden"></div>' +
             '<aside id="v3-songs-drawer" class="fixed top-0 right-0 h-full w-full sm:w-96 bg-fb-sidebar border-l border-fb-border/50 z-50 transform translate-x-full transition-transform duration-200 overflow-y-auto v3-scroll"></aside>' +
