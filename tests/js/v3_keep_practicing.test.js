@@ -23,21 +23,32 @@ test('repertoire uses the same mastery threshold as the green accuracy badge', (
     );
 });
 
-test('the home is the unfiltered grid front door (gated off search/filter/select)', () => {
+test('the home is the unfiltered grid front door, local provider only', () => {
     assert.match(
         src,
-        /function\s+libHomeVisible[\s\S]*?state\.view === 'grid'[\s\S]*?!state\.selectMode[\s\S]*?!state\.q[\s\S]*?activeFilterCount\(\)\s*===\s*0/,
-        'libHomeVisible must require grid view, no select mode, no search, no active filters',
+        /function\s+libHomeVisible[\s\S]*?state\.view === 'grid'[\s\S]*?state\.provider === 'local'[\s\S]*?!state\.selectMode[\s\S]*?!state\.q[\s\S]*?activeFilterCount\(\)\s*===\s*0/,
+        'libHomeVisible must require grid view, the local provider, no select mode, no search, no active filters',
     );
 });
 
-test('the shelf is recently-played, not-yet-mastered songs', () => {
+test('the shelf is recently-played, not-yet-mastered songs (per-song, deduped)', () => {
     assert.match(src, /\/api\/stats\/recent\?limit=/);
+    // Mastery is gated on the per-SONG best (state.accuracy, what the badge
+    // shows), not the per-arrangement recents row, and each filename appears
+    // once — so no green-badged "keep practicing" card and no duplicates.
     assert.match(
         src,
-        /best_accuracy === 'number'\s*&&\s*r\.best_accuracy\s*<\s*MASTERY_ACCURACY/,
-        'the shelf must filter recents to scored-but-below-mastery songs',
+        /const\s+best\s*=\s*acc\[r\.filename\][\s\S]*?best\s*>=\s*MASTERY_ACCURACY/,
+        'the shelf must gate on the per-song best (state.accuracy) at MASTERY_ACCURACY',
     );
+    assert.match(src, /seen\.has\(r\.filename\)/, 'the shelf must dedupe recents by filename');
+});
+
+test('the meter + shelf fetch together and a stale render is discarded', () => {
+    assert.match(src, /Promise\.all\(\[[\s\S]*?library\/stats[\s\S]*?stats\/recent/,
+        'the two reads must be issued together (Promise.all), not sequentially');
+    assert.match(src, /_homeToken[\s\S]*?_homeToken !== myToken/,
+        'a stale render must be superseded by a newer one via a token');
 });
 
 test('the repertoire denominator is the unfiltered library total', () => {
