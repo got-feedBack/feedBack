@@ -8714,12 +8714,24 @@ function _installSectionPracticeDismiss() {
     // inside #section-practice-control so it never self-closes. Listeners added
     // mid-dispatch don't fire for the opening click, so there's no immediate
     // close race.
+    //
+    // The click listener uses the CAPTURE phase: the v3 player rail's icon
+    // buttons call e.stopPropagation() in their click handler (player-chrome.js
+    // wireRail), which kills bubbling before it reaches document. A bubble-phase
+    // outside-click dismiss would therefore never fire when the user clicks a
+    // rail icon (Plugins, Audio, …) to open another popover, leaving this
+    // popover stranded open on top of it. Capture runs before the target's
+    // handler, so the stopPropagation can't swallow it. This mirrors the audio
+    // mixer popover (audio-mixer.js), which dismisses outside-clicks the same
+    // way. (Esc stays bubble-phase — no rail handler stops keydown propagation,
+    // so it already reaches us, and capturing it would reorder it ahead of the
+    // player's Escape-to-exit handling.)
     document.addEventListener('click', (e) => {
         if (!_sectionPracticePopoverOpen()) return;
         const ctrl = document.getElementById('section-practice-control');
         if (ctrl && ctrl.contains(e.target)) return;
         _closeSectionPracticePopover();
-    });
+    }, true);
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape' && _sectionPracticePopoverOpen()) _closeSectionPracticePopover();
     });
