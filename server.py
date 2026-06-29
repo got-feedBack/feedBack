@@ -576,6 +576,30 @@ class MetadataDB:
             )
         """)
         self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_playlists_system_key ON playlists(system_key) WHERE system_key IS NOT NULL")
+        # Wishlist / "wanted" (feedBack#636 item 4): a persisted, actionable
+        # list of songs the user does NOT own yet — the *arr "Wanted/Monitored"
+        # analogue. Unlike playlists (which reference owned local songs by
+        # filename), a wanted entry has no local file, so it lives in its own
+        # table keyed by descriptive identity. Producers (the find_more plugin's
+        # ownership-diff, or a manual add) POST here; the consuming UI reads it.
+        # Additive + idempotent.
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS wanted (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                artist TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                source TEXT NOT NULL DEFAULT '',      -- e.g. 'find_more', 'manual'
+                source_ref TEXT NOT NULL DEFAULT '',  -- opaque id/url within that source
+                note TEXT NOT NULL DEFAULT '',
+                created_at TEXT
+            )
+        """)
+        # Identity = (artist, title, source, source_ref), case-insensitive on
+        # the human fields, so re-running an ownership-diff doesn't duplicate.
+        self.conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_wanted_identity "
+            "ON wanted(artist COLLATE NOCASE, title COLLATE NOCASE, source, source_ref)"
+        )
         # Progression (spec 010): instrument paths, challenges, quests, the
         # Decibels wallet, and the cosmetics shop. Targets/titles live in the
         # bundled content (data/progression/); these tables hold only player
@@ -1558,6 +1582,52 @@ class MetadataDB:
             self.conn.execute("UPDATE playlists SET updated_at = datetime('now') WHERE id = ?", (pid,))
             self.conn.commit()
         return new_state
+
+    # ── Wishlist / "wanted" (feedBack#636 item 4) ─────────────────────────
+    _WANTED_COLS = ("id", "artist", "title", "source", "source_ref", "note", "created_at")
+
+    def add_wanted(self, artist: str, title: str, source: str = "manual",
+                   source_ref: str = "", note: str = "") -> dict:
+        """Add a not-owned song to the wishlist (or return the existing row if
+        an entry with the same identity is already wanted — idempotent, so a
+        re-run of an ownership-diff doesn't duplicate). Returns the row."""
+        artist = (artist or "").strip()
+        title = (title or "").strip()
+        source = (source or "manual").strip() or "manual"
+        source_ref = (source_ref or "").strip()
+        note = (note or "").strip()
+        with self._lock:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO wanted (artist, title, source, source_ref, note, created_at) "
+                "VALUES (?, ?, ?, ?, ?, datetime('now'))",
+                (artist, title, source, source_ref, note),
+            )
+            row = self.conn.execute(
+                "SELECT " + ", ".join(self._WANTED_COLS) + " FROM wanted "
+                "WHERE artist = ? COLLATE NOCASE AND title = ? COLLATE NOCASE "
+                "AND source = ? AND source_ref = ?",
+                (artist, title, source, source_ref),
+            ).fetchone()
+            self.conn.commit()
+        return dict(zip(self._WANTED_COLS, row)) if row else {}
+
+    def list_wanted(self) -> list[dict]:
+        """All wishlist entries, newest first."""
+        rows = self.conn.execute(
+            "SELECT " + ", ".join(self._WANTED_COLS) + " FROM wanted "
+            "ORDER BY created_at DESC, id DESC"
+        ).fetchall()
+        return [dict(zip(self._WANTED_COLS, r)) for r in rows]
+
+    def remove_wanted(self, wanted_id: int) -> bool:
+        """Drop a wishlist entry by id. Returns True if a row was removed."""
+        with self._lock:
+            cur = self.conn.execute("DELETE FROM wanted WHERE id = ?", (wanted_id,))
+            self.conn.commit()
+            return cur.rowcount > 0
+
+    def count_wanted(self) -> int:
+        return self.conn.execute("SELECT COUNT(*) FROM wanted").fetchone()[0]
 
     def continue_session(self) -> dict | None:
         """Most-recently-played song (from song_stats) + metadata, for the
@@ -5497,6 +5567,40 @@ def api_toggle_saved(data: dict):
 def api_session_continue():
     """The Continue-Playing card's song (most recent play) or null."""
     return meta_db.continue_session()
+
+
+# ── Wishlist / "wanted" API (feedBack#636 item 4) ─────────────────────────────
+
+@app.get("/api/wanted")
+def api_list_wanted():
+    """The wishlist — songs the user wants but doesn't own yet (newest first)."""
+    return {"wanted": meta_db.list_wanted()}
+
+
+@app.post("/api/wanted")
+def api_add_wanted(data: dict):
+    """Add a not-owned song to the wishlist. `artist`/`title` are required (at
+    least one non-empty); `source`/`source_ref`/`note` are optional. Idempotent
+    on identity so producers (find_more ownership-diff, manual add) can re-post."""
+    if not isinstance(data, dict):
+        return JSONResponse({"error": "body must be an object"}, status_code=400)
+    artist = _clean_str(data.get("artist"))
+    title = _clean_str(data.get("title"))
+    if not artist and not title:
+        return JSONResponse({"error": "artist or title required"}, status_code=400)
+    row = meta_db.add_wanted(
+        artist=artist, title=title,
+        source=_clean_str(data.get("source")) or "manual",
+        source_ref=_clean_str(data.get("source_ref")),
+        note=_clean_str(data.get("note")),
+    )
+    return {"ok": True, "wanted": row}
+
+
+@app.delete("/api/wanted/{wanted_id}")
+def api_remove_wanted(wanted_id: int):
+    """Remove a wishlist entry by id."""
+    return {"ok": meta_db.remove_wanted(wanted_id)}
 
 
 # ── Loops API ────────────────────────────────────────────────────────────────
