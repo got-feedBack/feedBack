@@ -122,6 +122,26 @@
             plungerEl.style.left = _leftPct.toFixed(2) + '%';
             plungerEl.style.top  = _topPct.toFixed(2)  + '%';
 
+            // No live signal and the plunger has eased back to its resting centre
+            // → idle the loop. update() re-kicks it on the next note.
+            if (_currentNote === null && !_plungerDipped
+                    && Math.abs(targetLeft - _leftPct) < 0.05) {
+                _leftPct = targetLeft;
+                plungerEl.style.left = _leftPct.toFixed(2) + '%';
+                _rafId = null;
+                _lastTime = null;
+                return;
+            }
+
+            _rafId = requestAnimationFrame(_animate);
+        }
+
+        function _kick() {
+            if (_rafId !== null) return;
+            // Already parked at rest with no signal → nothing to animate, stay idle.
+            if (_currentNote === null && !_plungerDipped
+                    && Math.abs(_TUNER_TT_CENTRE_PCT - _leftPct) < 0.05) return;
+            _lastTime = null;
             _rafId = requestAnimationFrame(_animate);
         }
 
@@ -130,6 +150,7 @@
             _currentNote  = note;
             _currentCents = note === null ? 0 : cents;
             if (!_plungerDipped) { noteEl.textContent = note || '–'; }
+            _kick();   // a new reading may move the plunger → ensure the loop runs
         }
 
         function destroy() {

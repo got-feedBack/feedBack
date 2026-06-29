@@ -142,7 +142,18 @@ window._tunerViz_strobe = function (container) {
             strobeEl.style.opacity = '0';
         }
 
+        // Idle the loop when there's no live signal — the strobe only needs to
+        // paint while a note is sounding. update() re-kicks it on the next note,
+        // so a silent tuner stops repainting instead of spinning at 60 fps.
+        if (!strobeActive) { rafId = null; return; }
         rafId = requestAnimationFrame(_animate);
+    }
+
+    function _kick() {
+        if (rafId === null) {
+            lastAnimateTime = performance.now();
+            rafId = requestAnimationFrame(_animate);
+        }
     }
 
     rafId = requestAnimationFrame(_animate);
@@ -188,6 +199,7 @@ window._tunerViz_strobe = function (container) {
         const inTune = Math.abs(cents) < 5;
         strobeEl.style.opacity = inTune ? '1' : '0.6';
         strobeEl.style.filter = inTune ? _STROBE_GLOW_IN_TUNE : _STROBE_GLOW_OUT;
+        _kick();
     }
 
     function destroy() {

@@ -18,6 +18,8 @@
     // ── Constants ─────────────────────────────────────────────────────
     var _TUNER_LABEL_H = 12;           // px height of each drum label
     var _TUNER_NEEDLE_HALF_SWEEP = 90; // degrees — ±50 cents = horizontal (180° apart)
+    var _SETTLE_A = 0.05;              // deg — needle "settled" threshold (sub-visible)
+    var _SETTLE_Y = 0.1;               // px — drum-strip "settled" threshold
     var _TUNER_IN_TUNE_THRESHOLD = 2;
     var _TUNER_STRIP_START_MIDI = 14;  // ~18 Hz — covers 20 Hz minimum
     var _TUNER_STRIP_END_MIDI = 84;    // ~1047 Hz C6
@@ -321,7 +323,32 @@
             currentAngle += (targetAngle - currentAngle) * lf;
             _setNeedle(currentAngle);
 
+            // Stop once the needle has settled on its target — a static needle
+            // needs no repaint. update() re-kicks the loop when a new reading
+            // moves the target, so this idles the always-on tuner (no signal /
+            // steady pitch) instead of pinning a core at 60 fps forever.
+            if (Math.abs(targetDrumY - currentDrumY) <= _SETTLE_Y
+                    && Math.abs(targetAngle - currentAngle) <= _SETTLE_A) {
+                currentDrumY = targetDrumY; currentAngle = targetAngle;
+                freqStrip.style.transform = 'translateY(' + currentDrumY + 'px)';
+                noteStrip.style.transform = 'translateY(' + currentDrumY + 'px)';
+                _setNeedle(currentAngle);
+                rafId = null;
+                return;
+            }
             rafId = requestAnimationFrame(_animate);
+        }
+
+        // Restart the loop only when there's actually something to animate toward
+        // (a new target). Reset lastTime so the first frame after an idle gap
+        // doesn't take one big easing step.
+        function _kick() {
+            if (rafId === null
+                    && (Math.abs(targetDrumY - currentDrumY) > _SETTLE_Y
+                        || Math.abs(targetAngle - currentAngle) > _SETTLE_A)) {
+                lastTime = performance.now();
+                rafId = requestAnimationFrame(_animate);
+            }
         }
 
         rafId = requestAnimationFrame(_animate);
@@ -360,6 +387,7 @@
                 bulbEl.style.backgroundColor = '#2a1010';
                 bulbEl.style.border = '2px solid #4a2020';
                 bulbEl.style.boxShadow = 'none';
+                _kick();   // animate back to rest, then the loop self-stops
                 return;
             }
 
@@ -376,6 +404,7 @@
                 bulbEl.style.border = '2px solid #4a2020';
                 bulbEl.style.boxShadow = 'none';
             }
+            _kick();   // a new reading moved the target → run until it settles
         }
 
         function destroy() {

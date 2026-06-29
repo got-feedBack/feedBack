@@ -620,7 +620,19 @@
             if (_mt3Mode === 'strobe') { _computeStrobeStates(); }
 
             _applyTickStates();
+
+            // No signal and both the glow and strobe drift have fully settled →
+            // idle the loop. update() re-kicks it on the next note.
+            if (!_mt3HasSignal && _mt3GlowOpacity < 0.004
+                    && Math.abs(_mt3SmoothedCents) <= 0.1) {
+                _mt3RafId = null;
+                _mt3LastTime = null;
+                return;
+            }
             _mt3RafId = requestAnimationFrame(_animateStrobe);
+        }
+        function _kick() {
+            if (_mt3RafId === null) { _mt3LastTime = null; _mt3RafId = requestAnimationFrame(_animateStrobe); }
         }
         _mt3RafId = requestAnimationFrame(_animateStrobe);
 
@@ -677,6 +689,7 @@
                 _renderNote(' ');
                 _applyAccidental();
             }
+            if (hasNote) { _kick(); }   // new signal → restart the strobe loop if idled
         }
 
         // ── Public: destroy ───────────────────────────────────────────

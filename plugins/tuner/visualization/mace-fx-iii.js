@@ -354,9 +354,18 @@
                 if (_smoothedCents > 0) { speed = -speed; }
                 _strobeOffset = ((_strobeOffset + speed * dt) % _totalDash + _totalDash) % _totalDash;
                 arcPath.setAttribute('stroke-dashoffset', String(_strobeOffset));
+            } else if (_currentCents === 0) {
+                // Fully decelerated and no live signal → idle the loop instead of
+                // rescheduling forever. update() re-kicks it on the next note.
+                _rafId = null;
+                _lastTime = null;
+                return;
             }
 
             _rafId = requestAnimationFrame(_animateStrobe);
+        }
+        function _kick() {
+            if (_rafId === null) { _lastTime = null; _rafId = requestAnimationFrame(_animateStrobe); }
         }
         _rafId = requestAnimationFrame(_animateStrobe);
 
@@ -439,6 +448,7 @@
 
             // Strobe state — smoothed animation decelerates naturally when _currentCents → 0
             _currentCents = hasNote ? cents : 0;
+            if (hasNote) { _kick(); }   // new signal → restart the decel loop if idled
         }
 
         // ── Public: destroy ───────────────────────────────────────────
