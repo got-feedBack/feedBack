@@ -130,6 +130,59 @@ test('measure-start cache is invalidated on song change', () => {
     );
 });
 
+// ── Fret-row fit guard ──────────────────────────────────────────────────────
+// Keeps the heat-coloured fret-number row from clipping off the bottom edge
+// when a tight, centred zoom (worst mid-neck) drops it below the lower-third
+// framing. camUpdate dollies the camera back via a capped, hysteretic boost.
+
+test('fret-row fit guard constants are defined', () => {
+    for (const name of [
+        'FRET_ROW_FIT_NDC_MIN', 'FRET_ROW_FIT_DEADBAND', 'FRET_ROW_FIT_BOOST_MAX',
+    ]) {
+        assert.match(src, new RegExp('const\\s+' + name + '\\s*='),
+            `${name} must be declared as a fit-guard constant`);
+    }
+});
+
+test('the curDist lerp target applies the fit-guard dolly boost', () => {
+    // The span-driven tgtDist still owns zooming in; the boost only pulls back.
+    assert.match(
+        src,
+        /curDist\s*\+=\s*\(\s*tgtDist\s*\*\s*_fretRowFitBoost\s*-\s*curDist\s*\)\s*\*\s*lerp/,
+        'curDist must lerp toward tgtDist * _fretRowFitBoost',
+    );
+});
+
+test('the guard projects the fret-row band and adjusts the boost with hysteresis', () => {
+    // Row band Y mirrors the render position (sY(lowest) - S_GAP * 1.4).
+    assert.match(
+        src,
+        /Math\.min\(\s*sY\(0\)\s*,\s*sY\(nStr\s*-\s*1\)\s*\)\s*-\s*S_GAP\s*\*\s*1\.4/,
+        'the guard must probe the same row band the fret-number row is drawn at',
+    );
+    // Prompt pull-back when below the min, capped at BOOST_MAX.
+    assert.match(
+        src,
+        /_rowNdcY\s*<\s*FRET_ROW_FIT_NDC_MIN[\s\S]*?Math\.min\(\s*FRET_ROW_FIT_BOOST_MAX/,
+        'below the min NDC the boost rises, capped at FRET_ROW_FIT_BOOST_MAX',
+    );
+    // Lazy relax only once past the deadband, floored at 1.
+    assert.match(
+        src,
+        /_rowNdcY\s*>\s*FRET_ROW_FIT_NDC_MIN\s*\+\s*FRET_ROW_FIT_DEADBAND[\s\S]*?Math\.max\(\s*1\s*,\s*_fretRowFitBoost/,
+        'past the deadband the boost relaxes back toward 1',
+    );
+});
+
+test('the fit guard yields to the free-cam (Camera Director)', () => {
+    // When the free-cam owns the view the auto dolly must reset to 1, not fight it.
+    assert.match(
+        src,
+        /if\s*\(\s*_freeCam\s*&&\s*_freeCam\.enabled\s*\)\s*\{\s*if\s*\(\s*_fretRowFitBoost\s*!==\s*1\s*\)\s*_fretRowFitBoost\s*=\s*1/,
+        'with the free-cam enabled the guard must drop any auto dolly back to 1',
+    );
+});
+
 // ── Debug hook stayed removed ───────────────────────────────────────────────
 
 test('temporary camera debug hook is not present', () => {
