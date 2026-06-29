@@ -4,6 +4,45 @@
  * `fb` palette in tailwind.config.js.
  */
 
+/* ── Text-selection policy (v3) ──────────────────────────────────────────────
+   Accidental drag/double-click selection of app chrome (sidebar, transport, the
+   note highway/HUD, buttons, labels) makes the UI look broken and is never
+   useful — so default the interface to non-selectable, then opt *content* back
+   in. v3-only: this sheet loads only on /v3 (v2 is unchanged). The panel's
+   guardrails are baked in:
+   - NEVER a `* { user-select:none }` rule — it breaks input carets / IME
+     composition on WebKit (bug 82692); we scope to `html` and re-enable below.
+   - This is cosmetic only; it protects nothing (DevTools defeats it) and must
+     never be used to "lock" copy-worthy text away (a11y: keep errors, IDs,
+     paths, versions, metadata, lyrics selectable — incl. in modals/toasts). */
+html { -webkit-user-select: none; user-select: none; }
+
+/* Form fields are ALWAYS selectable/editable — protects the caret + IME
+   (including CJK / dead-key composition). The default must never swallow typing.
+   `.fb-selectable *` forces descendants so a child element's own non-select
+   can't strand copy-worthy text inside a content island. */
+input, textarea, select,
+[contenteditable]:not([contenteditable="false"]),
+[contenteditable]:not([contenteditable="false"]) * {
+    -webkit-user-select: text; user-select: text;
+}
+
+/* Plugin screens are content surfaces (editor, tabview, lyrics, theory, chord
+   text, …). Re-enable their mounted subtree by INHERITANCE (no `*`) so the host
+   policy can't silently make a plugin's copyable text un-selectable — including
+   community / out-of-tree plugins that never adopt `.fb-selectable`. A plugin
+   that wants its own chrome non-selectable still wins via its own element rule
+   (which this inherited value doesn't override). */
+.screen[id^="plugin-"] { -webkit-user-select: text; user-select: text; }
+
+/* Core read-only content opts back in by CONTAINER (lower-drift than tagging
+   each value — a new setting added later inherits "selectable" for free):
+   the Settings panel (values, paths, device names, version, diagnostics,
+   About) and the now-playing song metadata. Any error/toast carrying copyable
+   text should also carry `.fb-selectable`. Plugins re-enable their own
+   copyable regions with this same class (documented in CLAUDE.md). */
+.fb-selectable, .fb-selectable * { -webkit-user-select: text; user-select: text; }
+
 /* The v3 tuner card replaces the tuner plugin's floating launcher — hide it. */
 #tuner-toggle-btn { display: none !important; }
 

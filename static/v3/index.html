@@ -343,7 +343,10 @@
 
     <!-- ══ SETTINGS ═══════════════════════════════════════════════════════ -->
     <div id="settings" class="screen">
-        <div class="fb-settings">
+        <!-- fb-selectable: Settings is read-only content (paths, device names,
+             version, diagnostics, About) the user copies — opt the whole panel
+             back in under the v3 non-select default. See static/v3/v3.css. -->
+        <div class="fb-settings fb-selectable">
             <button onclick="showScreen('home')" class="fb-settings-back">
                 <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg> Home
             </button>
@@ -825,7 +828,9 @@
 
         <!-- Top HUD — persistent (song info, time, Up Next) -->
         <div id="player-hud" class="absolute top-0 left-0 right-0 flex justify-between items-start px-5 py-4 pointer-events-none z-20">
-            <div class="text-sm leading-tight">
+            <!-- fb-selectable: now-playing song metadata (title / artist /
+                 arrangement / tuning) is copy-worthy content, not chrome. -->
+            <div class="text-sm leading-tight fb-selectable">
                 <div><span id="hud-artist" class="text-gray-300"></span> — <span id="hud-title" class="text-white font-semibold"></span></div>
                 <div id="hud-arrangement" class="text-gray-500 text-xs mt-0.5"></div>
                 <div id="hud-tuning" class="text-gray-500 text-xs mt-0.5"></div>
