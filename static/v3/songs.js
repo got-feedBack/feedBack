@@ -202,6 +202,50 @@
         return p;
     }
 
+    // The active filter set as a smart-collection rule object (raw query-param
+    // format the backend stores). Mirrors queryParams' filter fields, minus
+    // provider/page/size. Empty object → nothing worth saving as a collection.
+    function currentFilterRules() {
+        const f = state.filters, r = {};
+        if (state.q) r.q = state.q;
+        if (state.format) r.format = state.format;
+        if (state.artist) r.artist = state.artist;
+        if (state.album) r.album = state.album;
+        if (f.arr_has.length) r.arrangements_has = f.arr_has.join(',');
+        if (f.arr_lacks.length) r.arrangements_lacks = f.arr_lacks.join(',');
+        if (f.stem_has.length) r.stems_has = f.stem_has.join(',');
+        if (f.stem_lacks.length) r.stems_lacks = f.stem_lacks.join(',');
+        if (f.lyrics) r.has_lyrics = f.lyrics;
+        if (f.tunings.length) r.tunings = f.tunings.join(',');
+        if (state.sort && state.sort !== 'artist') r.sort = state.sort;
+        return r;
+    }
+
+    // Save the current filter set as a smart collection (a saved live query that
+    // shows up as a source in the picker). #636 item 2.
+    async function saveCurrentAsCollection() {
+        const rules = currentFilterRules();
+        if (!Object.keys(rules).length) return;
+        const name = ((await window.uiPrompt({
+            title: 'Save as collection',
+            label: 'A live view of the current filters, in the source picker.',
+            okLabel: 'Save',
+            placeholder: 'Collection name',
+        })) || '').trim();
+        if (!name) return;
+        try {
+            const res = await fetch('/api/collections', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, rules }),
+            });
+            if (!res.ok) return;
+            const col = (await res.json()).collection;
+            closeDrawer();
+            if (col && col.id != null) state.provider = 'collection:' + col.id;
+            await render();   // rebuilds the toolbar (provider picker now lists + selects it)
+        } catch (e) { /* offline / aborted — leave the drawer as-is */ }
+    }
+
     function albumsForArtist(name) {
         const a = (state.artistCatalog || []).find((x) => x.name === name);
         return a ? (a.albums || []) : [];
@@ -1162,6 +1206,11 @@
                 }
                 return triPill('tuning', val, label + ' (' + t.count + ')', f.tunings.includes(val) ? 'has' : 'any');
             }).join('') || '<span class="text-xs text-fb-textDim">No tunings</span>') +
+            // Collections always replay against the LOCAL library, so only offer
+            // "save" when browsing local with a non-empty filter set.
+            (state.provider === 'local' && Object.keys(currentFilterRules()).length
+                ? '<div class="pt-3 border-t border-fb-border/50"><button data-drawer-save class="w-full text-sm text-fb-primary hover:text-fb-primaryHi border border-fb-primary/40 rounded-md py-2">＋ Save as collection</button></div>'
+                : '') +
             '<div class="flex justify-between pt-3 border-t border-fb-border/50"><button data-drawer-clear class="text-sm text-fb-textDim hover:text-fb-text">Clear all</button>' +
             '<button data-drawer-apply class="bg-fb-primary hover:bg-fb-primaryHi text-white px-4 py-2 rounded-md text-sm">Done</button></div></div>';
 
@@ -1173,6 +1222,7 @@
             renderDrawer();
         }));
         d.querySelectorAll('[data-lyrics]').forEach((b) => b.addEventListener('click', () => { f.lyrics = b.getAttribute('data-lyrics'); renderDrawer(); }));
+        d.querySelector('[data-drawer-save]')?.addEventListener('click', saveCurrentAsCollection);
         d.querySelector('[data-drawer-close]')?.addEventListener('click', closeDrawer);
         d.querySelector('[data-drawer-clear]')?.addEventListener('click', async () => {
             state.filters = { arr_has: [], arr_lacks: [], stem_has: [], stem_lacks: [], lyrics: '', tunings: [] };

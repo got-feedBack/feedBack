@@ -657,6 +657,15 @@ class MetadataDB:
             )
         """)
         self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_playlists_system_key ON playlists(system_key) WHERE system_key IS NOT NULL")
+        # Smart collections (feedBack#636 item 2): a playlist row whose `rules`
+        # JSON is non-NULL is a smart/dynamic collection — its membership is the
+        # LIVE result of those library filter params, not a stored song list.
+        # It surfaces as a registered library provider (the v3 source picker),
+        # so it inherits the whole Songs UI. Additive, idempotent migration.
+        try:
+            self.conn.execute("ALTER TABLE playlists ADD COLUMN rules TEXT")
+        except sqlite3.OperationalError:
+            pass
         # Wishlist / "wanted" (feedBack#636 item 4): a persisted, actionable
         # list of songs the user does NOT own yet — the *arr "Wanted/Monitored"
         # analogue. Unlike playlists (which reference owned local songs by
@@ -1497,6 +1506,7 @@ class MetadataDB:
         from urllib.parse import quote
         rows = self.conn.execute(
             "SELECT id, name, system_key, created_at, updated_at FROM playlists "
+            "WHERE rules IS NULL "          # smart collections live in the source picker, not here
             "ORDER BY (system_key IS NULL), name COLLATE NOCASE"
         ).fetchall()
         out = []
@@ -1568,14 +1578,79 @@ class MetadataDB:
             self.conn.commit()
             return cur.rowcount > 0
 
+    # ── Smart collections (feedBack#636 item 2) ───────────────────────────
+    @staticmethod
+    def _collection_row(r) -> dict:
+        rules = {}
+        if r[3]:
+            try:
+                parsed = json.loads(r[3])
+                if isinstance(parsed, dict):
+                    rules = parsed
+            except (ValueError, TypeError):
+                rules = {}
+        return {"id": r[0], "name": r[1], "system_key": r[2], "rules": rules,
+                "created_at": r[4], "updated_at": r[5]}
+
+    def is_collection(self, pid: int) -> bool:
+        row = self.conn.execute(
+            "SELECT rules IS NOT NULL FROM playlists WHERE id = ?", (pid,)
+        ).fetchone()
+        return bool(row and row[0])
+
+    def list_collections(self) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT id, name, system_key, rules, created_at, updated_at FROM playlists "
+            "WHERE rules IS NOT NULL ORDER BY name COLLATE NOCASE"
+        ).fetchall()
+        return [self._collection_row(r) for r in rows]
+
+    def get_collection(self, pid: int) -> dict | None:
+        r = self.conn.execute(
+            "SELECT id, name, system_key, rules, created_at, updated_at FROM playlists "
+            "WHERE id = ? AND rules IS NOT NULL", (pid,)
+        ).fetchone()
+        return self._collection_row(r) if r else None
+
+    def create_collection(self, name: str, rules: dict) -> dict:
+        with self._lock:
+            cur = self.conn.execute(
+                "INSERT INTO playlists (name, system_key, rules, created_at, updated_at) "
+                "VALUES (?, NULL, ?, datetime('now'), datetime('now'))",
+                (name, json.dumps(rules or {})),
+            )
+            self.conn.commit()
+            pid = cur.lastrowid
+        return self.get_collection(pid)
+
+    def update_collection(self, pid: int, name: str | None = None,
+                          rules: dict | None = None) -> dict | None:
+        if not self.is_collection(pid):
+            return None
+        with self._lock:
+            if name is not None:
+                self.conn.execute("UPDATE playlists SET name = ? WHERE id = ?", (name, pid))
+            if rules is not None:
+                self.conn.execute("UPDATE playlists SET rules = ? WHERE id = ?",
+                                  (json.dumps(rules or {}), pid))
+            self.conn.execute("UPDATE playlists SET updated_at = datetime('now') WHERE id = ?", (pid,))
+            self.conn.commit()
+        return self.get_collection(pid)
+
     def get_playlist(self, pid: int) -> dict | None:
         # A path-param int outside SQLite's 64-bit range raises OverflowError at
         # bind time (→ 500). Treat it as a miss; every mutating playlist handler
         # gates on this first, so the guard covers them too.
         if not isinstance(pid, int) or not (-(2**63) <= pid < 2**63):
             return None
+        # `rules IS NULL` excludes smart collections (#636 item 2): they share
+        # the playlists table but their membership is rules-based, so every
+        # manual-playlist mutation (add/remove/reorder/cover) that gates on
+        # get_playlist uniformly 404s on a collection id — collections are
+        # managed only through /api/collections.
         head = self.conn.execute(
-            "SELECT id, name, system_key, created_at, updated_at FROM playlists WHERE id = ?", (pid,)
+            "SELECT id, name, system_key, created_at, updated_at FROM playlists "
+            "WHERE id = ? AND rules IS NULL", (pid,)
         ).fetchone()
         if not head:
             return None
@@ -2800,7 +2875,126 @@ class LibraryProviderRegistry:
 
 
 library_providers = LibraryProviderRegistry()
-library_providers.register(LocalLibraryProvider(meta_db))
+_local_library_provider = LocalLibraryProvider(meta_db)
+library_providers.register(_local_library_provider)
+
+
+# Keys `_library_filter_args` (and a smart collection's stored `rules`) accept.
+_LIBRARY_FILTER_PARAM_KEYS = frozenset((
+    "q", "favorites", "format", "artist", "album",
+    "arrangements_has", "arrangements_lacks", "stems_has", "stems_lacks",
+    "has_lyrics", "tunings",
+))
+# Rules mirror the raw /api/library query params (so the provider can feed them
+# straight through `_library_filter_args`, and the frontend can build a rule from
+# the same query string it already constructs). Multi-value filters are CSV
+# strings; `favorites` is 0/1; the rest are plain strings.
+_RULE_CSV_KEYS = frozenset((
+    "tunings", "arrangements_has", "arrangements_lacks", "stems_has", "stems_lacks",
+))
+_RULE_STR_KEYS = frozenset(("q", "format", "artist", "album", "has_lyrics", "sort"))
+
+
+def _sanitize_collection_rules(raw) -> dict:
+    """Normalize rules to the raw query-param format, keeping only known keys. A
+    list for a multi-value filter is joined to CSV; `favorites` becomes 0/1.
+    Unknown keys are dropped so a rule survives a filter-vocab change rather than
+    500-ing. Applied at API ingress AND when a provider loads a persisted row, so
+    a hand-edited / imported bad value (e.g. an int where a string is expected,
+    or a list for `sort`) can never crash a query."""
+    if not isinstance(raw, dict):
+        return {}
+    out: dict = {}
+    for k, v in raw.items():
+        if k in _RULE_CSV_KEYS:
+            if isinstance(v, list):
+                vals = [str(x) for x in v if isinstance(x, (str, int)) and not isinstance(x, bool)]
+            elif isinstance(v, str):
+                vals = [s for s in (p.strip() for p in v.split(",")) if s]
+            else:
+                continue
+            if vals:
+                out[k] = ",".join(vals)
+        elif k == "favorites":
+            if v:
+                out[k] = 1
+        elif k in _RULE_STR_KEYS:
+            if isinstance(v, (str, int)) and not isinstance(v, bool):
+                s = str(v).strip()
+                if s:
+                    out[k] = s
+    return out
+
+
+class SmartCollectionProvider:
+    """A saved library filter, surfaced as a source (#636 item 2). Browse/stats
+    delegate to the local DB with the collection's stored `rules` applied — so
+    selecting it in the v3 source picker shows exactly that filtered slice with
+    the whole Songs UI (paging, stats, A–Z rail, art) for free. P1: the rules
+    ARE the query (live in-collection search is a P2 nicety). The matched songs
+    are local rows, so `kind="local"` keeps the client's play/art paths on the
+    local (not remote-sync) branch and art delegates straight through."""
+    kind = "local"
+    capabilities = ("library.read", "art.read")
+
+    def __init__(self, collection: dict, local: "LocalLibraryProvider"):
+        self._local = local
+        self.update(collection)
+
+    def update(self, collection: dict) -> None:
+        self.id = f"collection:{collection['id']}"
+        self.collection_id = collection["id"]
+        self.label = collection.get("name") or "Collection"
+        # Re-sanitize on load: persisted JSON may predate the current vocab or
+        # have been hand-edited; never let a bad value reach a query.
+        self._rules = _sanitize_collection_rules(collection.get("rules") or {})
+
+    def _filter_kwargs(self) -> dict:
+        return _library_filter_args(**{k: v for k, v in self._rules.items()
+                                       if k in _LIBRARY_FILTER_PARAM_KEYS})
+
+    def _sort(self, fallback: str) -> str:
+        # A collection may pin its own sort (e.g. "recently added"); query_page
+        # falls back safely for an unknown value, so no validation needed here.
+        return self._rules.get("sort") or fallback
+
+    def query_page(self, *, page=0, size=24, sort="artist", direction="asc",
+                   naming_mode="legacy", **_ignore):
+        return self._local._db.query_page(
+            page=page, size=size, sort=self._sort(sort), direction=direction,
+            naming_mode=naming_mode, **self._filter_kwargs())
+
+    def query_artists(self, *, letter="", page=0, size=50, naming_mode="legacy", **_ignore):
+        return self._local._db.query_artists(
+            letter=letter, page=page, size=size, naming_mode=naming_mode,
+            **self._filter_kwargs())
+
+    def query_stats(self, *, sort="artist", want_sort_letters=False,
+                    naming_mode="legacy", **_ignore):
+        return self._local._db.query_stats(
+            sort=self._sort(sort), want_sort_letters=want_sort_letters,
+            naming_mode=naming_mode, **self._filter_kwargs())
+
+    def tuning_names(self):
+        return self._local.tuning_names()
+
+    async def get_art(self, song_id: str):
+        return await self._local.get_art(song_id)
+
+
+def _sync_collection_provider(collection: dict) -> None:
+    """Register (or replace) the provider for one collection."""
+    library_providers.register(
+        SmartCollectionProvider(collection, _local_library_provider), replace=True)
+
+
+def _unregister_collection_provider(pid: int) -> None:
+    library_providers.unregister(f"collection:{pid}")
+
+
+# Boot scan: surface every saved collection as a source.
+for _c in meta_db.list_collections():
+    _sync_collection_provider(_c)
 
 
 def register_library_provider(provider: object, *, replace: bool = False, owner_plugin_id: str | None = None) -> object:
@@ -5672,6 +5866,53 @@ def api_delete_playlist_cover(pid: int):
             cover.unlink()
         except OSError:
             pass
+    return {"ok": True}
+
+
+# ── Smart collections API (feedBack#636 item 2) ───────────────────────────────
+# (rule schema + `_sanitize_collection_rules` are defined with the provider.)
+
+@app.get("/api/collections")
+def api_list_collections():
+    """Smart/dynamic collections (saved live library filters)."""
+    return {"collections": meta_db.list_collections()}
+
+
+@app.post("/api/collections")
+def api_create_collection(data: dict):
+    """Create a collection from a name + a set of library filter rules. It
+    immediately appears as a source in the library provider picker."""
+    if not isinstance(data, dict):
+        return JSONResponse({"error": "body must be an object"}, status_code=400)
+    name = _clean_str(data.get("name"))
+    if not name:
+        return JSONResponse({"error": "name required"}, status_code=400)
+    col = meta_db.create_collection(name, _sanitize_collection_rules(data.get("rules")))
+    _sync_collection_provider(col)
+    return {"ok": True, "collection": col}
+
+
+@app.put("/api/collections/{pid}")
+def api_update_collection(pid: int, data: dict):
+    """Rename a collection and/or replace its rules."""
+    if not isinstance(data, dict):
+        return JSONResponse({"error": "body must be an object"}, status_code=400)
+    name = _clean_str(data.get("name")) or None
+    rules = _sanitize_collection_rules(data["rules"]) if "rules" in data else None
+    col = meta_db.update_collection(pid, name=name, rules=rules)
+    if col is None:
+        return JSONResponse({"error": "collection not found"}, status_code=404)
+    _sync_collection_provider(col)
+    return {"ok": True, "collection": col}
+
+
+@app.delete("/api/collections/{pid}")
+def api_delete_collection(pid: int):
+    """Delete a collection and unregister its provider."""
+    if not meta_db.is_collection(pid):
+        return JSONResponse({"error": "collection not found"}, status_code=404)
+    meta_db.delete_playlist(pid)
+    _unregister_collection_provider(pid)
     return {"ok": True}
 
 
