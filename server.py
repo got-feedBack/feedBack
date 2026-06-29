@@ -427,6 +427,80 @@ def _apply_pending_db_restore(config_dir: Path) -> None:
     log.info("applied pending library DB restore from settings import")
 
 
+# ── Keyset (cursor) pagination for the library grid (feedBack#636 item 3) ─────
+# Forward-only, O(page) deep paging that doesn't grow with OFFSET. Only simple
+# single-column sorts can keyset cleanly (the compound tuning/year sorts fall
+# back to OFFSET). Every sort gets a unique `filename` tiebreak so the order is
+# TOTAL — which also fixes a latent OFFSET skip/dupe across equal-key rows.
+# (column, collate-clause, primary-direction) — tiebreak is always `filename` ASC.
+_KEYSET_SORTS = {
+    "artist": ("artist", "COLLATE NOCASE", "ASC"),
+    "artist-desc": ("artist", "COLLATE NOCASE", "DESC"),
+    "title": ("title", "COLLATE NOCASE", "ASC"),
+    "title-desc": ("title", "COLLATE NOCASE", "DESC"),
+    "recent": ("mtime", "", "DESC"),
+}
+# Index into a query_page row tuple for each keyset column (see the SELECT in
+# query_page: filename, title, artist, ... mtime at 9).
+_KEYSET_ROW_IDX = {"artist": 2, "title": 1, "mtime": 9}
+
+
+def _encode_cursor(values: list) -> str:
+    import base64
+    return base64.urlsafe_b64encode(json.dumps(values).encode("utf-8")).decode("ascii")
+
+
+def _decode_cursor(cursor: str):
+    """Decode an opaque keyset cursor to [sort_value, filename], or None if it's
+    malformed (a bad cursor degrades to the first page, never 500s)."""
+    import base64
+    try:
+        out = json.loads(base64.urlsafe_b64decode(cursor.encode("ascii")).decode("utf-8"))
+    except (ValueError, TypeError):
+        return None
+    return out if isinstance(out, list) and len(out) == 2 else None
+
+
+def _effective_keyset_sort(sort: str, direction: str) -> str:
+    """Fold the legacy `dir=desc` toggle into the canonical keyset sort key, so
+    the seek/cursor direction matches the ORDER BY that same toggle produces
+    (without this, `sort=artist&dir=desc` would seek with `>` against a DESC
+    order → gaps/dupes)."""
+    if direction == "desc" and sort in ("artist", "title"):
+        return sort + "-desc"
+    return sort
+
+
+def _keyset_seek(col: str, collate: str, primary_dir: str, cv, fn: str):
+    """(sql, params) for 'rows strictly after (cv, fn)' in the total order
+    `<col> <primary_dir>, filename ASC`, matching SQLite's NULL placement
+    (NULLs sort first in ASC, last in DESC) so keyset is exactly OFFSET-
+    equivalent even for NULL sort keys."""
+    ce = f"{col} {collate}".strip()
+    if primary_dir == "ASC":   # NULLs first
+        if cv is None:
+            return (f"(({col} IS NULL AND filename > ?) OR {col} IS NOT NULL)", [fn])
+        return (f"({col} IS NOT NULL AND ({ce} > ? OR ({ce} = ? AND filename > ?)))",
+                [cv, cv, fn])
+    # DESC — NULLs last
+    if cv is None:
+        return (f"({col} IS NULL AND filename > ?)", [fn])
+    return (f"({col} IS NULL OR ({col} IS NOT NULL AND "
+            f"({ce} < ? OR ({ce} = ? AND filename > ?))))", [cv, cv, fn])
+
+
+def next_library_cursor(sort: str, last_song: dict | None) -> str | None:
+    """The cursor for the last row of a page, so the next request resumes after
+    it. None when the sort can't keyset or the page was empty."""
+    if sort not in _KEYSET_SORTS or not last_song:
+        return None
+    col = _KEYSET_SORTS[sort][0]
+    key = "mtime" if col == "mtime" else col
+    if key not in last_song or "filename" not in last_song:
+        return None
+    return _encode_cursor([last_song[key], last_song["filename"]])
+
+
 class MetadataDB:
     def __init__(self):
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -478,6 +552,13 @@ class MetadataDB:
                 pass
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_songs_artist ON songs(artist COLLATE NOCASE)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_songs_title ON songs(title COLLATE NOCASE)")
+        # Composite (sort col, filename) indexes cover the grid's ORDER BY +
+        # its unique filename tiebreak — for both the OFFSET scan and keyset
+        # seek (feedBack#636 item 3). idx_songs_artist/title above stay for the
+        # distinct-artist / letter-bar aggregates.
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_songs_artist_fn ON songs(artist COLLATE NOCASE, filename)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_songs_title_fn ON songs(title COLLATE NOCASE, filename)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_songs_mtime_fn ON songs(mtime, filename)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_songs_tuning_name ON songs(tuning_name COLLATE NOCASE)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_songs_tuning_sort_key ON songs(tuning_sort_key)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_songs_year ON songs(year)")
@@ -1943,8 +2024,14 @@ class MetadataDB:
                    stems_lacks: list[str] | None = None,
                    has_lyrics: int | None = None,
                    tunings: list[str] | None = None,
+                   after: str | None = None,
                    naming_mode: str = "legacy") -> tuple[list[dict], int]:
-        """Server-side paginated search. Returns (songs, total_count)."""
+        """Server-side paginated search. Returns (songs, total_count).
+
+        `after` is an opaque keyset cursor (the last row of the previous page).
+        When supplied and the sort can keyset, the page is fetched with a
+        WHERE-seek instead of OFFSET — O(page), independent of depth. Unknown
+        sorts / bad cursors fall back to OFFSET, so it's always safe."""
         where, params = self._build_where(
             q=q, favorites_only=favorites_only, format_filter=format_filter,
             artist_filter=artist_filter, album_filter=album_filter,
@@ -2002,14 +2089,33 @@ class MetadataDB:
         # those sorts use the explicit `-desc` sort key instead.
         if direction == "desc" and " ASC" not in order and " DESC" not in order:
             order += " DESC"
+        # Unique, deterministic tiebreak → a TOTAL order. Without it, rows with
+        # an equal sort key can reshuffle between OFFSET pages (skip/dupe); it's
+        # also what makes keyset seeking correct.
+        order += ", filename"
 
         total = self.conn.execute(f"SELECT COUNT(*) FROM songs {where}", params).fetchone()[0]
-        rows = self.conn.execute(
-            f"SELECT filename, title, artist, album, year, duration, tuning, arrangements, has_lyrics, mtime, "
-            f"format, stem_count, stem_ids, tuning_name, tuning_offsets "
-            f"FROM songs {where} ORDER BY {order} LIMIT ? OFFSET ?",
-            params + [size, page * size]
-        ).fetchall()
+
+        cols = ("SELECT filename, title, artist, album, year, duration, tuning, "
+                "arrangements, has_lyrics, mtime, format, stem_count, stem_ids, "
+                "tuning_name, tuning_offsets FROM songs ")
+        cursor = _decode_cursor(after) if after else None
+        eff_sort = _effective_keyset_sort(sort, direction)
+        if cursor and eff_sort in _KEYSET_SORTS:
+            # Keyset seek: rows strictly after the cursor in the total order
+            # `<col> <dir>, filename ASC` (NULL-aware, so == OFFSET exactly).
+            col, collate, primary_dir = _KEYSET_SORTS[eff_sort]
+            seek, seek_params = _keyset_seek(col, collate, primary_dir, cursor[0], cursor[1])
+            seek_where = where + (" AND " if where else " WHERE ") + seek
+            rows = self.conn.execute(
+                f"{cols}{seek_where} ORDER BY {order} LIMIT ?",
+                params + seek_params + [size],
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                f"{cols}{where} ORDER BY {order} LIMIT ? OFFSET ?",
+                params + [size, page * size],
+            ).fetchall()
 
         estd = self._estd_set()
         favs = self.favorite_set()
@@ -2773,7 +2879,7 @@ def _require_library_provider_capability(provider: object, capability: str) -> N
     )
 
 
-_OPTIONAL_NEW_PROVIDER_KWARGS = ("naming_mode", "sort", "want_sort_letters")
+_OPTIONAL_NEW_PROVIDER_KWARGS = ("naming_mode", "sort", "want_sort_letters", "after")
 
 
 def _filter_provider_kwargs(method: object, kwargs: dict) -> dict:
@@ -4650,11 +4756,21 @@ async def list_library(q: str = "", page: int = 0, size: int = 24, sort: str = "
                        arrangements_has: str = "", arrangements_lacks: str = "",
                        stems_has: str = "", stems_lacks: str = "",
                        has_lyrics: str = "", tunings: str = "", provider: str = "local",
-                       naming_mode: str = "legacy"):
-    """Paginated library search through the selected library provider."""
+                       after: str = "", naming_mode: str = "legacy"):
+    """Paginated library search through the selected library provider.
+
+    `after` is an opaque keyset cursor (feedBack#636 item 3): pass back the
+    `next_cursor` from the previous response to fetch the next page with a
+    WHERE-seek instead of OFFSET. Providers that don't support it ignore it and
+    page by OFFSET, so the client can always fall back."""
     size = min(size, 100)
     library_provider = _get_library_provider(provider)
     _require_library_provider_capability(library_provider, "library.read")
+    # Only the true local provider keysets: it's the one whose effective sort is
+    # exactly the request `sort`. A smart collection may pin its own sort and
+    # remote providers don't keyset — both must page by OFFSET, so never hand
+    # them a cursor (a mismatched one would mis-seek).
+    is_local = getattr(library_provider, "id", "") == "local"
     songs, total = await _call_library_provider_async(
         library_provider,
         "query_page",
@@ -4662,6 +4778,7 @@ async def list_library(q: str = "", page: int = 0, size: int = 24, sort: str = "
         size=size,
         sort=sort,
         direction=dir,
+        after=((after or None) if is_local else None),
         naming_mode=naming_mode,
         **_library_filter_args(
             q=q, favorites=favorites, format=format,
@@ -4671,7 +4788,11 @@ async def list_library(q: str = "", page: int = 0, size: int = 24, sort: str = "
             has_lyrics=has_lyrics, tunings=tunings,
         ),
     )
-    return {"songs": songs, "total": total, "page": page, "size": size}
+    # The cursor to resume after this page (effective sort folds in dir=desc).
+    next_cursor = (next_library_cursor(_effective_keyset_sort(sort, dir), songs[-1])
+                   if (is_local and songs) else None)
+    return {"songs": songs, "total": total, "page": page, "size": size,
+            "next_cursor": next_cursor}
 
 
 @app.get("/api/library/artists")
