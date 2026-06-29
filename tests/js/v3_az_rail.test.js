@@ -1,11 +1,12 @@
 // Pins the v3 Songs A–Z jump rail wiring in static/v3/songs.js.
 //
 // The rail lets a user jump the library grid to artists/titles starting with a
-// letter (Plex/Radarr/iOS-contacts pattern). Because the grid is forward-only,
-// server-paged infinite scroll, the jump pages through to the target card then
-// scrolls — and the rail only offers letters the server reports present for the
-// active sort+filter (so a tap always terminates at a real card). It is shown
-// only for the grid view + alphabetical (artist/title) sorts.
+// letter (Plex/Radarr/iOS-contacts pattern). With the windowed grid (#636 item 3
+// stage 2) the jump seeks DIRECTLY: the sort_letters song-counts give the first
+// card's absolute index (cumulative of prior buckets), which converts to a
+// scrollTop — no page-through. The rail only offers letters the server reports
+// present for the active sort+filter (so a tap always lands on a real card). It
+// is shown only for the grid view + alphabetical (artist/title) sorts.
 //
 // Source-level only — same strategy as tests/js/highway_3d_camera_framing.test.js.
 
@@ -65,16 +66,24 @@ test('the rail + drag bubble are rendered in the Songs markup', () => {
     assert.match(src, /id="v3-songs-azbubble"/);
 });
 
-test('jumpToLetter pages through to the target then scrolls (load-through)', () => {
-    // Forward-paging helper used to load rows up to the target letter.
-    assert.match(src, /async function\s+_loadNextAwait\s*\(\)/);
+test('jumpToLetter seeks directly via sort_letters cumulative (no page-through)', () => {
+    // The cumulative-count seek: sum the song-counts of buckets ordered before
+    // the target to get its first row's absolute index.
+    assert.match(src, /function\s+_letterStartIndex\s*\(letter\)/,
+        'jumpToLetter must derive the target index from sort_letters counts');
     assert.match(
         src,
-        /async function\s+jumpToLetter[\s\S]*?_loadNextAwait\(\)[\s\S]*?(scrollTo|scrollIntoView)/,
-        'jumpToLetter must page forward (_loadNextAwait) then scroll to the target card',
+        /async function\s+jumpToLetter[\s\S]*?_letterStartIndex\(letter\)[\s\S]*?scrollTo/,
+        'jumpToLetter must compute the target index then scrollTo (no _loadNextAwait page-through)',
     );
-    // A token guards against overlapping jumps (drag scrubbing) — newest wins.
-    assert.match(src, /_jumpToken\s*===\s*myToken/);
+    // It pre-fetches the destination window so cards are ready when the scroll lands.
+    assert.match(src, /async function\s+jumpToLetter[\s\S]*?ensureWindow\(/,
+        'jumpToLetter must pre-fetch the destination window before scrolling');
+    // The old forward-paging helper is gone (the seek is O(1)).
+    assert.doesNotMatch(src, /_loadNextAwait/,
+        'the page-through helper must be removed under the windowed grid');
+    // A token still guards overlapping jumps (drag scrubbing) — newest wins.
+    assert.match(src, /_jumpToken\s*!==\s*myToken/);
 });
 
 test('the rail supports pointer drag-scrub + keyboard arrows', () => {

@@ -1219,3 +1219,26 @@ html.fb-immersive #v3-main > .screen.active {
     width: 8.5rem;
     scroll-snap-align: start;
 }
+
+/* — Windowed (virtualized) Songs grid (#636 item 3 stage 2) — */
+/* The grid is absolutely positioned inside #v3-songs-gridsizer, whose height is
+   set to the FULL library (ceil(total/cols)*rowH) so the scrollbar reflects the
+   whole library while only the visible window's cards are in the DOM. The inline
+   `top` (set by renderWindow) offsets the window to the first visible row. */
+.v3-grid-window {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+}
+/* The arrangement-chip row is rendered on EVERY card (even when empty) at a fixed
+   single-line height — uniform card height is what makes the window's
+   absolute-position math exact. Extra chips are clipped rather than wrapping. */
+.v3-card-chips {
+    height: 1.5rem;
+    overflow: hidden;
+    flex-wrap: nowrap;
+}
+/* Skeleton placeholder shown only if a window's fetch hasn't landed; mirrors a
+   real card's vertical structure so it occupies an identical row height. */
+.v3-card-skel { pointer-events: none; }

@@ -40,6 +40,9 @@
     const ARRANGEMENTS = ['Lead', 'Rhythm', 'Bass', 'Combo', 'Vocals'];
     const STEMS = ['guitar', 'bass', 'drums', 'vocals', 'other'];
     const PAGE_SIZE = 24;
+    // Extra rows rendered above/below the viewport so a fast scroll doesn't flash
+    // blank before the next window render lands.
+    const OVERSCAN_ROWS = 2;
     const SCROLL_STATE_KEY = 'v3:songs-scroll-state';
     const btnCtrl = 'bg-gray-800/50 border border-gray-700 rounded-md px-3 py-2 text-sm text-fb-text outline-none focus:border-fb-primary';
 
@@ -51,7 +54,21 @@
         artistCatalog: [], renderedHash: '',
         scrollBound: false,
         songsById: {}, selectMode: false, selected: new Set(),
-        railLetters: null, railJumping: false,
+        railLetters: null, railLettersAreSongCounts: false, railJumping: false,
+        // ── Windowed (virtualized) grid, stage 2 of #636 item 3 ──
+        // state.songs is a SPARSE array indexed by absolute library position
+        // (0..total-1); only the fetched pages are populated and only the visible
+        // window ± overscan is ever in the DOM. The sizer element gives the
+        // scrollbar the full-library geometry. See renderWindow / ensureWindow.
+        songs: [],            // sparse: absoluteIndex → song row
+        pageCursors: {},      // pageIndex → next_cursor (keyset forward fast-path)
+        keysetOk: false,      // did page 0 return a non-null cursor (local + keyset sort)?
+        pageProms: {},        // pageIndex → in-flight fetch promise (de-dupe + await)
+        epoch: 0,             // bumped on every reset; a stale in-flight fetch checks it
+        geom: null,           // { cols, rowH, gap } measured from the live grid
+        winRange: null,       // { start, end } last rendered, to skip redundant renders
+        renderedSelectMode: null, // the selectMode the current window was rendered under
+        gridResizeBound: false,
     };
 
     // ── A–Z jump rail ───────────────────────────────────────────────────────
@@ -112,12 +129,13 @@
 
     function _saveLibraryScrollSnapshot() {
         const main = _getV3MainScroller();
+        // Geometry is now stable (the sizer reserves the full scroll height
+        // regardless of how many cards are actually in the DOM), so the scroll
+        // position alone is enough to restore — no page-depth bookkeeping.
         const snap = {
             hash: _libraryStateHash(),
             scrollTop: main ? main.scrollTop : 0,
             view: state.view,
-            page: state.page,
-            loadedCount: loadedCount(),
         };
         try { sessionStorage.setItem(SCROLL_STATE_KEY, JSON.stringify(snap)); } catch (e) { /* quota / private mode */ }
     }
@@ -145,41 +163,20 @@
         setTimeout(apply, 0);
     }
 
+    // The windowed grid keeps only a slice of cards in the DOM, so "intact" can no
+    // longer mean "has cards" — it means the grid + sizer chrome exist and page 0
+    // is loaded (state.total known, first rows present), so renderWindow() can
+    // repaint the right slice at any scroll position.
     function _gridDomIntact() {
         const grid = document.getElementById('v3-songs-grid');
-        return !!grid && loadedCount() > 0;
+        const sizer = document.getElementById('v3-songs-gridsizer');
+        return !!grid && !!sizer && state.total > 0 && state.songs[0] !== undefined;
     }
 
     function _treeDomIntact() {
         const tree = document.getElementById('v3-songs-tree');
         if (!tree) return false;
         return !!(tree.querySelector('[data-fn]') || tree.querySelector('details'));
-    }
-
-    // Resolve once no grid fetch is in flight. loadGrid early-returns while
-    // state.loading is set, so paging without waiting would silently skip a
-    // page (it bumps state.page but the fetch no-ops). Bounded so a wedged
-    // load can't hang the restore forever.
-    async function _waitForGridIdle(maxMs) {
-        const cap = (maxMs == null ? 8000 : maxMs);
-        let waited = 0;
-        while (state.loading && waited < cap) {
-            await new Promise((r) => setTimeout(r, 16));
-            waited += 16;
-        }
-    }
-
-    async function _ensureGridPagesThrough(targetPage) {
-        const goal = Math.max(0, Number(targetPage) || 0);
-        // The initial page-0 load (or an auto-fill) may still be settling; wait
-        // for the real state.total before deciding how far to page, otherwise a
-        // total of 0 exits the loop immediately and the depth never restores.
-        await _waitForGridIdle();
-        while (state.page < goal && loadedCount() < state.total) {
-            if (state.loading) { await _waitForGridIdle(); continue; }
-            state.page++;
-            await loadGrid(false);
-        }
     }
 
     function queryParams(extra, opts) {
@@ -302,6 +299,11 @@
         if (treeBtn) treeBtn.className = 'px-3 py-2 text-sm ' + (state.view === 'tree' ? 'bg-fb-primary text-white' : 'text-fb-textDim');
         const folderBtn = document.getElementById('v3-songs-folder-btn');
         if (folderBtn) folderBtn.className = 'px-3 py-2 text-sm ' + (state.view === 'folder' ? 'bg-fb-primary text-white' : 'text-fb-textDim');
+        // Select button tracks state.selectMode — the screen-leave teardown clears
+        // select mode, so a cached-DOM re-entry must re-style the button (and the
+        // window re-renders without checkboxes via renderWindow's selectMode check).
+        const selBtn = document.getElementById('v3-songs-select');
+        if (selBtn) selBtn.className = btnCtrl + (state.selectMode ? ' bg-fb-primary text-white' : '');
         updateFilterBadge();
     }
 
@@ -551,6 +553,9 @@
 
         host.innerHTML = meter + shelfHtml;
         host.classList.remove('hidden');
+        // The home block sits above the grid sizer, so its height shifts where the
+        // window maps in scroll space — repaint the window once it's laid out.
+        if (state.view === 'grid') requestWindowRender();
         // Wire shelf cards → play (mirrors playCard's local path; recents are
         // always local-library rows, so no provider sync is needed).
         host.querySelectorAll('.v3-kp-card').forEach((btn) => btn.addEventListener('click', () => {
@@ -653,8 +658,11 @@
         const overlay = overlayActs.length
             ? '<div class="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition pointer-events-none"><div class="flex flex-wrap gap-1 justify-center max-w-[90%] pointer-events-auto">' + overlayActs.map(actBtn).join('') + '</div></div>'
             : '';
+        // Recycled cards re-render from state, so a selected card must paint its
+        // ring on initial markup (toggleSelect only adds it to a live node).
+        const selRing = state.selected.has(key) ? ' ring-2 ring-fb-primary' : '';
         return '<div class="group relative" data-fn="' + esc(key) + '" data-letter="' + esc(songBucket(song)) + '" data-library-song="' + esc(songId(song)) + '" data-library-provider="' + esc(state.provider) + '">' +
-            '<div class="relative aspect-square rounded-lg overflow-hidden bg-fb-card cursor-pointer" data-v3-play>' +
+            '<div class="relative aspect-square rounded-lg overflow-hidden bg-fb-card cursor-pointer' + selRing + '" data-v3-play>' +
             '<img src="' + esc(artUrl(song)) + '" alt="" loading="lazy" decoding="async" class="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105" onerror="this.style.visibility=\'hidden\'">' +
             tuning + checkbox + accuracyBadge(key) + fmtBadge(song) + overlay +
             '<div class="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition">' +
@@ -665,7 +673,10 @@
             '</div></div>' +
             '<div class="mt-1 text-sm text-fb-text truncate" title="' + esc(song.title) + '">' + esc(song.title) + '</div>' +
             '<div class="text-xs text-fb-textDim truncate">' + esc(song.artist) + '</div>' +
-            (arrChips ? '<div class="flex flex-wrap gap-1 mt-1">' + arrChips + '</div>' : '') +
+            // Always emit the chip row (even when empty) at a FIXED single-line
+            // height — uniform card height is what makes the windowed grid's
+            // absolute-position math exact (.v3-card-chips in v3.css).
+            '<div class="v3-card-chips flex gap-1 mt-1">' + arrChips + '</div>' +
             '</div>';
     }
 
@@ -852,76 +863,259 @@
         try { const r = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); return r.ok ? r.json() : null; } catch (e) { return null; }
     }
 
-    // ── Grid (paged + infinite scroll) ─────────────────────────────────────--
-    async function loadGrid(reset) {
-        // A reset requested mid-fetch (provider/sort/filter/search change) must
-        // not be dropped — remember it and re-run once the in-flight load
-        // returns, otherwise the stale response repopulates the grid.
-        if (state.loading) { if (reset) state.pendingReset = true; return; }
-        const grid = document.getElementById('v3-songs-grid');
-        if (!grid) return;
-        // A reset wipes the grid (and any open card menu's DOM); close the menu
-        // first so its document-level click closer doesn't leak.
-        if (reset) { if (_closeCardMenu) _closeCardMenu(); state.page = 0; state.total = 0; grid.innerHTML = ''; }
-        state.loading = true;
-        const data = await jget('/api/library?' + queryParams({ page: state.page, size: PAGE_SIZE }).toString());
-        state.loading = false;
-        if (state.pendingReset) { state.pendingReset = false; return loadGrid(true); }
-        if (!data) return;
-        state.total = data.total || 0;
-        (data.songs || []).forEach((s) => { state.songsById[cardKey(s)] = s; grid.insertAdjacentHTML('beforeend', songCard(s)); });
-        wireCards(grid);
-        const countEl = document.getElementById('v3-songs-count');
-        if (countEl) countEl.textContent = state.total + ' song' + (state.total === 1 ? '' : 's');
-        const loaded = grid.querySelectorAll('[data-fn]').length;
-        const sentinel = document.getElementById('v3-songs-sentinel');
-        if (sentinel) sentinel.style.display = loaded < state.total ? 'block' : 'none';
-        // Auto-fill: if the grid doesn't yet overflow the scroller, keep loading
-        // (so a short first page still becomes scrollable without user action).
-        maybeFill();
-    }
+    // ── Grid (windowed / recycled — #636 item 3 stage 2) ───────────────────--
+    // Only the visible cards (± OVERSCAN_ROWS) live in the DOM; a sizer element
+    // sized to the FULL library gives the scrollbar its geometry. state.songs is
+    // a sparse array indexed by absolute position; ensureWindow() fetches the
+    // pages a window needs (keyset forward fast-path, else OFFSET random-access),
+    // and renderWindow() paints the slice the current scrollTop maps to.
 
+    // Live count of cards actually in the DOM — bounded under windowing, so it's
+    // the bounded-DOM invariant the tests assert (NOT a "loaded so far" signal).
     function loadedCount() { return document.querySelectorAll('#v3-songs-grid [data-fn]').length; }
 
     // The scroll listener lives on the SHARED #v3-main container, so guard every
-    // paging entry point on the Songs screen actually being active — otherwise
-    // scrolling another screen would keep fetching /api/library into the hidden
-    // grid after Songs has been visited once.
+    // render entry point on the Songs screen actually being active — otherwise
+    // scrolling another screen would keep rendering into the hidden grid after
+    // Songs has been visited once.
     function songsActive() { const el = document.getElementById('v3-songs'); return !!el && el.classList.contains('active'); }
 
-    function loadNext() {
-        if (state.loading || state.view !== 'grid' || !songsActive()) return;
-        if (loadedCount() < state.total) { state.page++; loadGrid(false); }
+    function _gridEl() { return document.getElementById('v3-songs-grid'); }
+    function _sizerEl() { return document.getElementById('v3-songs-gridsizer'); }
+
+    // Measure columns + row pitch from the LIVE grid: cols from the computed
+    // grid-template-columns (tracks resolve to explicit pixel sizes), rowH from a
+    // rendered card's box + the grid row-gap. Cards are uniform height (aspect-
+    // square art + truncated text + the fixed-height .v3-card-chips row), so one
+    // measured card sizes every row. Falls back to a coarse estimate until the
+    // first card exists, then re-measures.
+    function measureGeom() {
+        const grid = _gridEl();
+        if (!grid) return state.geom || { cols: 2, rowH: 240, gap: 16 };
+        const cs = getComputedStyle(grid);
+        const tracks = (cs.gridTemplateColumns || '').trim();
+        const cols = (tracks && tracks !== 'none')
+            ? Math.max(1, tracks.split(/\s+/).length)
+            : (state.geom ? state.geom.cols : 2);
+        const gap = parseFloat(cs.rowGap) || 0;
+        let rowH = state.geom && state.geom.rowH;
+        const card = grid.querySelector('[data-fn]') || grid.querySelector('.v3-card-skel');
+        if (card) { const h = card.getBoundingClientRect().height; if (h > 0) rowH = h + gap; }
+        if (!rowH || rowH <= 0) rowH = 240 + gap;   // estimate until a card is measured
+        state.geom = { cols, rowH, gap };
+        return state.geom;
     }
 
-    function maybeFill() {
-        const main = document.getElementById('v3-main');
-        if (!main || state.view !== 'grid' || state.loading || !songsActive()) return;
-        // Not tall enough to scroll yet, and more remain → pull the next page.
-        if (main.scrollHeight <= main.clientHeight + 80 && loadedCount() < state.total) loadNext();
+    // The sizer's top edge measured in the scroller's content coordinate space
+    // (accounts for the practice-home block above it, sticky toolbar, etc.).
+    function _sizerTopInScroller(main, sizer) {
+        return sizer.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
     }
 
-    // Robust infinite scroll: a scroll listener on the real scroll container
-    // (#v3-main), bound once. Avoids the IntersectionObserver "already in view
-    // at observe-time" race that stuck the grid on page 0.
+    function _windowHasHoles(start, end) {
+        for (let i = start; i < end; i++) if (state.songs[i] === undefined) return true;
+        return false;
+    }
+
+    // A placeholder card with the SAME vertical structure (and therefore height)
+    // as a real card, shown only if a window's fetch hasn't landed yet. No
+    // [data-fn] → wireCards / repaintAccuracy skip it.
+    function _skeletonCard() {
+        return '<div class="v3-card-skel" aria-hidden="true">' +
+            '<div class="relative aspect-square rounded-lg overflow-hidden bg-fb-card animate-pulse"></div>' +
+            '<div class="mt-1 text-sm text-transparent truncate">·</div>' +
+            '<div class="text-xs text-transparent truncate">·</div>' +
+            '<div class="v3-card-chips flex gap-1 mt-1"></div>' +
+            '</div>';
+    }
+
+    function _renderCardsRange(start, end) {
+        let html = '';
+        for (let i = start; i < end; i++) {
+            const s = state.songs[i];
+            html += s ? songCard(s) : _skeletonCard();
+        }
+        return html;
+    }
+
+    // Fetch a single OFFSET page into the sparse store. Uses the stage-1 keyset
+    // cursor when the previous page is already loaded (cheap forward scroll);
+    // otherwise OFFSET page= for random access (jumps, restore, non-keyset
+    // providers). Records the returned next_cursor so a later contiguous page can
+    // chain off it. Returns a promise that callers AWAIT (so ensureWindow never
+    // returns with a hole still in flight); concurrent requests for the same page
+    // share the one promise. An `epoch` captured at launch guards against a reset
+    // (provider/sort/filter change) landing mid-fetch and writing stale rows into
+    // the new dataset.
+    function _loadPage(p) {
+        if (p < 0 || state.songs[p * PAGE_SIZE] !== undefined) return Promise.resolve();
+        if (state.pageProms[p]) return state.pageProms[p];
+        const epoch = state.epoch;
+        const prom = (async () => {
+            const extra = { size: PAGE_SIZE };
+            const prevCursor = state.keysetOk ? state.pageCursors[p - 1] : null;
+            if (prevCursor) extra.after = prevCursor; else extra.page = p;
+            const data = await jget('/api/library?' + queryParams(extra).toString());
+            if (state.epoch !== epoch || !data) return;   // reset mid-fetch → discard stale
+            state.total = data.total || 0;
+            if (typeof data.next_cursor !== 'undefined') {
+                state.pageCursors[p] = data.next_cursor;
+                if (p === 0) state.keysetOk = !!data.next_cursor;
+            }
+            const base = p * PAGE_SIZE;
+            (data.songs || []).forEach((s, i) => {
+                state.songs[base + i] = s;
+                state.songsById[cardKey(s)] = s;
+            });
+        })();
+        state.pageProms[p] = prom;
+        prom.finally(() => { if (state.pageProms[p] === prom) delete state.pageProms[p]; });
+        return prom;
+    }
+
+    // Ensure every absolute index in [start, end) is loaded (fetch — or await an
+    // in-flight fetch of — the covering pages). Pages resolve in order so the
+    // keyset fast-path can chain off the previous page's cursor.
+    async function ensureWindow(start, end) {
+        if (end <= start) return;
+        const p0 = Math.floor(start / PAGE_SIZE);
+        const p1 = Math.floor((end - 1) / PAGE_SIZE);
+        for (let p = p0; p <= p1; p++) {
+            if (state.songs[p * PAGE_SIZE] === undefined) await _loadPage(p);
+        }
+    }
+
+    let _winRAF = 0;
+    function requestWindowRender() {
+        if (_winRAF) return;
+        _winRAF = requestAnimationFrame(() => { _winRAF = 0; renderWindow(); });
+    }
+
+    // Paint the slice of cards the current scrollTop maps to. Sizes the sizer to
+    // the full library, computes the visible row range (± overscan), fetches any
+    // missing pages, then swaps the grid's innerHTML to just that slice. A token
+    // guards against an out-of-order fetch repainting a window the user scrolled
+    // past.
+    let _winToken = 0;
+    async function renderWindow() {
+        if (state.view !== 'grid' || !songsActive()) return;
+        const grid = _gridEl(), sizer = _sizerEl(), main = document.getElementById('v3-main');
+        if (!grid || !sizer || !main) return;
+        const { cols, rowH } = measureGeom();
+        const total = state.total || 0;
+        const rows = Math.ceil(total / Math.max(1, cols));
+        sizer.style.height = (rows * rowH) + 'px';
+        if (total === 0) {
+            grid.innerHTML = ''; grid.style.top = '0px';
+            state.winRange = { start: 0, end: 0 };
+            return;
+        }
+        const sizerTop = _sizerTopInScroller(main, sizer);
+        const viewTop = Math.max(0, main.scrollTop - sizerTop);
+        const viewBottom = viewTop + main.clientHeight;
+        const firstRow = Math.max(0, Math.floor(viewTop / rowH) - OVERSCAN_ROWS);
+        const lastRow = Math.min(rows - 1, Math.ceil(viewBottom / rowH) + OVERSCAN_ROWS);
+        const start = firstRow * cols;
+        const end = Math.min(total, (lastRow + 1) * cols);
+        // Re-render when the range changed, a card is missing, OR select mode
+        // toggled since the window was last painted (so checkboxes/rings on cached
+        // cards track state — e.g. after leaving Songs in select mode and back).
+        const same = state.winRange && state.winRange.start === start && state.winRange.end === end
+            && state.renderedSelectMode === state.selectMode;
+        if (same && !_windowHasHoles(start, end)) return;
+        const myToken = ++_winToken;
+        if (_windowHasHoles(start, end)) {
+            await ensureWindow(start, end);
+            if (_winToken !== myToken || state.view !== 'grid') return;   // superseded
+        }
+        if (_closeCardMenu) _closeCardMenu();   // its DOM is about to be replaced
+        grid.style.top = (firstRow * rowH) + 'px';
+        grid.innerHTML = _renderCardsRange(start, end);
+        wireCards(grid);
+        state.winRange = { start, end };
+        state.renderedSelectMode = state.selectMode;
+        if (sm && typeof sm.emit === 'function') {
+            try { sm.emit('v3:library-window-rendered', { start, end, total }); } catch (e) { /* */ }
+        }
+    }
+
+    // Reset/initial load of the grid. Clears the sparse store, fetches page 0
+    // (which establishes state.total + whether the keyset fast-path is available),
+    // then renders the window twice — the first render lays a real card so the
+    // second can measure the true row height and settle the window size.
+    async function loadGrid(reset) {
+        // A reset requested mid-fetch (provider/sort/filter/search change) must
+        // not be dropped — remember it and re-run once the in-flight load returns.
+        if (state.loading) { if (reset) state.pendingReset = true; return; }
+        const grid = _gridEl();
+        if (!grid) return;
+        if (reset) {
+            if (_closeCardMenu) _closeCardMenu();
+            state.epoch++;            // invalidate any in-flight page fetch from the old query
+            state.songs = [];
+            state.pageCursors = {};
+            state.pageProms = {};
+            state.keysetOk = false;
+            state.winRange = null;
+            state.renderedSelectMode = null;
+            state.geom = null;
+            state.total = 0;
+            grid.innerHTML = '';
+            grid.style.top = '0px';
+            const sizer = _sizerEl();
+            if (sizer) sizer.style.height = '0px';
+        }
+        state.loading = true;
+        await _loadPage(0);
+        state.loading = false;
+        if (state.pendingReset) { state.pendingReset = false; return loadGrid(true); }
+        const countEl = document.getElementById('v3-songs-count');
+        if (countEl) countEl.textContent = state.total + ' song' + (state.total === 1 ? '' : 's');
+        // The sentinel no longer drives loading (the sizer reserves full height);
+        // keep the node for coexistence but it has no visible role.
+        const sentinel = document.getElementById('v3-songs-sentinel');
+        if (sentinel) sentinel.style.display = 'none';
+        await renderWindow();   // first paint (rowH from estimate)
+        await renderWindow();   // re-measure rowH from a real card, settle the window
+    }
+
+    // A scroll on #v3-main re-renders the window (rAF-coalesced). No more
+    // near-bottom paging trigger — the visible range alone decides what's shown.
     function bindScroll() {
         const main = document.getElementById('v3-main');
         if (!main || state.scrollBound) return;
         state.scrollBound = true;
         main.addEventListener('scroll', () => {
-            if (state.view !== 'grid' || state.loading) return;
-            if (main.scrollTop + main.clientHeight >= main.scrollHeight - 600) loadNext();
+            if (state.view !== 'grid') return;
+            requestWindowRender();
         }, { passive: true });
     }
 
+    // Re-measure + re-render when the scroller's WIDTH changes (column count and
+    // the aspect-square art height both track width). Height-only changes just
+    // need a re-render to widen/narrow the visible window.
+    function bindGridResize() {
+        if (state.gridResizeBound) return;
+        const main = document.getElementById('v3-main');
+        if (!main || typeof ResizeObserver !== 'function') return;
+        state.gridResizeBound = true;
+        let lastW = main.clientWidth;
+        new ResizeObserver(() => {
+            if (state.view !== 'grid') return;
+            const w = main.clientWidth;
+            if (w !== lastW) { lastW = w; state.geom = null; }   // force re-measure
+            requestWindowRender();
+        }).observe(main);
+    }
+
     // ── A–Z jump rail interaction ─────────────────────────────────────────────
-    // The rail jumps within the contiguous, server-paged grid. Because the grid
-    // is forward-only infinite scroll (no virtualization), reaching a letter that
-    // isn't loaded yet means paging forward until its first card exists, then
-    // scrolling to it — the same rows the user would have scrolled past. The rail
-    // only offers letters the server reports as present for the active sort+filter
-    // (so a tap always terminates at a real card). A keyset-seek + virtualized
-    // window is the scaling follow-up for very large libraries.
+    // With the windowed grid the rail seeks DIRECTLY: sort_letters gives the
+    // per-bucket song counts, so the first card of a letter is at the cumulative
+    // count of the buckets before it — convert that index to a scrollTop and let
+    // the scroll handler render+fetch the destination window (O(1), no page-
+    // through). The rail only offers letters the server reports present for the
+    // active sort+filter, so a tap always lands on a real card. (A legacy provider
+    // lacking sort_letters falls back to a bounded forward scan.)
     function railEl() { return document.getElementById('v3-songs-azrail'); }
     function railBubbleEl() { return document.getElementById('v3-songs-azbubble'); }
     function railVisible() { return state.view === 'grid' && !!railSortColumn(); }
@@ -948,11 +1142,18 @@
         // party provider that predates `sort_letters` returns none, in which
         // case a title sort would advertise wrong letters — hide the rail then.
         let letters = stats && stats.sort_letters;
+        // sort_letters counts SONGS per bucket of the active sort column — exactly
+        // the cumulative the windowed jump needs to seek to a row index. The
+        // `letters` fallback is a distinct-ARTIST count (legacy provider without
+        // sort_letters, artist sort only), which can't drive a precise seek — flag
+        // it so jumpToLetter does a bounded scan instead of trusting the math.
+        const songCounts = !!(stats && stats.sort_letters);
         if (!letters) {
             if (col === 'artist') letters = (stats && stats.letters) || {};
             else { rail.classList.add('hidden'); railBubbleEl()?.classList.add('hidden'); return; }
         }
         state.railLetters = letters;
+        state.railLettersAreSongCounts = songCounts;
         // No present letters (empty or fully-filtered grid) → nothing to jump
         // to; hide the rail instead of rendering a column of disabled buttons.
         if (!Object.keys(letters).length) { rail.classList.add('hidden'); railBubbleEl()?.classList.add('hidden'); return; }
@@ -985,44 +1186,61 @@
     function _showBubble(letter) { const b = railBubbleEl(); if (b) { b.textContent = letter; b.classList.remove('hidden'); } }
     function _hideBubble() { railBubbleEl()?.classList.add('hidden'); }
 
-    async function _loadNextAwait() {
-        if (state.loading) { await _waitForGridIdle(); return loadedCount() < state.total; }
-        if (loadedCount() >= state.total) return false;
-        state.page++;
-        await loadGrid(false);
-        return loadedCount() < state.total;
+    // The absolute index of the first card in a bucket, from the sort_letters
+    // song-counts: sum the counts of every bucket ordered before it. O(1) — no
+    // page-through. Returns null when we don't have true song-counts (the legacy
+    // distinct-artist fallback), so the caller can scan instead.
+    function _letterStartIndex(letter) {
+        if (!state.railLettersAreSongCounts) return null;
+        const letters = state.railLetters || {};
+        const desc = state.sort.endsWith('-desc');
+        const order = desc ? RAIL_BUCKETS.slice().reverse() : RAIL_BUCKETS;
+        let idx = 0;
+        for (const b of order) { if (b === letter) return idx; idx += (letters[b] || 0); }
+        return idx;
+    }
+
+    // Fallback for providers without sort_letters: walk the sparse store forward
+    // (fetching pages as needed, bounded by total) until a card's bucket matches.
+    async function _scanForLetter(letter, token) {
+        const total = state.total || 0;
+        for (let i = 0; i < total; i++) {
+            if (state.songs[i] === undefined) {
+                await ensureWindow(i, Math.min(total, i + PAGE_SIZE));
+                if (_jumpToken !== token) return null;
+            }
+            const s = state.songs[i];
+            if (s && songBucket(s) === letter) return i;
+        }
+        return null;
     }
 
     let _jumpToken = 0;
     async function jumpToLetter(letter) {
-        const grid = document.getElementById('v3-songs-grid');
-        if (!grid || state.view !== 'grid' || !letter) return;
+        const grid = _gridEl(), sizer = _sizerEl(), main = document.getElementById('v3-main');
+        if (!grid || !sizer || !main || state.view !== 'grid' || !letter) return;
         _setRailActive(letter);
-        const sel = '[data-letter="' + ((window.CSS && CSS.escape) ? CSS.escape(letter) : letter) + '"]';
         const myToken = ++_jumpToken;   // a newer jump supersedes this one
-        // Page forward until the bucket's first card is loaded (or list
-        // exhausted). The guard is the page count the current total implies
-        // (+2 slack) rather than a fixed cap, so even a very large library
-        // stays reachable while a runaway loop is still bounded.
-        let guard = 0;
-        const maxPages = Math.ceil((state.total || 0) / PAGE_SIZE) + 2;
-        while (!grid.querySelector(sel) && loadedCount() < state.total
-               && _jumpToken === myToken && guard++ < maxPages) {
-            const more = await _loadNextAwait();
-            if (!more) break;
+        const { cols, rowH } = measureGeom();
+        let targetIndex = _letterStartIndex(letter);
+        if (targetIndex == null) {
+            targetIndex = await _scanForLetter(letter, myToken);
+            if (_jumpToken !== myToken) return;
+            if (targetIndex == null) return;   // letter not present
         }
-        if (_jumpToken !== myToken) return;
-        const target = grid.querySelector(sel);
-        if (!target) return;
-        const main = document.getElementById('v3-main');
+        const total = state.total || 0;
+        if (targetIndex >= total) targetIndex = Math.max(0, total - 1);
+        const targetRow = Math.floor(targetIndex / Math.max(1, cols));
+        // Pre-fetch the destination window so cards are present when the smooth
+        // scroll arrives (avoids a flash of skeletons at the landing row).
+        await ensureWindow(targetIndex, Math.min(total, targetIndex + cols * (OVERSCAN_ROWS * 2 + 4)));
+        if (_jumpToken !== myToken || state.view !== 'grid') return;
+        const sizerTop = _sizerTopInScroller(main, sizer);
         const toolbar = document.getElementById('v3-songs-toolbar');
         const pad = (toolbar ? toolbar.offsetHeight : 0) + 12; // clear the sticky toolbar
-        if (main) {
-            const top = target.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop - pad;
-            main.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
-        } else {
-            target.scrollIntoView({ block: 'start', behavior: 'smooth' });
-        }
+        const top = Math.max(0, sizerTop + targetRow * rowH - pad);
+        main.scrollTo({ top, behavior: 'smooth' });
+        requestWindowRender();
     }
 
     function bindRailOnce() {
@@ -1279,7 +1497,9 @@
         // Keep a handle on the load so callers (notably the scroll restore on
         // screen re-entry) can await page-0 actually landing before paging
         // deeper. The visibility/scroll resets below stay synchronous.
-        document.getElementById('v3-songs-grid')?.classList.toggle('hidden', state.view !== 'grid');
+        // Hide the SIZER (not the inner grid) for non-grid views, so its reserved
+        // scroll height collapses and the tree/folder content sits at the top.
+        document.getElementById('v3-songs-gridsizer')?.classList.toggle('hidden', state.view !== 'grid');
         document.getElementById('v3-songs-tree')?.classList.toggle('hidden', state.view !== 'tree');
         document.getElementById('lib-folder-tree')?.classList.toggle('hidden', state.view !== 'folder');
         // Refresh the A–Z jump rail (shows only for the grid + alphabetical
@@ -1354,7 +1574,12 @@
             // only on the grid view when not searching/filtering/selecting
             // (renderLibraryHome + updateLibraryHome). Empty/absent → collapses.
             '<div id="v3-lib-home" class="hidden mb-5"></div>' +
-            '<div id="v3-songs-grid" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4"></div>' +
+            // Windowed grid: the sizer reserves the full-library scroll height;
+            // #v3-songs-grid is absolutely positioned inside it and holds only the
+            // visible window's cards (.v3-grid-window in v3.css).
+            '<div id="v3-songs-gridsizer" class="relative">' +
+            '<div id="v3-songs-grid" class="v3-grid-window grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4"></div>' +
+            '</div>' +
             '<div id="v3-songs-tree" class="hidden"></div>' +
             '<div id="lib-folder-controls" style="display:none"></div>' +
             '<div id="lib-folder-tree" class="space-y-1 hidden"></div>' +
@@ -1444,6 +1669,7 @@
         // before it tries to page deeper.
         await setView(state.view);
         bindScroll();
+        bindGridResize();
         positionToolbar();
         bindToolbarReflow();
         updateFilterBadge();
@@ -1468,18 +1694,20 @@
 
         if (snap && hashMatch && domReady && chromeOk && viewOk) {
             if (state.view === 'grid' && _gridDomIntact()) {
-                if ((snap.page || 0) > state.page || (snap.loadedCount || 0) > loadedCount()) {
-                    await _ensureGridPagesThrough(snap.page || 0);
-                }
-                document.getElementById('v3-songs-grid')?.classList.toggle('hidden', false);
+                // Geometry is stable (the sizer still holds the full height from
+                // the prior session), so restore is just: restore scrollTop, then
+                // repaint the window that maps to it. No more page-through.
+                document.getElementById('v3-songs-gridsizer')?.classList.toggle('hidden', false);
                 document.getElementById('v3-songs-tree')?.classList.toggle('hidden', true);
                 syncChromeFromState();
+                updateLibraryHome();   // select-mode clear on leave re-shows the home block
                 _applyMainScrollTop(snap.scrollTop || 0);
+                requestWindowRender();
                 _clearLibraryScrollSnapshot();
                 return;
             }
             if (state.view === 'tree' && _treeDomIntact()) {
-                document.getElementById('v3-songs-grid')?.classList.toggle('hidden', true);
+                document.getElementById('v3-songs-gridsizer')?.classList.toggle('hidden', true);
                 document.getElementById('v3-songs-tree')?.classList.toggle('hidden', false);
                 syncChromeFromState();
                 _applyMainScrollTop(snap.scrollTop || 0);
@@ -1496,10 +1724,14 @@
             // instead of silently showing the old results. Unchanged state keeps
             // the scroll-preserving no-op.
             if (state.renderedHash !== _libraryStateHash()) { reload(); return; }
-            document.getElementById('v3-songs-grid')?.classList.toggle('hidden', state.view !== 'grid');
+            document.getElementById('v3-songs-gridsizer')?.classList.toggle('hidden', state.view !== 'grid');
             document.getElementById('v3-songs-tree')?.classList.toggle('hidden', state.view !== 'tree');
             document.getElementById('lib-folder-tree')?.classList.toggle('hidden', state.view !== 'folder');
             { const _fc = document.getElementById('lib-folder-controls'); if (_fc) _fc.style.display = state.view === 'folder' ? 'flex' : 'none'; }
+            updateLibraryHome();   // select-mode clear on leave re-shows the home block
+            // Re-render in case the viewport resized while we were away (column
+            // count / row height may have changed) or select mode was cleared.
+            if (state.view === 'grid') requestWindowRender();
             return;
         }
 
@@ -1507,8 +1739,10 @@
         if (snap && !hashMatch) _clearLibraryScrollSnapshot();
         await render();
         if (snapToRestore && snapToRestore.hash === _libraryStateHash()) {
-            if (state.view === 'grid') await _ensureGridPagesThrough(snapToRestore.page || 0);
+            // render() built + sized the sizer at scrollTop 0; move to the saved
+            // position and let the scroll handler repaint that window.
             _applyMainScrollTop(snapToRestore.scrollTop || 0);
+            if (state.view === 'grid') requestWindowRender();
         }
         _clearLibraryScrollSnapshot();
     }
@@ -1554,6 +1788,11 @@
         getSort: () => state.sort,
         getArtist: () => state.artist,
         getAlbum: () => state.album,
+        // The grid is windowed: only a slice of cards is in the DOM at any time.
+        // A plugin that decorates cards should read THIS (not a global
+        // querySelectorAll that assumes every card is present) and re-run on each
+        // `v3:library-window-rendered` event rather than once at load.
+        visibleCards: () => document.querySelectorAll('#v3-songs-grid [data-fn]'),
         filterParams: () => {
             const f = state.filters;
             const p = new URLSearchParams();

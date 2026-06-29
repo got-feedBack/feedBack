@@ -36,13 +36,15 @@ function makeStore() {
     };
 }
 
-function saveSnapshot(storage, state, scrollTop, page, loadedCount) {
+// Mirror of static/v3/songs.js _saveLibraryScrollSnapshot. Under the windowed
+// grid (#636 item 3 stage 2) geometry is stable, so the snapshot is just
+// {hash, scrollTop, view} — no page/loadedCount depth bookkeeping (restore sets
+// scrollTop and re-renders the window that maps to it).
+function saveSnapshot(storage, state, scrollTop) {
     const snap = {
         hash: buildLibraryStateHash(state),
         scrollTop,
         view: state.view,
-        page,
-        loadedCount,
     };
     storage.setItem(SCROLL_STATE_KEY, JSON.stringify(snap));
 }
@@ -88,19 +90,21 @@ test('buildLibraryStateHash is stable for equivalent filter arrays', () => {
     assert.strictEqual(buildLibraryStateHash(s1), buildLibraryStateHash(s2));
 });
 
-test('snapshot stores scrollTop and page', () => {
+test('snapshot stores scrollTop + view + hash (geometry-stable restore)', () => {
     const storage = makeStore();
-    saveSnapshot(storage, baseState, 1840, 3, 96);
+    saveSnapshot(storage, baseState, 1840);
     const snap = readSnapshot(storage);
     assert.strictEqual(snap.scrollTop, 1840);
-    assert.strictEqual(snap.page, 3);
-    assert.strictEqual(snap.loadedCount, 96);
+    assert.strictEqual(snap.view, 'grid');
     assert.strictEqual(snap.hash, buildLibraryStateHash(baseState));
+    // Page-depth bookkeeping is gone — the windowed grid restores from scrollTop.
+    assert.strictEqual(snap.page, undefined);
+    assert.strictEqual(snap.loadedCount, undefined);
 });
 
 test('stale snapshot is detected when filters change', () => {
     const storage = makeStore();
-    saveSnapshot(storage, baseState, 500, 1, 48);
+    saveSnapshot(storage, baseState, 500);
     const snap = readSnapshot(storage);
     const changed = buildLibraryStateHash({ ...baseState, q: 'beatles' });
     assert.notStrictEqual(snap.hash, changed);
