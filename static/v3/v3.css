@@ -340,8 +340,9 @@ input, textarea, select,
 /* — Up Next pill (top-right, persistent) — */
 #player-hud .v3-upnext {
     display: flex;
-    align-items: center;
-    gap: .5rem;
+    flex-direction: column;
+    align-items: stretch;
+    gap: .35rem;
     padding: .45rem .9rem;
     border-radius: .75rem;
     background: rgba(15, 23, 42, .7);
@@ -351,6 +352,26 @@ input, textarea, select,
     pointer-events: auto;
 }
 #player-hud .v3-upnext.hidden { display: none; }
+/* Text row keeps the original inline layout untouched. */
+#player-hud .v3-upnext .v3-upnext-row {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+}
+/* Progress bar under the text — fills as the current section elapses. */
+#player-hud .v3-upnext .v3-upnext-bar {
+    height: 4px;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, .25);
+    overflow: hidden;
+}
+#player-hud .v3-upnext .v3-upnext-bar-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, #22d3ee, #a855f7, #f472b6);
+    transition: width .12s linear;
+}
 
 /* — Live performance HUD (top-right, read-only) — */
 .v3-live-performance-hud {

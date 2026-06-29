@@ -187,6 +187,19 @@
         const nm = $('v3-upnext-name'), eta = $('v3-upnext-eta');
         if (nm) nm.textContent = next.name || '—';
         if (eta) eta.textContent = 'in ' + dt.toFixed(1) + 's';
+        // Progress bar: fraction of the current section elapsed toward `next`.
+        // Previous boundary is the last section at/before now (else song start).
+        const fill = $('v3-upnext-bar-fill');
+        if (fill) {
+            let prevT = 0;
+            for (let i = 0; i < secs.length; i++) {
+                if (typeof secs[i].time === 'number' && secs[i].time <= t) prevT = secs[i].time;
+                else break;
+            }
+            const span = next.time - prevT;
+            const prog = span > 0 ? Math.max(0, Math.min(1, (t - prevT) / span)) : 0;
+            fill.style.width = (prog * 100).toFixed(1) + '%';
+        }
         pill.classList.remove('hidden');
     }
 
