@@ -26,7 +26,10 @@ function loadTuningHelpers() {
 
 const feedBackHelpers = loadTuningHelpers();
 
-function createTunerSandbox() {
+function createTunerSandbox(opts) {
+    // Auto-open is opt-in (default off in prod). The sandbox defaults it ON so the
+    // behaviour tests exercise the feature; pass { autoOpen: false } to gate it off.
+    const autoOpen = !opts || opts.autoOpen !== false;
     const enableCalls = [];
     let playerActive = true;
     let songInfo = null;
@@ -44,6 +47,7 @@ function createTunerSandbox() {
                         showFloatingButton: true,
                         visualizationMode: 'default',
                         audioInputMode: 'auto',
+                        autoOpenOnTuningChange: autoOpen,
                         lastInstrument: 'guitar-6',
                         lastTuning: 'Standard',
                         freeTune: false,
@@ -155,9 +159,9 @@ function createTunerSandbox() {
     vm.runInContext(fs.readFileSync(TUNER_SCREEN_JS, 'utf8'), sandbox);
 
     const realEnable = sandbox.window.tuner.enable.bind(sandbox.window.tuner);
-    sandbox.window.tuner.enable = async () => {
-        enableCalls.push(1);
-        return realEnable();
+    sandbox.window.tuner.enable = async (enableOpts) => {
+        enableCalls.push(enableOpts || {});
+        return realEnable(enableOpts);
     };
 
     return sandbox;
@@ -313,6 +317,37 @@ test('song:loading clears dismiss state for next load', async () => {
     sandbox.window._tunerAutoOpen.onSongLoading();
     await ready(sandbox, DROP_D);
     assert.equal(sandbox.__enableCalls.length, 2);
+});
+
+test('auto-open is gated off when the setting is disabled (opt-in)', async () => {
+    const sandbox = createTunerSandbox({ autoOpen: false });
+    sandbox.window._tunerAutoOpen.resetState();
+    await ready(sandbox, CUSTOM_GUITAR);
+    await ready(sandbox, E_STANDARD);   // a real tuning change, but the setting is off
+    assert.equal(sandbox.__enableCalls.length, 0);
+});
+
+test('auto-open enables in persist mode (passes { auto: true })', async () => {
+    const sandbox = createTunerSandbox();
+    sandbox.window._tunerAutoOpen.resetState();
+    await ready(sandbox, CUSTOM_GUITAR);
+    await ready(sandbox, E_STANDARD);
+    assert.equal(sandbox.__enableCalls.length, 1);
+    assert.equal(sandbox.__enableCalls[0].auto, true);
+});
+
+test('persist: an auto-opened tuner is not torn down by autoplay / stray clicks', () => {
+    const screenSrc = fs.readFileSync(TUNER_SCREEN_JS, 'utf8');
+    const uiSrc = fs.readFileSync(
+        path.join(__dirname, '..', '..', 'plugins', 'tuner', 'utils', 'ui.js'), 'utf8');
+    // The gate is opt-in on the server config flag.
+    assert.match(screenSrc, /autoOpenOnTuningChange/);
+    // enable() records whether this was an auto-open …
+    assert.match(screenSrc, /_state\.autoOpened\s*=\s*auto/);
+    // … the outside-click dismiss is armed only for a manual open …
+    assert.match(screenSrc, /if \(!auto\)[\s\S]*?addEventListener\('click'/);
+    // … and the autoplay song:play closer ignores an auto-opened tuner (the flash fix).
+    assert.match(uiSrc, /state\.enabled && !state\.autoOpened/);
 });
 
 test('screen.js registers song:loading and song:ready auto-open listeners at boot', () => {

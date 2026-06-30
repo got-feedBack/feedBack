@@ -10,6 +10,17 @@
         </label>
     </div>
 
+    <div class="flex items-center justify-between bg-dark-900/50 p-3 rounded-xl border border-gray-800/50">
+        <div>
+            <h3 class="text-sm font-medium text-gray-200">Auto-open on tuning change</h3>
+            <p class="text-[11px] text-gray-500">When a song (or arrangement) needs a different tuning, pop the tuner open automatically. It stays open until you Skip or close it.</p>
+        </div>
+        <label class="relative inline-flex items-center cursor-pointer">
+            <input type="checkbox" id="tuner-auto-open" class="sr-only peer" onchange="window._tunerToggleAutoOpen(this.checked)">
+            <div class="w-9 h-5 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-accent"></div>
+        </label>
+    </div>
+
     <script>
     if (window.feedBackDesktop && window.feedBackDesktop.isDesktop) {
         document.currentScript.insertAdjacentHTML('beforebegin', `
@@ -107,6 +118,9 @@
                     const browserAudioToggle = document.getElementById('tuner-force-browser-audio');
                     if (browserAudioToggle) browserAudioToggle.checked = config.audioInputMode === 'browser';
 
+                    const autoOpenToggle = document.getElementById('tuner-auto-open');
+                    if (autoOpenToggle) autoOpenToggle.checked = config.autoOpenOnTuningChange === true;
+
                     render();
                 } catch (e) { console.error('Tuner settings: load failed', e); }
             }
@@ -118,6 +132,11 @@
 
             window._tunerToggleBrowserAudio = (forceBrowser) => {
                 config.audioInputMode = forceBrowser ? 'browser' : 'auto';
+                save();
+            };
+
+            window._tunerToggleAutoOpen = (enabled) => {
+                config.autoOpenOnTuningChange = enabled;
                 save();
             };
 

@@ -142,6 +142,12 @@
     async function _maybeAutoOpenOnTuningChange() {
         if (!document.getElementById('player')?.classList.contains('active')) return;
 
+        // Opt-in (default off): only auto-open when the user enabled it in the
+        // tuner settings. Ensure config is loaded so the first song:ready after
+        // boot still reads the real flag; fail closed if it can't load.
+        if (!_state._serverConfig) { try { await loadConfig(); } catch (_) { /* */ } }
+        if (!_state._serverConfig || !_state._serverConfig.autoOpenOnTuningChange) return;
+
         const songInfo = window.highway?.getSongInfo?.() || window.feedBack?.currentSong;
         if (!songInfo) return;
 
@@ -167,7 +173,7 @@
 
         _lastAutoOpenSessionKey = sessionKey;
         try {
-            await window.tuner.enable();
+            await window.tuner.enable({ auto: true });
             if (myGen !== _autoOpenGeneration) return;
         } catch (e) {
             console.warn('Tuner: auto-open failed:', e && e.message ? e.message : e);
@@ -341,8 +347,15 @@
         }
     }
 
-    async function enable() {
+    async function enable(opts) {
         if (_state.enabled) return;
+        // An AUTO-open (the "this song needs a different tuning" nudge) must
+        // PERSIST: it is NOT dismissed by the autoplay song:play that follows
+        // song entry, a stray click, or a same-screen re-emit — only by the
+        // Skip/× buttons or leaving the song. A manual open keeps the classic
+        // click-away / play-to-close behaviour.
+        const auto = !!(opts && opts.auto);
+        _state.autoOpened = auto;
         await _loadScript('/api/plugins/tuner/utils/tuning-utils.js');
         await _loadScript('/api/plugins/tuner/utils/audio.js');
         await _loadScript('/api/plugins/tuner/utils/ui.js');
@@ -371,15 +384,27 @@
         _state.uiContainer.classList.add('flex');
         _tunerUIApi.positionPanel();
         _tunerUIApi.updateFreeTuneUI();
+        // "Skip" is the auto-open nudge's explicit dismiss; hidden for a manual
+        // open (the × / click-away already close those).
+        if (_state.skipBtn) _state.skipBtn.classList.toggle('hidden', !auto);
 
-        // Close when clicking outside the panel. Deferred so the badge's
-        // opening click doesn't bubble up to the document and fire immediately.
-        if (_outsideClickClose) document.removeEventListener('click', _outsideClickClose);
-        _outsideClickClose = () => { if (_state.enabled) disable(); };
-        setTimeout(() => { if (_outsideClickClose) document.addEventListener('click', _outsideClickClose, { once: true }); }, 0);
+        // Close when clicking outside the panel. Deferred so the badge's opening
+        // click doesn't bubble up to the document and fire immediately. Skipped
+        // for an auto-open: the user never clicked to open it, so their first
+        // unrelated click must not dismiss it (it persists until Skip/×/leave).
+        if (!auto) {
+            if (_outsideClickClose) document.removeEventListener('click', _outsideClickClose);
+            _outsideClickClose = () => { if (_state.enabled) disable(); };
+            setTimeout(() => { if (_outsideClickClose) document.addEventListener('click', _outsideClickClose, { once: true }); }, 0);
+        }
 
         if (window.feedBack && !_onScreenChanged) {
-            _onScreenChanged = () => { disable(); };
+            // Auto-opened: close only when we actually LEAVE the song — a player
+            // re-emit while staying put must not tear down the nudge. Manual:
+            // unchanged (any screen change closes it).
+            _onScreenChanged = () => {
+                if (!_state.autoOpened || !document.getElementById('player')?.classList.contains('active')) disable();
+            };
             _onSongReady = () => {
                 _tunerUIApi.renderTuningOptions();
                 if (_state.selectedTuningName === '_current') _syncCurrentTuning();
@@ -409,6 +434,7 @@
         const wasEnabled = _state.enabled;
         const onPlayer = document.getElementById('player')?.classList.contains('active');
         _state.enabled = false;
+        _state.autoOpened = false;
         _state.manualTargetFreq = null;
         if (_outsideClickClose) { document.removeEventListener('click', _outsideClickClose); _outsideClickClose = null; }
         if (_state.activeViz) { _state.activeViz.destroy(); _state.activeViz = null; }
