@@ -7842,15 +7842,63 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
         if 0 <= arrangement < len(song.arrangements):
             best = arrangement
         else:
-            # Check user's default arrangement preference
+            # Read the user's config once: their selected instrument (route the chart
+            # to the matching part) and their default-arrangement preference.
             pref = ""
+            sel_instrument = ""
             config_file = CONFIG_DIR / "config.json"
             if config_file.exists():
                 try:
-                    pref = json.loads(config_file.read_text(encoding="utf-8")).get("default_arrangement", "")
+                    _cfg = json.loads(config_file.read_text(encoding="utf-8"))
+                    pref = _cfg.get("default_arrangement", "")
+                    sel_instrument = (_cfg.get("instrument", "") or "")
                 except Exception:
                     pass
-            if pref:
+            # Instrument routing: load the part that matches the selected instrument so
+            # "your instrument" and "the chart you play" line up. The default ordering
+            # is Lead/guitar-first, so without this a bass player gets handed a guitar
+            # chart (and any tune-check then compares a 4-string bass against a 6-string
+            # part). Currently routes bass -> a Bass arrangement; guitar — and any
+            # unknown/future instrument (drums, keys) — falls through to the
+            # preference/most-notes logic below, which already lands on a guitar part.
+            # Drums/keys get their own match when those arrangement types + selector
+            # entries land. Only applies when no explicit arrangement was requested, so
+            # a manual arrangement switch is always respected.
+            if sel_instrument.lower() == "bass":
+                # Candidate bass parts, preferring the structured pathBass flag; the
+                # normalized smart name (itself pathBass-derived) and raw name are
+                # fallbacks for sources without the flag.
+                bass_idxs = [
+                    i
+                    for i, a in enumerate(song.arrangements)
+                    if getattr(a, "path_bass", False)
+                    or (smart_names[i] or "").lower().startswith("bass")
+                    or "bass" in (getattr(a, "name", "") or "").lower()
+                ]
+                if bass_idxs:
+                    # Among the bass parts: (1) honor the saved default-arrangement
+                    # preference if it names one of them (so a bass player who prefers
+                    # "Bass 2"/"Alt. Bass" keeps it), (2) else the canonical main "Bass",
+                    # (3) else the first bass part in order.
+                    pref_bass = -1
+                    if pref:
+                        for i in bass_idxs:
+                            nm = (smart_names[i] if naming_mode == "smart" and i < len(smart_names)
+                                  else getattr(song.arrangements[i], "name", ""))
+                            if nm == pref:
+                                pref_bass = i
+                                break
+                    if pref_bass >= 0:
+                        best = pref_bass
+                    else:
+                        best = next(
+                            (i for i in bass_idxs
+                             if (smart_names[i] if i < len(smart_names) else "") == "Bass"),
+                            bass_idxs[0],
+                        )
+            # User's default arrangement preference (only when instrument routing did not
+            # already resolve a part — i.e. guitar, or a bass player with no bass part).
+            if best < 0 and pref:
                 if naming_mode == "smart":
                     best = _pick_smart_arrangement(song.arrangements, smart_names, pref)
                 else:
