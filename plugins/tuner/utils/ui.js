@@ -645,7 +645,13 @@ window._tunerUI = function(state, actions) {
                 .replace('right-0', '')
                 .replace('top-full', '')
                 .trim();
-            state.uiContainer.style.cssText = 'top:5rem;right:11rem';
+            const pluginsPop = document.getElementById('v3-rail-pop-plugins');
+            if (pluginsPop && !pluginsPop.classList.contains('hidden')) {
+                const rect = pluginsPop.getBoundingClientRect();
+                state.uiContainer.style.cssText = `top:${rect.top}px;left:${rect.right + 8}px`;
+            } else {
+                state.uiContainer.style.cssText = 'top:5rem;right:11rem';
+            }
             return;
         }
 

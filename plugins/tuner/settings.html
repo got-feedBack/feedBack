@@ -1,15 +1,4 @@
 <div class="space-y-6 py-2">
-    <div class="flex items-center justify-between bg-dark-900/50 p-3 rounded-xl border border-gray-800/50">
-        <div>
-            <h3 class="text-sm font-medium text-gray-200">Floating Button</h3>
-            <p class="text-[11px] text-gray-500">Show the tuner button on the main interface.</p>
-        </div>
-        <label class="relative inline-flex items-center cursor-pointer">
-            <input type="checkbox" id="tuner-show-floating" class="sr-only peer" onchange="window._tunerToggleFloating(this.checked)">
-            <div class="w-9 h-5 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-accent"></div>
-        </label>
-    </div>
-
     <script>
     if (window.feedBackDesktop && window.feedBackDesktop.isDesktop) {
         document.currentScript.insertAdjacentHTML('beforebegin', `
@@ -27,14 +16,6 @@
     </script>
 
     <div>
-        <h3 class="text-sm font-medium text-gray-400 mb-3">Tuning Visibility</h3>
-        <p class="text-xs text-gray-500 mb-4">Toggle which built-in tunings appear in the tuner menu.</p>
-        <div id="tuner-visibility-list" class="space-y-2 pr-2">
-            <!-- Populated by JS -->
-        </div>
-    </div>
-
-    <div class="pt-4 border-t border-gray-800">
         <h3 class="text-sm font-medium text-gray-400 mb-3">Custom Tunings</h3>
         <div id="tuner-custom-list" class="space-y-2 mb-4">
             <!-- Populated by JS -->
@@ -77,16 +58,7 @@
 
     <script>
         (function() {
-            let config = { customTunings: {}, disabledTunings: [], defaultTunings: {}, showFloatingButton: true, audioInputMode: 'auto' };
-            let expandedGroups = [];
-
-            var _INSTRUMENT_CAPTIONS = {
-                "guitar-6": "Guitar",
-                "guitar-7": "Guitar 7-string",
-                "guitar-8": "Guitar 8-string",
-                "bass-4": "Bass 4-string",
-                "bass-5": "Bass 5-string"
-            };
+            let config = { customTunings: {}, audioInputMode: 'auto' };
 
             var _instrumentLabels = {
                 "guitar-6": "Guitar 6-string",
@@ -101,20 +73,12 @@
                     const resp = await fetch('/api/plugins/tuner/config');
                     config = await resp.json();
 
-                    const floatingToggle = document.getElementById('tuner-show-floating');
-                    if (floatingToggle) floatingToggle.checked = config.showFloatingButton !== false;
-
                     const browserAudioToggle = document.getElementById('tuner-force-browser-audio');
                     if (browserAudioToggle) browserAudioToggle.checked = config.audioInputMode === 'browser';
 
                     render();
                 } catch (e) { console.error('Tuner settings: load failed', e); }
             }
-
-            window._tunerToggleFloating = (enabled) => {
-                config.showFloatingButton = enabled;
-                save();
-            };
 
             window._tunerToggleBrowserAudio = (forceBrowser) => {
                 config.audioInputMode = forceBrowser ? 'browser' : 'auto';
@@ -134,115 +98,6 @@
             }
 
             function render() {
-                const visList = document.getElementById('tuner-visibility-list');
-                visList.innerHTML = '';
-
-                const defaultTunings = config.defaultTunings || {};
-
-                Object.keys(defaultTunings).forEach(groupName => {
-                    const group = defaultTunings[groupName];
-                    const groupTunings = Object.keys(group);
-                    const instrument = groupName;
-                    // Compound keys for all tunings in this group
-                    const compoundKeys = groupTunings.map(n => instrument + ':' + n);
-
-                    const groupWrapper = document.createElement('div');
-                    groupWrapper.className = 'mb-4';
-
-                    const header = document.createElement('div');
-                    header.className = 'flex items-center justify-between p-2 mt-2 bg-dark-900/80 rounded-t-lg border-x border-t border-gray-800/50 cursor-pointer hover:bg-dark-900 transition-colors';
-
-                    const left = document.createElement('div');
-                    left.className = 'flex items-center gap-2';
-
-                    const chevron = document.createElement('span');
-                    chevron.innerHTML = '<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>';
-                    chevron.className = 'text-gray-500 transition-transform duration-200 rotate-0';
-
-                    const groupLabel = document.createElement('span');
-                    groupLabel.className = 'text-[11px] font-bold text-gray-400 uppercase tracking-wider';
-                    groupLabel.textContent = _INSTRUMENT_CAPTIONS[groupName] || groupName;
-
-                    left.appendChild(chevron);
-                    left.appendChild(groupLabel);
-
-                    const groupToggle = document.createElement('input');
-                    groupToggle.type = 'checkbox';
-                    const allEnabled = compoundKeys.every(k => !config.disabledTunings.includes(k));
-                    const someEnabled = compoundKeys.some(k => !config.disabledTunings.includes(k));
-                    groupToggle.checked = allEnabled;
-                    groupToggle.indeterminate = someEnabled && !allEnabled;
-                    groupToggle.className = 'accent-accent';
-
-                    groupToggle.onclick = (e) => e.stopPropagation();
-                    groupToggle.onchange = () => {
-                        if (groupToggle.checked) {
-                            config.disabledTunings = config.disabledTunings.filter(k => !compoundKeys.includes(k));
-                        } else {
-                            compoundKeys.forEach(k => {
-                                if (!config.disabledTunings.includes(k)) config.disabledTunings.push(k);
-                            });
-                        }
-                        save();
-                        render();
-                    };
-
-                    header.appendChild(left);
-                    header.appendChild(groupToggle);
-                    groupWrapper.appendChild(header);
-
-                    const groupContainer = document.createElement('div');
-                    groupContainer.className = 'border-x border-b border-gray-800/50 rounded-b-lg overflow-hidden';
-
-                    const isExpanded = expandedGroups.includes(groupName);
-                    if (!isExpanded) {
-                        groupContainer.classList.add('hidden');
-                        chevron.classList.remove('rotate-90');
-                    } else {
-                        chevron.classList.add('rotate-90');
-                    }
-
-                    header.onclick = () => {
-                        const idx = expandedGroups.indexOf(groupName);
-                        if (idx === -1) {
-                            expandedGroups.push(groupName);
-                        } else {
-                            expandedGroups.splice(idx, 1);
-                        }
-                        render();
-                    };
-
-                    groupTunings.forEach((name, idx) => {
-                        const compoundKey = instrument + ':' + name;
-                        const div = document.createElement('div');
-                        div.className = `flex items-center justify-between p-2 bg-dark-800/30 hover:bg-dark-800/50 transition-colors ${idx === 0 ? 'border-t-0' : 'border-t border-gray-800/20'}`;
-
-                        const label = document.createElement('span');
-                        label.className = 'text-xs text-gray-300';
-                        label.textContent = name;
-
-                        const toggle = document.createElement('input');
-                        toggle.type = 'checkbox';
-                        toggle.checked = !config.disabledTunings.includes(compoundKey);
-                        toggle.className = 'accent-accent';
-                        toggle.onchange = () => {
-                            if (toggle.checked) {
-                                config.disabledTunings = config.disabledTunings.filter(k => k !== compoundKey);
-                            } else {
-                                if (!config.disabledTunings.includes(compoundKey)) config.disabledTunings.push(compoundKey);
-                            }
-                            save();
-                            render();
-                        };
-
-                        div.appendChild(label);
-                        div.appendChild(toggle);
-                        groupContainer.appendChild(div);
-                    });
-                    groupWrapper.appendChild(groupContainer);
-                    visList.appendChild(groupWrapper);
-                });
-
                 const customList = document.getElementById('tuner-custom-list');
                 customList.innerHTML = '';
                 const customNames = Object.keys(config.customTunings);
