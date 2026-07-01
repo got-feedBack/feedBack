@@ -232,9 +232,10 @@ def _build_tempo_map(root: ET.Element) -> list[tuple[int, float]]:
 def _gpif_tracks(root: ET.Element) -> list[dict]:
     """Return a list of raw track dicts from the GPIF Tracks element."""
     # Lookups for per-track note counting. MasterBar/Bars lists one bar id per
-    # track in raw Tracks order, so the enumerate index below (which counts
-    # skipped pseudo-tracks) is the correct bar-lookup index — same mapping
-    # convert_file uses via filtered_to_raw.
+    # *stave* (not per Track element) in document order. A multi-stave track
+    # (e.g. GP8 piano with treble + bass) occupies N consecutive columns; the
+    # bar_column counter below advances by num_staves per track so every track
+    # gets the correct column regardless of neighbour stave counts.
     _masterbars = list(root.find('MasterBars') or [])
     _bars_by_id = {b.get('id'): b for b in (root.find('Bars') or [])}
     _voices_by_id = {v.get('id'): v for v in (root.find('Voices') or [])}
@@ -279,10 +280,17 @@ def _gpif_tracks(root: ET.Element) -> list[dict]:
         return n
 
     result = []
-    for raw_idx, t in enumerate(root.find('Tracks') or []):
+    bar_column = 0
+    for t in (root.find('Tracks') or []):
+        # Count staves: each Staff occupies one column in MasterBar/Bars.
+        # Default to 1 for tracks with no explicit <Staves> (GP3/4/5, old GPX).
+        num_staves = max(1, len(list(t.findall('Staves/Staff'))))
+        stave_columns = list(range(bar_column, bar_column + num_staves))
+
         name = (t.findtext('Name') or '').strip()
         if name.startswith('@$') and name.endswith('$@'):
-            continue  # GP internal pseudo-tracks (raw_idx still advances)
+            bar_column += num_staves
+            continue  # GP internal pseudo-tracks (bar_column still advances)
 
         gm = t.find('GeneralMidi')
         midi_program = 0
@@ -319,27 +327,54 @@ def _gpif_tracks(root: ET.Element) -> list[dict]:
                 except (ValueError, TypeError):
                     pass
 
-        # String tuning
-        string_pitches: list[int] = []
-        for prop in t.findall('.//Property'):
-            if prop.get('name') == 'Tuning':
-                pe = prop.find('Pitches')
-                if pe is not None and pe.text:
-                    try:
-                        string_pitches = [int(p) for p in pe.text.split()]
-                    except ValueError:
-                        pass
+        # String tuning — one list per stave, in stave order.  Reading all
+        # `.//Property` descendants across every stave meant the last stave's
+        # tuning overwrote the first; for a GP8 piano (treble 6-string +
+        # bass 5-string) that caused stave-0 notes with String=5 to be
+        # out-of-range against the 5-entry bass tuning and silently dropped.
+        stave_pitches: list[list[int]] = []
+        staves_el = t.find('Staves')
+        if staves_el is not None:
+            for staff_el in staves_el:
+                pitches: list[int] = []
+                for prop in staff_el.findall('.//Property'):
+                    if prop.get('name') == 'Tuning':
+                        pe = prop.find('Pitches')
+                        if pe is not None and pe.text:
+                            try:
+                                pitches = [int(p) for p in pe.text.split()]
+                            except ValueError:
+                                pass
+                        break
+                stave_pitches.append(pitches)
+        if not stave_pitches:
+            # No <Staves> (GP3/4/5 or old GPX): fall back to track-level props
+            _sp: list[int] = []
+            for prop in t.findall('.//Property'):
+                if prop.get('name') == 'Tuning':
+                    pe = prop.find('Pitches')
+                    if pe is not None and pe.text:
+                        try:
+                            _sp = [int(p) for p in pe.text.split()]
+                        except ValueError:
+                            pass
+                    break
+            stave_pitches = [_sp]
 
         result.append({
             '_el': t,
             'id': t.get('id', ''),
             'name': name,
-            'string_pitches': string_pitches,
+            'string_pitches': stave_pitches[0],   # primary stave (existing key)
+            'num_staves': num_staves,
+            'stave_columns': stave_columns,
+            'stave_pitches': stave_pitches,
             'is_drums': is_drums,
             'midi_program': midi_program,
             'midi_channel': midi_channel,
-            'note_count': _note_count_for_raw(raw_idx),
+            'note_count': sum(_note_count_for_raw(c) for c in stave_columns),
         })
+        bar_column += num_staves
     return result
 
 
@@ -1366,16 +1401,22 @@ def convert_file(
     rhythms_dict = {r.get('id'): r for r in (root.find('Rhythms') or [])}
     _bend_divisor = _gpx_bend_scale(root)   # GPIF bend value -> semitones
 
-    # Map filtered track index -> raw track index (needed for bar lookup)
+    # Map filtered track index -> bar column (MasterBar/Bars position for
+    # stave 0 of that track).  Each <Staves/Staff> child occupies one column,
+    # so multi-stave tracks advance the column counter by num_staves, not 1.
+    # The old enumerate()-based mapping assumed 1 stave per track and produced
+    # wrong columns for any track following a multi-stave predecessor.
     raw_tracks = list(root.find('Tracks') or [])
-    filtered_to_raw: dict[int, int] = {}
+    filtered_to_raw: dict[int, int] = {}   # kept as name for caller compat
     filtered_pos = 0
-    for raw_idx, t_el in enumerate(raw_tracks):
+    _bar_col = 0
+    for t_el in raw_tracks:
+        _ns = max(1, len(list(t_el.findall('Staves/Staff'))))
         name = (t_el.findtext('Name') or '').strip()
-        if name.startswith('@$') and name.endswith('$@'):
-            continue
-        filtered_to_raw[filtered_pos] = raw_idx
-        filtered_pos += 1
+        if not (name.startswith('@$') and name.endswith('$@')):
+            filtered_to_raw[filtered_pos] = _bar_col
+            filtered_pos += 1
+        _bar_col += _ns
 
 
     # Detect and merge Piano LH+RH pairs into single full-keyboard arrangements
@@ -1979,6 +2020,94 @@ def convert_file(
             # auto-select (which keys on arr_name.startswith("keys")) still work.
             arr_name = re.sub(r'\s*\d+$', '', arr_name).strip() or 'Keys'
 
+        elif is_keys and track.get('num_staves', 1) > 1:
+            # GP8 two-stave piano: stave 1 (bass clef) is a second column in
+            # MasterBar/Bars for the same Track element.  Walk it exactly like
+            # the GPX LH merge above and fold its notes into the arrangement.
+            _s1_col = track['stave_columns'][1]
+            _s1_sp = (track['stave_pitches'][1]
+                      if len(track.get('stave_pitches', [])) > 1 else [])
+
+            _lh_notes: list[RsNote] = []
+            _lh_last_per_key: dict[int, RsNote] = {}
+            _lh_tempo_iter = iter(tempo_map)
+            _lh_next_bar, _lh_next_bpm = next(_lh_tempo_iter, (999999, tempo_bpm))
+            _lh_cur_tempo = tempo_bpm
+            _lh_time = 0.0
+
+            for _lh_mb_idx, _lh_mb in enumerate(masterbars):
+                while _lh_mb_idx >= _lh_next_bar:
+                    _lh_cur_tempo = _lh_next_bpm
+                    _lh_next_bar, _lh_next_bpm = next(_lh_tempo_iter, (999999, _lh_cur_tempo))
+                _lh_ts = _lh_mb.findtext('Time', '4/4')
+                try:
+                    _lh_nb, _lh_db = [int(x) for x in _lh_ts.split('/')]
+                except ValueError:
+                    _lh_nb, _lh_db = 4, 4
+                _lh_bar_dur = _lh_nb * (4.0 / _lh_db) * (60.0 / _lh_cur_tempo)
+                _lh_bar_ids = _lh_mb.findtext('Bars', '').split()
+                _lh_bid = _lh_bar_ids[_s1_col] if _s1_col < len(_lh_bar_ids) else '-1'
+                if _lh_bid != '-1' and _lh_bid:
+                    _lh_bar = bars_by_id.get(_lh_bid)
+                    if _lh_bar is not None:
+                        for _lh_vid in _lh_bar.findtext('Voices', '').split():
+                            if _lh_vid == '-1':
+                                continue
+                            _lh_voice = voices_dict.get(_lh_vid)
+                            if _lh_voice is None:
+                                continue
+                            _lh_vt = _lh_time
+                            for _lh_beat_id in _lh_voice.findtext('Beats', '').split():
+                                _lh_beat = beats_dict.get(_lh_beat_id)
+                                if _lh_beat is None:
+                                    continue
+                                _lh_dur = _beat_dur_secs(_lh_beat, rhythms_dict, _lh_cur_tempo)
+                                for _lh_nid in _lh_beat.findtext('Notes', '').strip().split():
+                                    _lh_note_el = notes_dict.get(_lh_nid)
+                                    if _lh_note_el is None:
+                                        continue
+                                    if _note_is_tie(_lh_note_el):
+                                        _tie_midi = _note_midi(_lh_note_el, _s1_sp)
+                                        if _tie_midi is not None:
+                                            _prev = _lh_last_per_key.get(_tie_midi)
+                                            _tie_t = _lh_vt + audio_offset
+                                            if _prev is not None and _prev.time < _tie_t:
+                                                _prev.sustain = max(
+                                                    _prev.sustain,
+                                                    (_tie_t + _lh_dur) - _prev.time,
+                                                )
+                                        continue
+                                    _lh_midi = _note_midi(_lh_note_el, _s1_sp)
+                                    if _lh_midi is None:
+                                        continue
+                                    _lh_rn = RsNote(
+                                        time=_lh_vt + audio_offset,
+                                        string=_lh_midi // 24,
+                                        fret=_lh_midi % 24,
+                                        sustain=_lh_dur if _lh_dur > 0.2 else 0.0,
+                                    )
+                                    _lh_notes.append(_lh_rn)
+                                    _lh_last_per_key[_lh_midi] = _lh_rn
+                                _lh_vt += _lh_dur
+                _lh_time += _lh_bar_dur
+
+            # Same dedup-merge as the GPX LH path above.
+            _seen: dict[tuple, RsNote] = {}
+            for _n in rs_notes:
+                _seen.setdefault((round(_n.time, 3), _n.string, _n.fret), _n)
+            for _c in rs_chords:
+                for _cn in _c.notes:
+                    _seen.setdefault((round(_cn.time, 3), _cn.string, _cn.fret), _cn)
+            for _lh_rn in _lh_notes:
+                _k = (round(_lh_rn.time, 3), _lh_rn.string, _lh_rn.fret)
+                _existing = _seen.get(_k)
+                if _existing is None:
+                    rs_notes.append(_lh_rn)
+                    _seen[_k] = _lh_rn
+                elif _lh_rn.sustain > _existing.sustain:
+                    _existing.sustain = _lh_rn.sustain
+            rs_notes.sort(key=lambda n: (n.time, n.string))
+
         # Resolve pending slides now that every note on each string is known.
         # GPIF slide flags: 1=shift, 2=legato (both slide to the NEXT note on the
         # string); 4=slide out downwards, 8=slide out upwards (unpitched).
@@ -2032,19 +2161,24 @@ def convert_file(
             try:
                 import gp2notation as _gp2notation
                 _lh_idx = _piano_merge_map.get(track_idx)
+                if _lh_idx is not None:
+                    # GPX LH/RH pair (two separate Track elements)
+                    _nt_lh_raw = filtered_to_raw.get(_lh_idx, _lh_idx)
+                    _nt_lh_sp  = tracks[_lh_idx]['string_pitches']
+                elif track.get('num_staves', 1) > 1:
+                    # GP8 two-stave piano (one Track with multiple <Staves>)
+                    _nt_lh_raw = track['stave_columns'][1]
+                    _nt_lh_sp  = (track['stave_pitches'][1]
+                                  if len(track.get('stave_pitches', [])) > 1 else [])
+                else:
+                    _nt_lh_raw, _nt_lh_sp = None, []
                 _payload = _gp2notation.convert_track_to_notation(
                     root, raw_idx, track['string_pitches'],
                     instrument='piano',
                     audio_offset=audio_offset,
                     track_name=track['name'],
-                    lh_raw_idx=(
-                        filtered_to_raw.get(_lh_idx, _lh_idx)
-                        if _lh_idx is not None else None
-                    ),
-                    lh_string_pitches=(
-                        tracks[_lh_idx]['string_pitches']
-                        if _lh_idx is not None else None
-                    ),
+                    lh_raw_idx=_nt_lh_raw,
+                    lh_string_pitches=_nt_lh_sp or None,
                 )
                 _gp2notation.write_notation_sidecar(filepath, _payload)
             except Exception:

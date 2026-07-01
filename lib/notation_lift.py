@@ -114,11 +114,18 @@ def split_hands(notes: list[dict]) -> dict[str, list[dict]]:
         pitches = sorted(n["midi"] for n in group)
         span = pitches[-1] - pitches[0]
         if len(pitches) > 1 and span > HAND_SPLIT_SPAN_SEMITONES:
-            # Largest internal gap; ties resolve to the lowest such gap so the
-            # left hand keeps the tight low cluster.
-            gaps = [pitches[i + 1] - pitches[i] for i in range(len(pitches) - 1)]
-            split_after = gaps.index(max(gaps))
-            threshold = pitches[split_after]  # lh: midi <= threshold
+            # Prefer middle C as the split boundary when notes straddle it —
+            # this correctly handles bass+treble chords from piano imports where
+            # the largest-gap heuristic picks the wrong split point (e.g.
+            # [G2, E3, C4]: largest gap is G2→E3 but the real split is E3|C4).
+            # Fall back to the largest internal gap only when all notes land on
+            # one side of middle C.
+            if pitches[0] < MIDDLE_C <= pitches[-1]:
+                threshold = MIDDLE_C - 1  # lh: midi < MIDDLE_C
+            else:
+                gaps = [pitches[i + 1] - pitches[i] for i in range(len(pitches) - 1)]
+                split_after = gaps.index(max(gaps))
+                threshold = pitches[split_after]
             for n in group:
                 hands["lh" if n["midi"] <= threshold else "rh"].append(n)
         else:
