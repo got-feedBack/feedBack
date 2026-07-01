@@ -42,6 +42,20 @@
         <p class="text-xs text-gray-500 mt-1">0 = down the lanes · 1 = top-down</p>
     </div>
 
+    <!-- Graphics -->
+    <div class="mt-6 border-t border-gray-800 pt-4">
+        <h4 class="text-xs font-medium text-gray-300 mb-2">Graphics</h4>
+        <label for="drumh3d-fx-bloom" class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+            <input type="checkbox" id="drumh3d-fx-bloom" checked
+                onchange="window.drumH3dSetFx && window.drumH3dSetFx('bloom', this.checked)">
+            Glow (bloom)
+        </label>
+        <p class="text-xs text-gray-500 mt-1">
+            Soft light-bleed around the hit line and bright notes. Applies
+            live; turn off to reclaim GPU headroom on weak machines.
+        </p>
+    </div>
+
     <!-- MIDI input -->
     <div class="mt-6 border-t border-gray-800 pt-4">
         <h4 class="text-xs font-medium text-gray-300 mb-2">MIDI input</h4>
@@ -421,6 +435,16 @@
                 const c = Math.min(1, Math.max(0, storedCam));
                 cam.value = String(c);
                 camVal.textContent = c.toFixed(2);
+            }
+
+            // FX toggles (drum_h3d_bg_* — guitar-parity graphics controls).
+            // Only explicit values override; absent/corrupt keys keep the
+            // default (ON), matching screen.js readFxSettings.
+            const storedBloom = localStorage.getItem('drum_h3d_bg_bloom');
+            if (storedBloom === '1' || storedBloom === 'true') {
+                document.getElementById('drumh3d-fx-bloom').checked = true;
+            } else if (storedBloom === '0' || storedBloom === 'false') {
+                document.getElementById('drumh3d-fx-bloom').checked = false;
             }
         } catch (e) {
             console.warn('[Drum-Hwy3D settings] hydration failed:', e);

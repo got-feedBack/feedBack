@@ -49,15 +49,28 @@ a few bars, plus a tom roll down the kit. Best read of what's possible.
 
 All settings persist in `localStorage` under the `drum_h3d_*` prefix.
 
-## What this mockup is *not* doing yet
+## What this plugin is *not* doing yet
 
-- Reading `bundle.notes` / `bundle.chords` / `bundle.currentTime`
-- Hit detection / scoring / note_detect integration
-- Real drum chart parsing (the chart doesn't ship drum charts; this
-  would need a new arrangement format or a Guitar Pro/MIDI source)
+(Historical note: this started as a pure-visual mockup; it now reads
+`bundle.drumTab` + `bundle.currentTime` and scores MIDI hits against the
+chart, so the old "no song-data wiring" caveats are gone.)
+
 - Sustain trails (drums don't sustain meaningfully)
-- Sticking labels, double kick, foot hi-hat, cross-stick, rolls — see
-  the TODOs in `screen.js` for the variant backlog
+- Sticking labels, double kick, rolls — see the TODOs in `screen.js`
+  for the variant backlog
+
+## Ported helpers (keep in sync with highway_3d)
+
+Visual-parity code copied from `plugins/highway_3d/screen.js` — same
+function names, signatures, and constants on purpose, marked with
+`PORTED FROM highway_3d` comments at each site. If the guitar highway
+tunes one of these, mirror the change here (and in `keys_highway_3d`):
+
+- `_bloomEnsure()` / `_bloomDispose()` — EffectComposer + UnrealBloomPass
+  (0.65/0.5/0.82) on a multisampled HalfFloat target, ACES↔None tone-
+  mapping switch in `draw()`; addons dynamic-imported from
+  `/static/vendor/three/addons/` (no CDN fallback — direct render is the
+  graceful degrade)
 
 ## Why a separate plugin (vs. drum mode inside highway_3d)?
 
