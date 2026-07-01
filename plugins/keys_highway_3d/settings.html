@@ -1,0 +1,47 @@
+<div role="group" aria-labelledby="keysh3d-heading">
+    <h3 id="keysh3d-heading" class="text-sm font-medium text-gray-400 mb-2">3D Keys Highway</h3>
+    <p class="text-xs text-gray-500 mb-3">
+        Pick a song with keys notation (sloppak-spec §5.3) and choose
+        <em>Keys Highway 3D</em> from the viz picker (Auto selects it for
+        notation charts). The plugin auto-attaches to your MIDI keyboard;
+        device, channel and transpose are configured from the player for
+        now — this panel holds the graphics controls.
+    </p>
+
+    <!-- Graphics -->
+    <div class="mt-3">
+        <h4 class="text-xs font-medium text-gray-300 mb-2">Graphics</h4>
+        <label for="keysh3d-fx-bloom" class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+            <input type="checkbox" id="keysh3d-fx-bloom" checked
+                onchange="window.keys3dSetFx && window.keys3dSetFx('bloom', this.checked)">
+            Glow (bloom)
+        </label>
+        <p class="text-xs text-gray-500 mt-1">
+            Soft light-bleed around the hit line, hit flames and consumed
+            sustains. Applies live; turn off to reclaim GPU headroom on
+            weak machines.
+        </p>
+    </div>
+
+    <script>
+    (function () {
+        'use strict';
+        // Hydrate controls from stored config on first paint. Narrow the
+        // try/catch to just the localStorage reads (drum_highway_3d
+        // settings-hydration convention).
+        try {
+            // FX toggles (keys3d_bg_* — guitar-parity graphics controls).
+            // Only explicit values override; absent/corrupt keys keep the
+            // default (ON), matching screen.js readFxSettings.
+            const storedBloom = localStorage.getItem('keys3d_bg_bloom');
+            if (storedBloom === '1' || storedBloom === 'true') {
+                document.getElementById('keysh3d-fx-bloom').checked = true;
+            } else if (storedBloom === '0' || storedBloom === 'false') {
+                document.getElementById('keysh3d-fx-bloom').checked = false;
+            }
+        } catch (e) {
+            console.warn('[Keys-Hwy3D settings] hydration failed:', e);
+        }
+    })();
+    </script>
+</div>

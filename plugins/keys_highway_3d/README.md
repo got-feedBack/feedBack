@@ -19,6 +19,19 @@ RS+-style falling-note 3D piano highway for [Slopsmith](https://github.com/got-f
 node --test tests/*.test.js
 ```
 
+## Ported helpers (keep in sync with highway_3d)
+
+Visual-parity code copied from `plugins/highway_3d/screen.js` — same
+function names, signatures, and constants on purpose, marked with
+`PORTED FROM highway_3d` comments at each site. If the guitar highway
+tunes one of these, mirror the change here (and in `drum_highway_3d`):
+
+- `_bloomEnsure()` / `_bloomDispose()` — EffectComposer + UnrealBloomPass
+  (0.65/0.5/0.82) on a multisampled HalfFloat target, ACES↔None tone-
+  mapping switch in `draw()`; addons dynamic-imported from
+  `/static/vendor/three/addons/` (no CDN fallback — direct render is the
+  graceful degrade)
+
 ## License
 
 AGPL-3.0.

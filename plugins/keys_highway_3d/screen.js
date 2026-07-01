@@ -869,6 +869,72 @@
         _writeStore(STORE_KEYS.transpose, String(_cfg.transpose));
     };
 
+    // Host splitscreen state (PORTED FROM highway_3d _ssActive, minus the
+    // focus-API checks the guitar needs for input routing — here it only
+    // gates GPU cost, so "is a split active at all" is the right question;
+    // a mixed split (this viz + another renderer) must count too).
+    function _ssActive() {
+        const ss = window.feedBackSplitscreen;
+        return !!(ss && typeof ss.isActive === 'function' && ss.isActive());
+    }
+
+    /* ======================================================================
+     *  Visual-FX settings — guitar-highway parity controls
+     * ====================================================================== */
+
+    // Defaults for the graphics/FX controls this plugin exposes. Keys mirror
+    // the guitar highway's `h3d_bg_*` vocabulary under this plugin's own
+    // `keys3d_bg_*` localStorage prefix; later parity PRs (sparks, themes,
+    // background styles, score FX) extend this object with their own keys.
+    // Everything defaults ON — the settings screen is the opt-out.
+    const FX_DEFAULTS = {
+        bloom: true,
+    };
+    const FX_LS_PREFIX = 'keys3d_bg_';
+
+    function readFxSettings() {
+        const fx = Object.assign({}, FX_DEFAULTS);
+        try {
+            for (const k of Object.keys(FX_DEFAULTS)) {
+                const raw = localStorage.getItem(FX_LS_PREFIX + k);
+                if (raw === null) continue;
+                if (typeof FX_DEFAULTS[k] === 'boolean') {
+                    // Explicit values only — anything else (corrupt/foreign
+                    // write) keeps the default rather than silently
+                    // disabling an effect.
+                    if (raw === '1' || raw === 'true') fx[k] = true;
+                    else if (raw === '0' || raw === 'false') fx[k] = false;
+                } else {
+                    const n = parseFloat(raw);
+                    if (Number.isFinite(n)) fx[k] = n;
+                }
+            }
+        } catch (_) { /* localStorage unavailable — use defaults */ }
+        return fx;
+    }
+
+    // Single setter for every FX key — settings.html calls
+    // window.keys3dSetFx('bloom', checked). Coerces to the default's type so
+    // a slider string can't poison a boolean toggle.
+    window.keys3dSetFx = function (key, value) {
+        if (!(key in FX_DEFAULTS)) return;
+        let v;
+        if (typeof FX_DEFAULTS[key] === 'boolean') {
+            // Same accepted representations as readFxSettings so the
+            // setter/reader round-trip is consistent ('0'/'false' → false).
+            v = value === true || value === 1 || value === '1' || value === 'true';
+        } else {
+            v = Number(value);
+            if (!Number.isFinite(v)) return;
+        }
+        try {
+            localStorage.setItem(FX_LS_PREFIX + key, typeof v === 'boolean' ? (v ? '1' : '0') : String(v));
+        } catch (_) {}
+        try {
+            window.dispatchEvent(new CustomEvent('keys3d:settings', { detail: { fx: { [key]: v } } }));
+        } catch (_) { /* dispatch unavailable — persisted value applies next init */ }
+    };
+
     /* ======================================================================
      *  Capability wiring — note-detection + audio-input domains
      *
@@ -1063,6 +1129,22 @@
         let _glowTex = null;            // hit-line gradient (lazy, reused)
         const _hitGlowMats = [];        // additive glow materials pulsed in draw()
 
+        // ── Visual FX state (guitar-highway parity) ─────────────────────
+        let fx = readFxSettings();      // live snapshot, mutated by 'keys3d:settings'
+        let _fxHandler = null;
+        // Host adaptive-quality scale (bundle.renderScale, 0.25–1) —
+        // multiplied into the device pixel ratio like highway_3d does.
+        let _renderScale = 1;
+        // Bloom composer state (PORTED FROM highway_3d/screen.js — keep in sync).
+        let _composer = null;
+        let _bloomPass = null;
+        let _bloomLoad = null;
+        let _bloomW = 0, _bloomH = 0;
+        let _bloomGen = 0;   // bumped by _bloomDispose so stale loads no-op
+        // DOM HUD (combo / accuracy / best streak — drum_highway_3d pattern).
+        let _hudEl = null;
+        let _hudParentOrigPosition = null;
+
         // ── MIDI scoring + live feedback state ──────────────────────────
         let _layoutInfo = null;            // {layout, whiteCount} of current chart
         let _hits = 0, _misses = 0, _streak = 0, _bestStreak = 0;
@@ -1162,6 +1244,13 @@
 
         function buildScene() {
             scene = new T.Scene();
+            // Explicit scene.background (not just the renderer clear color):
+            // the bloom EffectComposer's RenderPass + OutputPass handle a
+            // scene background color-space-correctly, while a bare clear
+            // color comes out visibly lightened under the ACES output
+            // transform (washed-out purple instead of the dark navy).
+            // drum_highway_3d / highway_3d set it the same way.
+            scene.background = new T.Color(FOG_COLOR);
             scene.fog = new T.Fog(FOG_COLOR, FOG_START, FOG_END);
 
             cam = new T.PerspectiveCamera(CAM_FOV, 1, 0.1, 2000 * K);
@@ -1946,8 +2035,16 @@
                 entry.sprite.position.z = z;
             }
             // Gentle hit-line pulse — two material opacity writes, no
-            // allocations.
-            const pulse = 0.72 + 0.18 * Math.sin(now * 5.0);
+            // allocations. With bloom active the additive planes accumulate
+            // into an HDR target and the UnrealBloomPass amplifies them —
+            // full-strength they flood the whole keyboard white — so damp
+            // the pulse on that path; the composer's glow makes up the
+            // difference.
+            // Must mirror draw()'s composer gate exactly (incl. the
+            // splitscreen checks) — damping on the direct-render path would
+            // leave the hit line visibly dimmer.
+            const glowScale = (_bloomGateOk() && _composer) ? 0.45 : 1;
+            const pulse = (0.72 + 0.18 * Math.sin(now * 5.0)) * glowScale;
             for (let i = 0; i < _hitGlowMats.length; i++) _hitGlowMats[i].opacity = pulse;
 
             // Missed-note sweep — only while a MIDI device is connected
@@ -2049,14 +2146,183 @@
             _ndBindingId = bindingId;
         }
 
+        // The one condition under which the bloom composer path may render:
+        // enabled, single instance of this viz, and no host splitscreen
+        // (mixed splits with another renderer included). updateScene's
+        // hit-line damping and draw()'s render tail must agree on this.
+        function _bloomGateOk() {
+            return fx.bloom && _instances.size === 1 && !_ssActive();
+        }
+
+        /* ── Bloom (PORTED FROM highway_3d/screen.js _bloomEnsure — keep in
+         * sync; deliberate delta: this copy tracks pixel-ratio changes via
+         * composer.setPixelRatio (here and in applySize) because renderScale
+         * changes the ratio at runtime — the upstream composer never learns
+         * about ratio changes after construction, a candidate fix to port
+         * back to highway_3d) ── */
+        // Lazy-load the vendored postprocessing addons and build an
+        // EffectComposer (RenderPass -> UnrealBloomPass -> OutputPass/ACES).
+        // Returns the composer once ready, or null (caller falls back to a
+        // direct render — also the permanent path if the addons are missing,
+        // e.g. an older self-hosted core without static/vendor/three/addons).
+        function _bloomEnsure() {
+            if (_composer) return _composer;
+            if (_bloomLoad || !ren || !scene || !cam) return null;
+            const A = '/static/vendor/three/addons/';
+            const myGen = _bloomGen;   // superseded by any _bloomDispose()
+            _bloomLoad = Promise.all([
+                import(A + 'postprocessing/EffectComposer.js'),
+                import(A + 'postprocessing/RenderPass.js'),
+                import(A + 'postprocessing/UnrealBloomPass.js'),
+                import(A + 'postprocessing/OutputPass.js'),
+            ]).then(([EC, RP, UB, OP]) => {
+                try {
+                    // Torn down or superseded mid-load (a dispose clears
+                    // _bloomLoad, letting a NEW load start against the new
+                    // renderer — this stale completion must not also build
+                    // and orphan a composer).
+                    if (myGen !== _bloomGen || _composer) return;
+                    if (!ren || !scene || !cam || !highwayCanvas) return;
+                    const w = Math.max(2, (highwayCanvas.clientWidth || highwayCanvas.width || 1280) | 0);
+                    const h = Math.max(2, (highwayCanvas.clientHeight || highwayCanvas.height || 720) | 0);
+                    // Multisampled (WebGL2 MSAA) HalfFloat target so anti-aliasing
+                    // survives the bloom path — EffectComposer's default target has
+                    // no `samples`.
+                    const rt = new T.WebGLRenderTarget(w, h, { type: T.HalfFloatType, samples: 4 });
+                    const comp = new EC.EffectComposer(ren, rt);
+                    comp.setPixelRatio(ren.getPixelRatio());
+                    comp.addPass(new RP.RenderPass(scene, cam));
+                    _bloomPass = new UB.UnrealBloomPass(new T.Vector2(w, h), 0.65, 0.5, 0.82); // strength, radius, threshold (high → only emissive blooms)
+                    comp.addPass(_bloomPass);
+                    comp.addPass(new OP.OutputPass());
+                    comp.setSize(w, h);
+                    _bloomW = w; _bloomH = h; _composer = comp;
+                } catch (e) { console.warn('[Keys-Hwy3D] bloom init failed', e); _composer = null; }
+            }).catch((e) => console.warn('[Keys-Hwy3D] bloom modules failed', e));
+            return null;
+        }
+
+        // Drop the composer + its render targets (teardown path). Nulling
+        // _bloomLoad lets _bloomEnsure rebuild lazily on a later init.
+        function _bloomDispose() {
+            if (_composer) {
+                // EffectComposer.dispose() only frees its own read/write
+                // buffers — passes own additional GPU resources (UnrealBloom
+                // keeps several render targets + materials, OutputPass a
+                // material), so dispose each pass explicitly first.
+                try {
+                    for (const p of _composer.passes || []) {
+                        if (p && typeof p.dispose === 'function') p.dispose();
+                    }
+                } catch (_) {}
+                try { _composer.dispose(); } catch (_) {}
+            }
+            _composer = null;
+            _bloomPass = null;
+            _bloomLoad = null;
+            _bloomW = 0; _bloomH = 0;
+            _bloomGen++;   // invalidate any in-flight addon load
+        }
+
+        /* ── HUD overlay (combo / accuracy / streak — drum_highway_3d pattern) ── */
+        function _injectHud() {
+            if (_hudEl || !highwayCanvas) return;
+            const parent = highwayCanvas.parentElement;
+            if (!parent) return;
+            // Position the parent relative so the absolute HUD anchors to the
+            // canvas. Read-only check first so we don't clobber an existing
+            // position the host page set.
+            const cur = parent.style.position || getComputedStyle(parent).position;
+            if (cur === 'static' || !cur) {
+                _hudParentOrigPosition = parent.style.position;
+                parent.style.position = 'relative';
+            }
+            _hudEl = document.createElement('div');
+            _hudEl.className = 'keys-h3d-hud';
+            _hudEl.style.cssText = [
+                // Below the host's top-left song-info block (title /
+                // arrangement / tuning, ~3 lines) so the two never overlap.
+                'position:absolute', 'top:96px', 'left:14px',
+                'font-family:system-ui,sans-serif', 'font-size:13px',
+                'color:#e2e8f0', 'pointer-events:none', 'z-index:6',
+                'text-shadow:0 1px 2px rgba(0,0,0,0.8)',
+                'min-width:140px', 'line-height:1.4',
+            ].join(';');
+            parent.appendChild(_hudEl);
+            _refreshHud();
+        }
+
+        function _removeHud() {
+            if (_hudEl) {
+                const parent = _hudEl.parentNode;
+                if (parent) {
+                    parent.removeChild(_hudEl);
+                    // Restore position only if _injectHud changed it.
+                    if (_hudParentOrigPosition !== null) {
+                        parent.style.position = _hudParentOrigPosition;
+                        _hudParentOrigPosition = null;
+                    }
+                }
+            }
+            _hudEl = null;
+        }
+
+        function _refreshHud() {
+            if (!_hudEl) return;
+            // Only meaningful while a wired MIDI session can score — same
+            // gate as the miss sweep. Without one, show nothing rather than
+            // a frozen 0× combo.
+            if (!_midiHandle) {
+                if (_hudEl.innerHTML) _hudEl.innerHTML = '';
+                return;
+            }
+            const total = _hits + _misses;
+            const pct = total ? Math.round((_hits / total) * 100) : 0;
+            const comboColor = _streak >= 30 ? '#fde047' :
+                               _streak >= 10 ? '#86efac' : '#cbd5e1';
+            _hudEl.innerHTML =
+                `<div style="color:${comboColor};font-weight:600;font-size:18px">${_streak}× combo</div>` +
+                `<div>${_hits}/${total} (${pct}%)</div>` +
+                (_bestStreak ? `<div style="color:#94a3b8;font-size:11px">best ${_bestStreak}</div>` : '');
+        }
+
         function applySize(w, h) {
             if (!ren || !cam || !w || !h) return;
+            // Splitscreen: cap the base DPR harder (1.25 vs 2, mirroring
+            // highway_3d) so two panels don't double the fill cost. Checks
+            // the host split state (covers a mixed split with another
+            // renderer) plus our own instance count (covers multi-instance
+            // without host state). Before this PR no setPixelRatio was ever
+            // called — HiDPI displays rendered at CSS resolution and looked
+            // soft/aliased.
+            const baseDPR = (_ssActive() || _instances.size > 1)
+                ? Math.min(window.devicePixelRatio || 1, 1.25)
+                : Math.min(window.devicePixelRatio || 1, 2);
+            ren.setPixelRatio(_renderScale * baseDPR);
             ren.setSize(w, h, false);
+            if (_composer) {
+                // EffectComposer snapshots the renderer's pixelRatio — it must
+                // be told about both ratio and box changes or bloom renders at
+                // the wrong resolution.
+                _composer.setPixelRatio(ren.getPixelRatio());
+                _composer.setSize(w, h);
+                _bloomW = w; _bloomH = h;
+            }
             cam.aspect = w / h;
             cam.updateProjectionMatrix();
         }
 
         function teardown() {
+            _bloomDispose();
+            // HUD cleanup lives here (not only destroy): init() re-runs
+            // teardown() for renderer re-initialization, possibly against a
+            // different canvas — a stale _hudEl would both linger in the old
+            // parent and make the next _injectHud() an early-return no-op.
+            _removeHud();
+            if (_fxHandler) {
+                window.removeEventListener('keys3d:settings', _fxHandler);
+                _fxHandler = null;
+            }
             const sm = window.slopsmith;
             if (sm && typeof sm.off === 'function') {
                 if (_songHandler) sm.off('song:loaded', _songHandler);
@@ -2099,6 +2365,7 @@
             init(canvas, _bundle) {
                 if (_isReady) teardown();
                 highwayCanvas = canvas;
+                fx = readFxSettings();
                 loadThree().then(() => {
                     if (!highwayCanvas) return; // destroyed before load resolved
                     try {
@@ -2111,6 +2378,17 @@
                     }
                     buildScene();
                     applySize(highwayCanvas.clientWidth, highwayCanvas.clientHeight);
+                    _fxHandler = (ev) => {
+                        const d = ev && ev.detail;
+                        if (!d || !d.fx) return;
+                        // FX toggles are consumed per-frame in draw() — no
+                        // rebuild needed; the composer stays cached while off.
+                        for (const k of Object.keys(d.fx)) {
+                            if (k in FX_DEFAULTS) fx[k] = d.fx[k];
+                        }
+                    };
+                    window.addEventListener('keys3d:settings', _fxHandler);
+                    _injectHud();
                     _isReady = true;
                     loadNotationForCurrentSong();
                     if (window.slopsmith && typeof window.slopsmith.on === 'function') {
@@ -2130,6 +2408,16 @@
                     // destroy() before it lands can't wire a dead handler.
                     _instances.add(instance);
                     _activeInstance = instance;
+                    // Re-apply size now that this instance is counted in
+                    // _instances: the applySize above ran before the add, so
+                    // its splitscreen DPR check (size > 1) undercounted — the
+                    // second panel of a splitscreen mount would otherwise keep
+                    // full 2x DPR until some later resize. The already-mounted
+                    // panel is corrected by the host's own layout resize when
+                    // the split activates (panels change box size).
+                    if (_instances.size > 1 || _ssActive()) {
+                        applySize(highwayCanvas.clientWidth, highwayCanvas.clientHeight);
+                    }
                     _midiInit();
                     _midiResume();
                 }).catch(() => {
@@ -2139,10 +2427,33 @@
 
             draw(bundle) {
                 if (!_isReady || !ren || !scene || !cam) return;
+                // Host adaptive quality: consume bundle.renderScale like
+                // highway_3d — the host lowers it under GPU load ("Quality"
+                // + "Min res" controls) and applySize folds it into the DPR.
+                const newScale = (bundle && bundle.renderScale) || 1;
+                if (newScale !== _renderScale) {
+                    _renderScale = newScale;
+                    applySize(highwayCanvas.clientWidth, highwayCanvas.clientHeight);
+                }
                 const now = (bundle && typeof bundle.currentTime === 'number') ? bundle.currentTime : 0;
                 if (_notation) updateScene(now);
                 _animateFeedback(performance.now());
-                ren.render(scene, cam);
+                _refreshHud();
+                // Bloom path (PORTED FROM highway_3d): composer + ACES tone
+                // mapping when enabled and single-instance; direct render
+                // otherwise (including the frames while addons stream in).
+                const comp = _bloomGateOk() ? _bloomEnsure() : null;
+                if (comp) {
+                    const w = highwayCanvas.clientWidth | 0, h = highwayCanvas.clientHeight | 0;
+                    if (w > 0 && h > 0 && (w !== _bloomW || h !== _bloomH)) {
+                        comp.setSize(w, h); _bloomW = w; _bloomH = h;
+                    }
+                    if (ren.toneMapping !== T.ACESFilmicToneMapping) ren.toneMapping = T.ACESFilmicToneMapping;
+                    comp.render();
+                } else {
+                    if (ren.toneMapping !== T.NoToneMapping) ren.toneMapping = T.NoToneMapping;
+                    ren.render(scene, cam);
+                }
             },
 
             resize(w, h) {
@@ -2161,7 +2472,7 @@
                     for (const inst of _instances) { _activeInstance = inst; break; }
                 }
                 if (_instances.size === 0) _midiReleaseSession();
-                teardown();
+                teardown();   // includes _removeHud()
                 highwayCanvas = null;
             },
 
@@ -2221,6 +2532,8 @@
         scoreOf,
         judgeHit,
         sweepMissed,
+        readFxSettings,
+        FX_DEFAULTS,
     };
 
     // Headless verification hook: lets Playwright drive synthetic note-ons

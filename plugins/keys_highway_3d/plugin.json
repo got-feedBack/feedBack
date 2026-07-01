@@ -6,6 +6,10 @@
   "type": "visualization",
   "bundled": true,
   "script": "screen.js",
+  "settings": {
+    "html": "settings.html",
+    "category": "graphics"
+  },
   "standards": [
     "capability-pipelines.v1",
     "plugin-runtime-idempotent.v1"
