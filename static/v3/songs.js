@@ -831,7 +831,7 @@
     // Per-card action menu, built from the ui.library-card-injection registry
     // (core Edit/Retune + any plugin-registered actions).
     let _closeCardMenu = null;   // tears down the currently-open card menu + its document closer
-    function openCardMenu(cardEl, song, anchorBtn) {
+    function openCardMenu(cardEl, song, anchorBtn, pos) {
         // Fully close any already-open menu first — removing just the DOM node
         // (as before) would orphan its document-level click closer.
         if (_closeCardMenu) _closeCardMenu();
@@ -841,7 +841,9 @@
         // Undefined placement defaults to the menu.
         const items = (reg ? reg.list(song) : []).filter((a) => !a.placement || a.placement === 'menu');
         const menu = document.createElement('div');
-        menu.className = 'v3-card-menu absolute top-10 right-2 z-30 min-w-[10rem] bg-fb-card border border-fb-border/60 rounded-lg shadow-xl py-1 text-sm';
+        // pos (right-click) positions the menu at the pointer via `fixed`;
+        // the ⋮ button keeps the absolute top-right anchor.
+        menu.className = 'v3-card-menu z-30 min-w-[10rem] bg-fb-card border border-fb-border/60 rounded-lg shadow-xl py-1 text-sm ' + (pos ? 'fixed' : 'absolute top-10 right-2');
         // Multi-chart entries (P5d): a grouped grid row carries chart_count +
         // work_key (P5a annotation), so the menu knows inline whether this card
         // stands for versions. Local library only — the work API is local.
@@ -860,6 +862,7 @@
             ...(state.provider === 'local' && song.is_split
                 ? [{ id: '__unsplit', label: 'Rejoin other versions' }] : []),
             { id: '__playlist', label: 'Add to playlist' },
+            { id: '__save', label: 'Save for later' },
             ...items.map((a) => ({ id: a.id, label: a.label, destructive: a.destructive, enabled: a.enabled, plugin: a.pluginId })),
         ];
         menu.innerHTML = rows.map((r) =>
@@ -867,7 +870,17 @@
             (r.enabled === false ? 'opacity-40 cursor-not-allowed ' : '') +
             (r.destructive ? 'text-fb-accent' : 'text-fb-text') + '">' + esc(r.label) +
             (r.plugin && r.plugin !== 'core' ? '<span class="text-[10px] text-fb-textDim ml-1">' + esc(r.plugin) + '</span>' : '') + '</button>').join('');
-        cardEl.appendChild(menu);
+        if (pos) {
+            // Right-click: position the menu at the pointer (fixed, viewport-
+            // relative), clamped so it never spills off the right/bottom edge.
+            document.body.appendChild(menu);
+            const x = Math.min(pos.x, window.innerWidth - menu.offsetWidth - 8);
+            const y = Math.min(pos.y, window.innerHeight - menu.offsetHeight - 8);
+            menu.style.left = Math.max(8, x) + 'px';
+            menu.style.top = Math.max(8, y) + 'px';
+        } else {
+            cardEl.appendChild(menu);
+        }
         // Tear down BOTH the menu and its document-level closer together, so a
         // menu-item click doesn't leave the closer attached (it would otherwise
         // leak, retaining this menu's closures until the next document click).
@@ -888,6 +901,7 @@
                 return;
             }
             if (id === '__playlist') { await addFilenamesToPlaylist([song.filename]); return; }
+            if (id === '__save') { if (window.v3Saved) await window.v3Saved.toggle(song.filename); return; }
             if (reg) await reg.run(id, song, { source: 'v3-songs' });
         }));
         // Tree rows ride the (ungrouped) artists endpoint, so they don't carry
@@ -1167,6 +1181,8 @@
                 playCard(playTarget);   // local → play; unsynced remote → sync then play
             }));
             el.querySelector('[data-menu]')?.addEventListener('click', (e) => { e.stopPropagation(); openCardMenu(el, song, e.currentTarget); });
+            // Native right-click opens the same overflow menu at the pointer.
+            el.addEventListener('contextmenu', (e) => { e.preventDefault(); openCardMenu(el, song, null, { x: e.clientX, y: e.clientY }); });
             el.querySelectorAll('[data-arr]').forEach((ab) => ab.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const idx = ab.getAttribute('data-arr');
