@@ -71,6 +71,13 @@ tunes one of these, mirror the change here (and in `keys_highway_3d`):
   mapping switch in `draw()`; addons dynamic-imported from
   `/static/vendor/three/addons/` (no CDN fallback — direct render is the
   graceful degrade)
+- `_sparkBurst()` / `_sparkUpdate()` — pooled additive Points hit sparks
+  (pool 160 here vs the guitar's 256)
+- `_makeGaussTex()` — soft-falloff DataTexture for the additive lane-flash
+  quads
+- `_timingHex()` — early/late/on-time feedback colors (green/cyan/amber)
+- `_ssActive()` — host splitscreen probe (minus the guitar's focus-API
+  checks, which it needs for input routing and we don't)
 
 ## Why a separate plugin (vs. drum mode inside highway_3d)?
 

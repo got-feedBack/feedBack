@@ -297,6 +297,43 @@
     }
     _rebuildPieceToLaneMap(_activeKit);
 
+    // Build a horizontal gaussian DataTexture for additive flash quads.
+    // PORTED FROM highway_3d/screen.js _makeGaussTex — keep in sync.
+    // Returns a W×1 RGBA texture where alpha follows exp(-0.5*(u−0.5)²/σ²),
+    // peaking at 1.0 in the centre; σ=0.28 keeps ~0.20 alpha at the edges so
+    // the additive falloff fades gradually instead of cutting off sharply.
+    function _makeGaussTex(ThreeLib, w = 128, sigma = 0.28) {
+        const data = new Uint8Array(w * 4);
+        for (let i = 0; i < w; i++) {
+            const u = i / (w - 1);
+            const d = (u - 0.5) / sigma;
+            const v = Math.exp(-0.5 * d * d);
+            const a = Math.round(v * 255);
+            data[i * 4]     = 255;
+            data[i * 4 + 1] = 255;
+            data[i * 4 + 2] = 255;
+            data[i * 4 + 3] = a;
+        }
+        const tex = new ThreeLib.DataTexture(data, w, 1, ThreeLib.RGBAFormat);
+        // LinearFilter on both axes so the quad interpolates smoothly when
+        // scaled — the default NearestFilter causes visible banding.
+        tex.magFilter = ThreeLib.LinearFilter;
+        tex.minFilter = ThreeLib.LinearFilter;
+        tex.needsUpdate = true;
+        return tex;
+    }
+
+    // Classify a hit's timing against its matched chart note.
+    // delta = note.t - now: positive → struck before the note crossed the
+    // line (EARLY), negative → after (LATE). Within 40% of the hit window
+    // either way reads as on-time — same proportions as highway_3d's
+    // timing verdicts.
+    function _classifyTiming(delta, tol) {
+        if (!Number.isFinite(delta) || !Number.isFinite(tol)) return 'OK';
+        if (Math.abs(delta) <= tol * 0.4) return 'OK';
+        return delta > 0 ? 'EARLY' : 'LATE';
+    }
+
     // Resolve a drum_tab hit's visual variant. Order matters: ghost wins over
     // accent (ghost notes are intentionally quiet so their flag dominates),
     // flam adds the leading grace disc, ride_bell adds the bright dot. A
@@ -1074,6 +1111,10 @@
     // Everything defaults ON — the settings screen is the opt-out.
     const FX_DEFAULTS = {
         bloom: true,
+        sparks: true,     // pooled hit-spark bursts (Points cloud)
+        hitFx: 0.7,       // 0–1 master intensity for lane flashes / kick pulse
+        timingFx: true,   // early/late/on-time coloring of hit feedback
+        streakFx: true,   // consecutive-hit escalation (bigger spark bursts)
     };
     const FX_LS_PREFIX = 'drum_h3d_bg_';
 
@@ -1091,7 +1132,10 @@
                     else if (raw === '0' || raw === 'false') fx[k] = false;
                 } else {
                     const n = parseFloat(raw);
-                    if (Number.isFinite(n)) fx[k] = n;
+                    // All numeric FX keys are 0-1 sliders — clamp so a
+                    // corrupt/foreign write can't overdrive opacities
+                    // or the camera pulse.
+                    if (Number.isFinite(n)) fx[k] = Math.min(1, Math.max(0, n));
                 }
             }
         } catch (_) { /* localStorage unavailable — use defaults */ }
@@ -1111,6 +1155,7 @@
         } else {
             v = Number(value);
             if (!Number.isFinite(v)) return;
+            v = Math.min(1, Math.max(0, v));   // all numeric FX keys are 0-1
         }
         try {
             localStorage.setItem(FX_LS_PREFIX + key, typeof v === 'boolean' ? (v ? '1' : '0') : String(v));
@@ -1148,6 +1193,21 @@
         let _bloomW = 0, _bloomH = 0;
         let _bloomGen = 0;   // bumped by _bloomDispose so stale loads no-op
 
+        // Hit-FX state. Sparks are PORTED FROM highway_3d (keep in sync);
+        // _SPARK_N is 160 here vs the guitar's 256 — a drum chart produces
+        // fewer simultaneous verified hits than a strummed chord chart.
+        const _SPARK_N = 160;
+        let _sparkPts = null, _sparkPos = null, _sparkCol = null, _sparkVel = null, _sparkLife = null;
+        let _fxLastWall = 0;          // wall clock for FX integration (sparks, pulse decay)
+        let _kickPulse = 0;           // kick-hit camera-dip + floor-wash envelope
+        let _camBaseH = 0, _camBaseD = 0;  // positionCamera's unpulsed pose
+        let _gaussTex = null;         // shared soft-falloff texture for flash quads
+        let _laneFlashQuads = [];     // pooled additive quad per hand lane (z=0)
+        let _kickFlashQuad = null;    // full-width flash quad for the kick bar
+        let _floorFlash = null;       // wide amber wash pulsed on kick hits
+        let laneStripeMats = [];      // buildLanes stripe materials (approach highlight)
+        let _laneProx = [];           // per-frame max approach proximity per lane
+
         // Scene groups / pooled meshes.
         let laneGroup = null;       // lane stripes + dividers
         let kitMapGroup = null;     // top-of-highway kit silhouette
@@ -1178,6 +1238,8 @@
         let gSnareStripe = null;
         let gBellDot = null;
         let gFlamGrace = null;
+        let gOpenRing = null;       // open hi-hat ring geometry
+        let mOpenRing = null;       // open hi-hat ring material
 
         // Demo loop clock — anchored to performance.now() so animation
         // proceeds regardless of audio playback state.
@@ -1273,16 +1335,128 @@
         // Wallclock decay window — matches the 2D plugin's 300 ms flash.
         const FLASH_MS = 300;
 
+        // Timing → color (PORTED FROM highway_3d _timingHex — keep in sync):
+        // on-time green, early cyan, late amber; green when timing is
+        // unknown or the user turned timing colors off.
+        function _timingHex(ts) {
+            if (!fx.timingFx || !ts || ts === 'OK') return 0x22ff88;
+            if (ts === 'EARLY') return 0x35d6ff;
+            if (ts === 'LATE')  return 0xffb84d;
+            return 0x22ff88;
+        }
+
+        // Hit sparks (PORTED FROM highway_3d _sparkBurst/_sparkUpdate — keep
+        // in sync): a pooled additive Points cloud; a small radial burst with
+        // an upward kick fires at the struck lane, integrated with gravity +
+        // color fade in draw().
+        function _sparkBurst(x, y, z, hex, count) {
+            if (!_sparkPts || count <= 0) return;
+            const r = ((hex >> 16) & 255) / 255, g = ((hex >> 8) & 255) / 255, b = (hex & 255) / 255;
+            let made = 0;
+            for (let i = 0; i < _SPARK_N && made < count; i++) {
+                if (_sparkLife[i] > 0) continue;
+                const j = i * 3, ang = Math.random() * Math.PI * 2, sp = (5 + Math.random() * 12) * K;
+                _sparkPos[j] = x; _sparkPos[j + 1] = y; _sparkPos[j + 2] = z;
+                _sparkVel[j] = Math.cos(ang) * sp; _sparkVel[j + 1] = (12 + Math.random() * 24) * K; _sparkVel[j + 2] = Math.sin(ang) * sp * 0.55;
+                _sparkCol[j] = r; _sparkCol[j + 1] = g; _sparkCol[j + 2] = b;
+                _sparkLife[i] = 0.30 + Math.random() * 0.16; made++;
+            }
+        }
+        function _sparkUpdate(dt) {
+            if (!_sparkPts) return;
+            const grav = 55 * K; let any = false;
+            for (let i = 0; i < _SPARK_N; i++) {
+                if (_sparkLife[i] <= 0) continue;
+                const j = i * 3;
+                _sparkLife[i] -= dt;
+                if (_sparkLife[i] <= 0) { _sparkCol[j] = _sparkCol[j + 1] = _sparkCol[j + 2] = 0; continue; }
+                any = true;
+                _sparkVel[j + 1] -= grav * dt;
+                _sparkPos[j] += _sparkVel[j] * dt; _sparkPos[j + 1] += _sparkVel[j + 1] * dt; _sparkPos[j + 2] += _sparkVel[j + 2] * dt;
+                const fade = 1 - Math.min(1, dt * 3.2);
+                _sparkCol[j] *= fade; _sparkCol[j + 1] *= fade; _sparkCol[j + 2] *= fade;
+            }
+            _sparkPts.geometry.attributes.position.needsUpdate = true;
+            _sparkPts.geometry.attributes.color.needsUpdate = true;
+            _sparkPts.visible = any;
+        }
+
+        // Fire the 3D feedback for a struck lane: spark burst (timing-colored
+        // for hand lanes, always-amber for the kick, whose identity color IS
+        // amber) + the kick camera/floor pulse. Wrong hits get no sparks —
+        // the red lane flash from _applyLaneFlashes carries that verdict.
+        function _spawnHitFx(lane, ts, wrong) {
+            const laneCfg = LANES[lane];
+            if (!laneCfg || wrong) return;
+            let count = 10;
+            if (fx.streakFx) count += Math.round(8 * Math.min(1, _streak / 16));
+            if (laneCfg.kind === 'kick') {
+                _kickPulse = 1;
+                if (fx.sparks) {
+                    for (const sx of [-KICK_W * 0.3, 0, KICK_W * 0.3]) {
+                        _sparkBurst(sx, KICK_H + 1 * K, 0, KICK_COLOR, Math.max(6, count - 4));
+                    }
+                }
+            } else if (fx.sparks) {
+                const x = LANE_X0 + lane * LANE_GAP;
+                const y = (laneCfg.kind === 'cymbal' ? CYMBAL_H : DISC_H) + 1 * K;
+                _sparkBurst(x, y, 0, _timingHex(ts), count);
+            }
+        }
+
         function _applyLaneFlashes() {
-            // The visual consumer (pooled additive lane-flash quads) lands in
-            // the hit-FX parity PR; chart notes already turn green/red on
-            // hit/miss via placeNote. Until then just drop expired entries so
-            // the buffer doesn't grow forever if MIDI hits arrive while no
-            // chart is loaded.
+            // Drop expired entries first so the buffer can't grow forever if
+            // MIDI hits arrive while no chart is loaded.
             const now = performance.now();
             while (_laneFlashes.length && now - _laneFlashes[0].wall > FLASH_MS) {
                 _laneFlashes.shift();
             }
+            if (!_laneFlashQuads.length && !_kickFlashQuad) return;
+            // Reset, then drive each lane's quad from its strongest live
+            // flash. Additive quads with the shared gauss falloff read as a
+            // brief light-up of the struck lane at the hit line.
+            for (const q of _laneFlashQuads) if (q) q.material.opacity = 0;
+            if (_kickFlashQuad) _kickFlashQuad.material.opacity = 0;
+            if (!(fx.hitFx > 0)) return;
+            for (const f of _laneFlashes) {
+                if (f.lane === -1) continue;   // unknown piece — no lane to flash
+                const laneCfg = LANES[f.lane];
+                if (!laneCfg) continue;
+                const quad = laneCfg.kind === 'kick' ? _kickFlashQuad : _laneFlashQuads[f.lane];
+                if (!quad) continue;
+                const age = (now - f.wall) / FLASH_MS;
+                const strength = Math.max(0, 1 - age) * 0.85 * fx.hitFx;
+                if (strength > quad.material.opacity) {
+                    quad.material.opacity = strength;
+                    quad.material.color.setHex(f.kind === 'wrong' ? 0xff4444 : _timingHex(f.ts));
+                }
+            }
+        }
+
+        // Dispose every hit-FX GPU resource. Called from teardown() AND
+        // _disposeScene() — like the bloom composer, all of these are bound
+        // to the renderer being dropped; initScene rebuilds them.
+        function _disposeFxObjects() {
+            if (_sparkPts) {
+                try { _sparkPts.geometry.dispose(); _sparkPts.material.dispose(); } catch (_) {}
+                _sparkPts = null;
+                _sparkPos = _sparkCol = _sparkVel = _sparkLife = null;
+            }
+            for (const q of _laneFlashQuads) {
+                if (q) { try { q.geometry.dispose(); q.material.dispose(); } catch (_) {} }
+            }
+            _laneFlashQuads = [];
+            if (_kickFlashQuad) {
+                try { _kickFlashQuad.geometry.dispose(); _kickFlashQuad.material.dispose(); } catch (_) {}
+                _kickFlashQuad = null;
+            }
+            if (_floorFlash) {
+                try { _floorFlash.geometry.dispose(); _floorFlash.material.dispose(); } catch (_) {}
+                _floorFlash = null;
+            }
+            if (_gaussTex) { try { _gaussTex.dispose(); } catch (_) {} _gaussTex = null; }
+            laneStripeMats = [];   // owned + disposed with laneGroup
+            _kickPulse = 0;
         }
 
         /* ── Bloom (PORTED FROM highway_3d/screen.js _bloomEnsure — keep in
@@ -1387,13 +1561,18 @@
             }
 
             if (!_latestNotes || _latestNotes.length === 0) {
+                // Free-play (no chart loaded): no scoring, but still give
+                // the pad strike its lane flash + sparks so drumming along
+                // to the demo pattern feels alive.
                 _laneFlashes.push({ lane, wall: performance.now(), kind: 'hit' });
+                _spawnHitFx(lane, null, false);
                 return;
             }
 
             const t = _latestTime;
 
             let foundHit = false;
+            let matchedDelta = 0;   // note.t - now of the matched note (timing verdict)
             for (const n of _latestNotes) {
                 if (n.t > t + HIT_TOLERANCE_S) break;
                 if (n.t < t - HIT_TOLERANCE_S) continue;
@@ -1402,6 +1581,7 @@
                 if (_hitKeys.has(key)) continue;
                 _hitKeys.add(key);
                 foundHit = true;
+                matchedDelta = n.t - t;
                 break;
             }
 
@@ -1409,7 +1589,9 @@
                 _hits++;
                 _streak++;
                 if (_streak > _bestStreak) _bestStreak = _streak;
-                _laneFlashes.push({ lane, wall: performance.now(), kind: 'hit' });
+                const ts = _classifyTiming(matchedDelta, HIT_TOLERANCE_S);
+                _laneFlashes.push({ lane, wall: performance.now(), kind: 'hit', ts });
+                _spawnHitFx(lane, ts, false);
             } else {
                 _misses++;
                 _streak = 0;
@@ -1612,6 +1794,73 @@
                 DISC_H,
                 24,
             );
+            // Open hi-hat: thin warm ring around the gem (closed = bare gem).
+            gOpenRing = new T.RingGeometry(CYMBAL_R * 1.05, CYMBAL_R * 1.25, 24);
+            mOpenRing = new T.MeshBasicMaterial({
+                color: 0xffe9a8,
+                transparent: true,
+                opacity: 0.85,
+                side: T.DoubleSide,
+            });
+
+            // Hit sparks (PORTED FROM highway_3d): pooled additive Points
+            // cloud, burst on verified hits, integrated in draw().
+            _sparkPos = new Float32Array(_SPARK_N * 3); _sparkCol = new Float32Array(_SPARK_N * 3);
+            _sparkVel = new Float32Array(_SPARK_N * 3); _sparkLife = new Float32Array(_SPARK_N);
+            {
+                const sg = new T.BufferGeometry();
+                sg.setAttribute('position', new T.BufferAttribute(_sparkPos, 3).setUsage(T.DynamicDrawUsage));
+                sg.setAttribute('color', new T.BufferAttribute(_sparkCol, 3).setUsage(T.DynamicDrawUsage));
+                const sm = new T.PointsMaterial({ size: 1.0 * K, vertexColors: true, transparent: true, opacity: 0.8, depthWrite: false, blending: T.AdditiveBlending, sizeAttenuation: true });
+                _sparkPts = new T.Points(sg, sm); _sparkPts.frustumCulled = false; _sparkPts.renderOrder = 8;
+                scene.add(_sparkPts);
+            }
+
+            // Lane-flash quads: one pooled additive quad per hand lane plus a
+            // full-width one for the kick, parked at the hit line with the
+            // shared gauss falloff. _applyLaneFlashes drives color/opacity —
+            // this resurrects the lane-flash feedback that was removed when
+            // note recoloring landed, now as real light instead of boxes.
+            _gaussTex = _makeGaussTex(T, 128, 0.28);
+            _laneFlashQuads = [];
+            for (let i = 0; i < LANE_COUNT; i++) {
+                const g = new T.PlaneGeometry(LANE_GAP * 0.9, 12 * K);
+                const m = new T.MeshBasicMaterial({
+                    color: 0xffffff, map: _gaussTex, transparent: true, opacity: 0,
+                    blending: T.AdditiveBlending, depthWrite: false,
+                });
+                const quad = new T.Mesh(g, m);
+                quad.rotation.x = -Math.PI / 2;
+                quad.position.set(LANE_X0 + i * LANE_GAP, 0.06 * K, 0);
+                quad.renderOrder = 7;
+                scene.add(quad);
+                _laneFlashQuads.push(quad);
+            }
+            {
+                const g = new T.PlaneGeometry(floorW * 0.92, 8 * K);
+                const m = new T.MeshBasicMaterial({
+                    color: KICK_COLOR, map: _gaussTex, transparent: true, opacity: 0,
+                    blending: T.AdditiveBlending, depthWrite: false,
+                });
+                _kickFlashQuad = new T.Mesh(g, m);
+                _kickFlashQuad.rotation.x = -Math.PI / 2;
+                _kickFlashQuad.position.set(0, 0.05 * K, 0);
+                _kickFlashQuad.renderOrder = 7;
+                scene.add(_kickFlashQuad);
+            }
+            // Kick pulse floor wash — wide, faint, pulsed in draw().
+            {
+                const g = new T.PlaneGeometry(floorW, 40 * K);
+                const m = new T.MeshBasicMaterial({
+                    color: KICK_COLOR, map: _gaussTex, transparent: true, opacity: 0,
+                    blending: T.AdditiveBlending, depthWrite: false,
+                });
+                _floorFlash = new T.Mesh(g, m);
+                _floorFlash.rotation.x = -Math.PI / 2;
+                _floorFlash.position.set(0, 0.04 * K, -6 * K);
+                _floorFlash.renderOrder = 6;
+                scene.add(_floorFlash);
+            }
 
             // Halo and ghost ring materials — additive emissive, palette-agnostic.
             mAccentRing = new T.MeshBasicMaterial({
@@ -1649,12 +1898,17 @@
             // tilt down so the lanes still fit the frame.
             const h = (45 + 180 * a) * K;
             const d = (60 + 60 * (1 - a)) * K;
+            // Remember the unpulsed pose — the kick pulse in draw() dips
+            // cam.position.y relative to this and must not accumulate.
+            _camBaseH = h;
+            _camBaseD = d;
             cam.position.set(0, h, d);
             cam.lookAt(0, 0, -AHEAD * TS * 0.45);
         }
 
         function buildLanes(_floorW, floorD) {
             laneGroup = new T.Group();
+            laneStripeMats = [];
             // Alternating lane stripes for the 7 hand lanes (same teal/blue
             // as highway_3d, but a notch darker so the brighter discs pop).
             const colors = [0x2d5476, 0x42759d];
@@ -1670,6 +1924,10 @@
                 stripe.rotation.x = -Math.PI / 2;
                 stripe.position.set(x, -0.25 * K, -floorD / 2 + BEHIND * TS);
                 laneGroup.add(stripe);
+                // Kept for the per-frame approach highlight (rebuildNotes
+                // raises a lane's stripe opacity as its next note nears the
+                // hit line).
+                laneStripeMats.push(m);
             }
             scene.add(laneGroup);
         }
@@ -1741,7 +1999,7 @@
 
         /* -- per-frame note rendering ----------------------------------- */
 
-        function buildNoteMesh(lane, variant) {
+        function buildNoteMesh(lane, variant, open) {
             const laneCfg = LANES[lane];
             const group = new T.Group();
 
@@ -1820,10 +2078,16 @@
                 gem.scale.setScalar(scale);
                 group.add(gem);
 
-                if (laneCfg.subKind === 'hihat') {
-                    // Open-hat hint: a thin ring around the gem (closed-hat
-                    // is the bare gem). For the mockup we don't differentiate
-                    // open/closed yet — TODO: drive from variant.
+                if (laneCfg.subKind === 'hihat' && open) {
+                    // Open-hat: a thin warm ring around the gem (closed-hat
+                    // stays the bare gem) — mirrors standard drum notation's
+                    // "o" marking. Shared geometry/material: zero per-frame
+                    // GC despite the every-frame notesGroup rebuild.
+                    const ring = new T.Mesh(gOpenRing, mOpenRing);
+                    ring.rotation.x = -Math.PI / 2;
+                    ring.position.y = CYMBAL_H * 0.55;
+                    ring.scale.setScalar(scale);
+                    group.add(ring);
                 }
                 if (laneCfg.subKind === 'ride' && variant === 'bell') {
                     const dot = new T.Mesh(gBellDot, mBellDot);
@@ -1856,7 +2120,9 @@
             for (const h of hits) {
                 const lane = PIECE_TO_LANE[h.p];
                 if (lane === undefined) continue;  // unknown piece — skip silently
-                out.push({ lane, t: +h.t || 0, variant: _variantForHit(h) });
+                // `open` is orthogonal to variant so an accented or flammed
+                // open hat keeps both cues (ring + halo / grace disc).
+                out.push({ lane, t: +h.t || 0, variant: _variantForHit(h), open: h.p === 'hh_open' });
             }
             out.sort((a, b) => a.t - b.t);
             return out;
@@ -1869,6 +2135,13 @@
                 const c = notesGroup.children.pop();
                 disposeMeshTree(c);
             }
+
+            // Approach highlight: the visible-window walks below record each
+            // hand lane's strongest proximity; _applyApproach() then raises
+            // that lane's stripe so the eye is drawn to where the next hit
+            // lands.
+            if (_laneProx.length !== LANE_COUNT) _laneProx = new Array(LANE_COUNT).fill(0);
+            else _laneProx.fill(0);
 
             // Real-data path: when the active sloppak ships a drum_tab,
             // bundle.drumTab is populated by static/highway.js (slopsmith
@@ -1971,12 +2244,16 @@
             const x = laneCfg.kind === 'kick' ? 0 : (LANE_X0 + note.lane * LANE_GAP);
             const y = laneCfg.kind === 'kick' ? 0 : DISC_H * 0.5;
 
-            const mesh = buildNoteMesh(note.lane, note.variant);
+            const mesh = buildNoteMesh(note.lane, note.variant, note.open);
             mesh.position.set(x, y, z);
 
             // Brighten emissive as the note approaches the hit line.
             // 0 at AHEAD, peak at 0, then linger briefly past it.
             const proximity = Math.max(0, 1 - Math.abs(dt) / 0.6);
+            // Feed the lane approach highlight (strongest note wins per frame).
+            if (note.lane < LANE_COUNT && proximity > (_laneProx[note.lane] || 0)) {
+                _laneProx[note.lane] = proximity;
+            }
             if (laneCfg.kind === 'drum' && note.variant !== 'ghost' && mDrumByLane[note.lane]) {
                 // Subtle pulse via emissiveIntensity — palette-driven base + pulse.
                 mDrumByLane[note.lane].emissiveIntensity = 0.45 + proximity * 0.35;
@@ -2096,6 +2373,7 @@
         // initScene() on false (the scene would draw into nothing).
         function _disposeScene() {
             _bloomDispose();   // composer is bound to the renderer we're about to replace
+            _disposeFxObjects();
             if (notesGroup) {
                 while (notesGroup.children.length) {
                     disposeMeshTree(notesGroup.children.pop());
@@ -2138,6 +2416,8 @@
             if (gSnareStripe) gSnareStripe.dispose();
             if (gBellDot) gBellDot.dispose();
             if (gFlamGrace) gFlamGrace.dispose();
+            if (gOpenRing) gOpenRing.dispose();
+            if (mOpenRing) mOpenRing.dispose();
             if (ren) ren.dispose();
             scene = cam = ren = lights = laneGroup = kitMapGroup = notesGroup = null;
             mDrumByLane = mCymbalByLane = mKick = mKickHit = mKickMiss = null;
@@ -2145,6 +2425,7 @@
             mAccentRing = mGhostRing = mSnareStripe = mBellDot = null;
             gDrumDisc = gCymbalGem = gKickBar = null;
             gAccentRing = gGhostRing = gSnareStripe = gBellDot = gFlamGrace = null;
+            gOpenRing = mOpenRing = null;
             // Re-create the renderer against the existing canvas. initScene
             // populates everything we just disposed.
             try {
@@ -2164,6 +2445,7 @@
 
         function teardown() {
             _bloomDispose();
+            _disposeFxObjects();
             // HUD cleanup lives here (not only destroy): init() re-runs
             // teardown() for renderer re-initialization, possibly against a
             // different canvas — a stale _hudEl would both linger in the old
@@ -2210,6 +2492,8 @@
             if (gSnareStripe) gSnareStripe.dispose();
             if (gBellDot) gBellDot.dispose();
             if (gFlamGrace) gFlamGrace.dispose();
+            if (gOpenRing) gOpenRing.dispose();
+            if (mOpenRing) mOpenRing.dispose();
             if (ren) ren.dispose();
             scene = cam = ren = lights = laneGroup = kitMapGroup = notesGroup = null;
             mDrumByLane = mCymbalByLane = mKick = mKickHit = mKickMiss = null;
@@ -2217,6 +2501,7 @@
             mAccentRing = mGhostRing = mSnareStripe = mBellDot = null;
             gDrumDisc = gCymbalGem = gKickBar = null;
             gAccentRing = gGhostRing = gSnareStripe = gBellDot = gFlamGrace = null;
+            gOpenRing = mOpenRing = null;
             _isReady = false;
         }
 
@@ -2318,6 +2603,28 @@
                     applySize(highwayCanvas.clientWidth, highwayCanvas.clientHeight);
                 }
                 rebuildNotes(bundle);
+                // Wall-clock FX step (sparks, kick pulse) — decoupled from
+                // song time so effects keep settling while paused/seeking.
+                {
+                    const nowMs = performance.now();
+                    const fdt = _fxLastWall === 0 ? 1 / 60 : Math.min(0.05, (nowMs - _fxLastWall) / 1000);
+                    _fxLastWall = nowMs;
+                    _sparkUpdate(fdt);
+                    if (_kickPulse > 0.001) {
+                        _kickPulse *= Math.exp(-fdt * 7);
+                        cam.position.y = _camBaseH - 0.8 * K * _kickPulse * fx.hitFx;
+                        if (_floorFlash) _floorFlash.material.opacity = 0.25 * _kickPulse * fx.hitFx;
+                    } else if (_kickPulse !== 0) {
+                        _kickPulse = 0;
+                        cam.position.y = _camBaseH;
+                        if (_floorFlash) _floorFlash.material.opacity = 0;
+                    }
+                }
+                // Approach highlight: raise each lane stripe toward its next
+                // note (accumulated by the rebuildNotes walk above).
+                for (let i = 0; i < laneStripeMats.length; i++) {
+                    laneStripeMats[i].opacity = 0.32 + 0.28 * (_laneProx[i] || 0) * fx.hitFx;
+                }
                 _applyLaneFlashes();
                 _refreshHud();
                 // Bloom path (PORTED FROM highway_3d): composer + ACES tone
@@ -2360,6 +2667,25 @@
             // Exposed for module-level MIDI router. The receiver runs on
             // every note-on dispatched to _activeInstance.
             _handleDrumHit,
+            // Headless FX-state probe for window.__drumHwTest — reports
+            // whether sparks are live, the strongest lane-flash opacity, and
+            // the kick-pulse envelope so tests can assert the FX pipeline
+            // without pixel-diffing a scrolling scene.
+            _fxProbe() {
+                let maxFlash = 0;
+                for (const q of _laneFlashQuads) {
+                    if (q && q.material.opacity > maxFlash) maxFlash = q.material.opacity;
+                }
+                if (_kickFlashQuad && _kickFlashQuad.material.opacity > maxFlash) {
+                    maxFlash = _kickFlashQuad.material.opacity;
+                }
+                return {
+                    sparksLive: !!(_sparkPts && _sparkPts.visible),
+                    maxFlash,
+                    kickPulse: _kickPulse,
+                    flashCount: _laneFlashes.length,
+                };
+            },
         };
         return instance;
     }
@@ -2404,9 +2730,27 @@
     // free to call).
     window.slopsmithViz_drum_highway_3d.__test = {
         _variantForHit,
+        _classifyTiming,
         readFxSettings,
         FX_DEFAULTS,
         MIDI_TO_PIECE,
         HIT_TOLERANCE_S,
+    };
+
+    // Headless verification hook (keys __keysHwTest pattern): lets
+    // Playwright fire synthetic pad hits through the full hit-detection +
+    // FX path without a physical MIDI kit, and read the live FX state back
+    // (the demo pattern scrolls every frame, so pixel-diff assertions can't
+    // distinguish FX from scroll — this probe can).
+    window.__drumHwTest = {
+        injectHit(midiNote, velocity) {
+            if (_activeInstance && typeof _activeInstance._handleDrumHit === 'function') {
+                _activeInstance._handleDrumHit(midiNote, velocity == null ? 100 : velocity);
+            }
+        },
+        probe() {
+            return (_activeInstance && typeof _activeInstance._fxProbe === 'function')
+                ? _activeInstance._fxProbe() : null;
+        },
     };
 })();

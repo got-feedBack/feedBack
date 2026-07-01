@@ -92,3 +92,26 @@ test('MIDI map: open hi-hat is a first-class piece (46 → hh_open)', () => {
     // ±50 ms window matches the 2D drums plugin.
     assert.equal(HIT_TOLERANCE_S, 0.05);
 });
+
+test('_classifyTiming: OK band is 40% of the window, sign maps early/late', () => {
+    const { _classifyTiming, HIT_TOLERANCE_S } = load().__test;
+    const tol = HIT_TOLERANCE_S;         // 0.05
+    assert.equal(_classifyTiming(0, tol), 'OK');
+    assert.equal(_classifyTiming(tol * 0.4, tol), 'OK');    // boundary inclusive
+    assert.equal(_classifyTiming(-tol * 0.4, tol), 'OK');
+    // delta = note.t - now: positive → struck before the note → EARLY.
+    assert.equal(_classifyTiming(tol * 0.41, tol), 'EARLY');
+    assert.equal(_classifyTiming(-tol * 0.41, tol), 'LATE');
+    assert.equal(_classifyTiming(tol, tol), 'EARLY');
+    assert.equal(_classifyTiming(-tol, tol), 'LATE');
+    // Degenerate inputs read as on-time rather than throwing.
+    assert.equal(_classifyTiming(NaN, tol), 'OK');
+});
+
+test('FX defaults: hit-FX controls ship enabled', () => {
+    const { FX_DEFAULTS } = load().__test;
+    assert.equal(FX_DEFAULTS.sparks, true);
+    assert.equal(FX_DEFAULTS.timingFx, true);
+    assert.equal(FX_DEFAULTS.streakFx, true);
+    assert.equal(FX_DEFAULTS.hitFx, 0.7);
+});
