@@ -3795,6 +3795,39 @@ class MetadataDB:
                            "song_count": sum(len(a["songs"]) for a in albums), "albums": albums})
         return result, total_artists
 
+    def query_albums(self, q="", favorites_only=False, format_filter="",
+                     artist_filter="", album_filter="",
+                     arrangements_has=None, arrangements_lacks=None,
+                     stems_has=None, stems_lacks=None,
+                     has_lyrics=None, tunings=None, mastery=None,
+                     naming_mode="legacy", page=0, size=120):
+        """Distinct (artist, album) groups with a track count + a representative
+        cover song, for the album-condensed browse (paged by album). Rows with no
+        album name are excluded -- they can't form an album card. Same filters as
+        query_page."""
+        where, params = self._build_where(
+            q=q, favorites_only=favorites_only, format_filter=format_filter,
+            artist_filter=artist_filter, album_filter=album_filter,
+            arrangements_has=arrangements_has, arrangements_lacks=arrangements_lacks,
+            stems_has=stems_has, stems_lacks=stems_lacks,
+            has_lyrics=has_lyrics, tunings=tunings, mastery=mastery,
+            naming_mode=naming_mode,
+        )
+        awhere = where + " AND album IS NOT NULL AND album != ''"
+        total = self.conn.execute(
+            f"SELECT COUNT(*) FROM (SELECT 1 FROM songs {awhere} "
+            f"GROUP BY artist COLLATE NOCASE, album COLLATE NOCASE)", params
+        ).fetchone()[0]
+        rows = self.conn.execute(
+            f"SELECT artist, album, COUNT(*) AS n, MIN(filename) AS cover "
+            f"FROM songs {awhere} "
+            f"GROUP BY artist COLLATE NOCASE, album COLLATE NOCASE "
+            f"ORDER BY artist COLLATE NOCASE, album COLLATE NOCASE LIMIT ? OFFSET ?",
+            params + [size, page * size]
+        ).fetchall()
+        return ([{"artist": r[0] or "Unknown Artist", "album": r[1] or "Unknown Album",
+                  "count": int(r[2] or 0), "cover": r[3]} for r in rows], total)
+
     def query_stats(self, favorites_only: bool = False,
                     q: str = "", format_filter: str = "",
                     artist_filter: str = "",
@@ -4213,6 +4246,9 @@ class LocalLibraryProvider:
     def query_artists(self, **kwargs) -> tuple[list[dict], int]:
         return self._db.query_artists(**kwargs)
 
+    def query_albums(self, **kwargs) -> tuple[list[dict], int]:
+        return self._db.query_albums(**kwargs)
+
     def query_stats(self, **kwargs) -> dict:
         return self._db.query_stats(**kwargs)
 
@@ -4497,6 +4533,10 @@ class SmartCollectionProvider:
         return self._local._db.query_artists(
             letter=letter, page=page, size=size, naming_mode=naming_mode,
             **self._filter_kwargs())
+
+    def query_albums(self, *, page=0, size=120, naming_mode="legacy", **_ignore):
+        return self._local._db.query_albums(
+            page=page, size=size, naming_mode=naming_mode, **self._filter_kwargs())
 
     def query_stats(self, *, sort="artist", want_sort_letters=False,
                     naming_mode="legacy", **_ignore):
@@ -7092,6 +7132,32 @@ def api_get_chart_work(filename: str):
     on rows that came from an ungrouped query (the tree view) — grouped grid
     rows already carry both fields inline."""
     return meta_db.chart_work(filename)
+
+
+@app.get("/api/library/albums")
+async def list_library_albums(q: str = "", page: int = 0, size: int = 120,
+                              favorites: int = 0, format: str = "",
+                              artist: str = "", album: str = "",
+                              arrangements_has: str = "", arrangements_lacks: str = "",
+                              stems_has: str = "", stems_lacks: str = "",
+                              has_lyrics: str = "", tunings: str = "", mastery: str = "",
+                              provider: str = "local"):
+    """Album-condensed browse: distinct (artist, album) groups with a track count
+    and a representative cover song. Paged by album. Same filters as /api/library."""
+    size = min(size, 500)
+    library_provider = _get_library_provider(provider)
+    _require_library_provider_capability(library_provider, "library.read")
+    albums, total = await _call_library_provider_async(
+        library_provider, "query_albums",
+        page=page, size=size, mastery=_split_csv(mastery),
+        **_library_filter_args(
+            q=q, favorites=favorites, format=format, artist=artist, album=album,
+            arrangements_has=arrangements_has, arrangements_lacks=arrangements_lacks,
+            stems_has=stems_has, stems_lacks=stems_lacks,
+            has_lyrics=has_lyrics, tunings=tunings,
+        ),
+    )
+    return {"albums": albums, "total": total, "page": page, "size": size}
 
 
 @app.get("/api/library/artists")
