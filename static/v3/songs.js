@@ -604,6 +604,39 @@
             '<button data-arr="' + esc(a.index != null ? a.index : '') + '" title="Play ' + esc(a.name) + '" class="text-[10px] px-1.5 py-0.5 rounded bg-gray-800/60 text-fb-textDim hover:bg-fb-primary hover:text-white transition">' + esc(a.name) + '</button>').join('');
     }
 
+    // ── Tuning-match flags (working-tuning PR 6) ───────────────────────────────
+    // Colour each song's tuning chip by whether your CURRENT working tuning covers
+    // it: green = play it now, amber = needs a retune. Uses the tuner plugin's
+    // coverage check (async) + the host workingTuning state — BOTH feature-detected,
+    // so without them the chips render exactly as before. Decoration runs AFTER the
+    // (sync) window paint so scrolling stays snappy; a token cancels a superseded pass.
+    let _tuningDecorToken = 0;
+    function _applyChipMatch(chip, stateName) {
+        chip.classList.remove('bg-fb-mid', 'bg-emerald-500', 'bg-amber-400');
+        chip.classList.add(stateName === 'match' ? 'bg-emerald-500'
+            : stateName === 'retune' ? 'bg-amber-400' : 'bg-fb-mid');
+        if (!chip.dataset.baseTitle) chip.dataset.baseTitle = chip.getAttribute('title') || '';
+        chip.setAttribute('title', chip.dataset.baseTitle + (stateName === 'match'
+            ? ' — matches your tuning' : stateName === 'retune' ? ' — needs a retune' : ''));
+    }
+    async function decorateTuningChips(grid) {
+        if (!grid) return;
+        const cov = window._tunerAutoOpen && window._tunerAutoOpen.coverageReport;
+        const hasWT = window.feedBack && window.feedBack.workingTuning
+            && typeof window.feedBack.workingTuning.get === 'function';
+        if (typeof cov !== 'function' || !hasWT) return;   // feature-detect → no flags
+        const token = ++_tuningDecorToken;
+        const chips = grid.querySelectorAll('[data-tuning-chip][data-tuning-offsets]');
+        for (const chip of chips) {
+            const offs = chip.getAttribute('data-tuning-offsets').split(',').map(Number);
+            if (!offs.length || offs.some((n) => !isFinite(n))) continue;
+            let rep = null;
+            try { rep = await cov({ tuning: offs, stringCount: offs.length }); } catch (_) { rep = null; }
+            if (token !== _tuningDecorToken) return;   // superseded by a re-paint / tuning change
+            if (rep) _applyChipMatch(chip, rep.covered ? 'match' : 'retune');
+        }
+    }
+
     function songCard(song) {
         const fav = song.favorite;
         const key = cardKey(song);
@@ -626,11 +659,15 @@
                 ? ('Custom Tuning: ' + targetNotes)
                 : tuningLabel;
             const pos = 'absolute top-2 ' + (state.selectMode ? 'left-9' : 'left-2');
+            // Tag the chip with its offsets so decorateTuningChips() can colour it
+            // green (matches your current tuning) / amber (needs a retune) after paint.
+            const matchAttr = (rawOffsets && rawOffsets.length)
+                ? ' data-tuning-chip data-tuning-offsets="' + esc(rawOffsets.join(',')) + '"' : '';
             if (targetNotes) {
-                tuning = '<span class="' + pos + ' bg-fb-mid text-black text-[9px] font-bold px-1.5 py-0.5 rounded-sm leading-tight max-w-[5.5rem] text-center" title="' + esc(badgeTitle) + '">'
+                tuning = '<span class="' + pos + ' bg-fb-mid text-black text-[9px] font-bold px-1.5 py-0.5 rounded-sm leading-tight max-w-[5.5rem] text-center"' + matchAttr + ' title="' + esc(badgeTitle) + '">'
                     + esc('Custom Tuning') + '<br><span class="font-semibold tracking-wide">' + esc(targetNotes) + '</span></span>';
             } else {
-                tuning = '<span class="' + pos + ' bg-fb-mid text-black text-[10px] font-bold px-1.5 py-0.5 rounded-sm" title="' + esc(badgeTitle) + '">' + esc(tuningLabel) + '</span>';
+                tuning = '<span class="' + pos + ' bg-fb-mid text-black text-[10px] font-bold px-1.5 py-0.5 rounded-sm"' + matchAttr + ' title="' + esc(badgeTitle) + '">' + esc(tuningLabel) + '</span>';
             }
         }
         // Display-only (pointer-events-none) so a click falls through to the
@@ -1032,6 +1069,7 @@
         grid.style.top = (firstRow * rowH) + 'px';
         grid.innerHTML = _renderCardsRange(start, end);
         wireCards(grid);
+        decorateTuningChips(grid);   // colour tuning chips by working-tuning match (async, feature-detected)
         state.winRange = { start, end };
         state.renderedSelectMode = state.selectMode;
         if (sm && typeof sm.emit === 'function') {
@@ -1857,6 +1895,14 @@
             const active = document.querySelector('.screen.active');
             if (active && active.id === 'v3-songs') { _libraryDirty = false; reload(); }
             else _libraryDirty = true;
+        });
+        // Your live tuning changed (retune / instrument swap / reset) → re-colour the
+        // visible tuning chips against the new tuning. Cheap: re-decorates in place,
+        // no re-fetch or re-paint. No-op off the Songs grid or without the capability.
+        sm.on('working-tuning-changed', () => {
+            if (typeof songsActive === 'function' && !songsActive()) return;
+            if (state.view !== 'grid') return;
+            decorateTuningChips(_gridEl());
         });
     }
 })();
