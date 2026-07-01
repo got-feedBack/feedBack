@@ -139,19 +139,30 @@
             '<button id="v3-pl-back" class="text-sm text-fb-textDim hover:text-fb-text mb-4">← Playlists</button>' +
             '<div class="flex items-center justify-between mb-6 gap-3">' +
             '<h2 class="text-3xl font-bold text-fb-text truncate">' + esc(pl.name) + '</h2>' +
+            '<div class="flex gap-2 shrink-0 items-center">' +
+            (pl.songs.length ? '<button id="v3-pl-playall" class="bg-fb-primary hover:bg-fb-primaryHi text-white text-sm font-medium px-4 py-2 rounded-md">▶ Play all</button>' : '') +
             (isSystem ? '' :
-                '<div class="flex gap-2 shrink-0">' +
                 '<button id="v3-pl-cover" class="text-sm text-fb-textDim hover:text-fb-text px-2">Cover</button>' +
                 (pl.cover_url ? '<button id="v3-pl-cover-rm" class="text-sm text-fb-textDim hover:text-fb-accent px-2">Remove cover</button>' : '') +
                 '<button id="v3-pl-rename" class="text-sm text-fb-textDim hover:text-fb-text px-2">Rename</button>' +
                 '<button id="v3-pl-delete" class="text-sm text-fb-textDim hover:text-fb-accent px-2">Delete</button>' +
-                '<input type="file" id="v3-pl-cover-file" accept="image/*" class="hidden"></div>') +
+                '<input type="file" id="v3-pl-cover-file" accept="image/*" class="hidden">') +
+            '</div>' +
             '</div>' +
             (pl.songs.length
                 ? '<ul id="v3-pl-songs" class="space-y-1">' + pl.songs.map((s) => songRow(s, { draggable: !isSystem })).join('') + '</ul>'
                 : '<p class="text-fb-textDim">Empty — add songs from the library.</p>') +
             '</div>';
         root.querySelector('#v3-pl-back')?.addEventListener('click', renderPlaylists);
+        // Play all: start the play-queue with this playlist's songs (auto-advances
+        // track to track). Falls back to playing the first song on an older core
+        // without the queue, so the button always does something.
+        root.querySelector('#v3-pl-playall')?.addEventListener('click', () => {
+            const files = (pl.songs || []).map((s) => s.filename).filter(Boolean);
+            if (!files.length) return;
+            if (window.feedBack && window.feedBack.playQueue) window.feedBack.playQueue.start(files, { source: pl.name });
+            else if (typeof window.playSong === 'function') window.playSong(encodeURIComponent(files[0]));
+        });
         const listEl = root.querySelector('#v3-pl-songs');
         if (listEl) wireSongRows(listEl, pid, () => renderPlaylistDetail(pid));
         root.querySelector('#v3-pl-rename')?.addEventListener('click', async () => {

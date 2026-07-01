@@ -6328,6 +6328,11 @@ let artAbortController = null;
 
 async function playSong(filename, arrangement, options) {
     console.log('playSong called:', filename);
+    // A manual (non-queue) play abandons any active play-queue, so a stale queue
+    // can't hijack the next song's end. The queue passes fromQueue to keep itself.
+    if ((!options || !options.fromQueue) && window.feedBack && window.feedBack.playQueue) {
+        window.feedBack.playQueue.clear();
+    }
     if (!options || options.bridge !== false) {
         _recordPlaybackBridge('playback.window-play-song', 'window.playSong', 'legacy playSong entry point used');
     }
@@ -6667,10 +6672,74 @@ if (window.feedBack) window.feedBack.restartCurrentSong = restartCurrentSong;
 // (Esc shortcut uses the same origin-aware target). showScreen() owns the
 // full teardown: song:stop, audio unload, highway.stop(), count-in cancel.
 function closeCurrentSong() {
+    // A real close (user Escape/✕, or the queue-aware wrapper once the queue is
+    // exhausted) abandons any play-queue so a stale one can't advance later.
+    if (window.feedBack && window.feedBack.playQueue) window.feedBack.playQueue.clear();
     return showScreen(_playerOriginScreen || 'home');
 }
 window.closeCurrentSong = closeCurrentSong;
 if (window.feedBack) window.feedBack.closeCurrentSong = closeCurrentSong;
+
+// ── Play-queue: sequential playback of a playlist / album ──────────────────
+// Playing a list should advance to the next track when a song ends, instead of
+// returning to the menu (the long-standing "plays one song then boots to menu"
+// gap — a queue was simply never implemented). Advancing rides the SAME exit
+// choke point as auto-exit and a results-card close: window.closeCurrentSong().
+// Song-end paths call window.closeCurrentSong() (the auto-exit grace timer, and
+// a results screen's release()), so wrapping it lets the queue advance on song
+// end AND after the user dismisses a score card. A *user* exit (Escape / the ✕)
+// calls the bareword closeCurrentSong(), which we deliberately leave alone, so
+// leaving the player still leaves — and abandons the queue.
+window.feedBack.playQueue = (function () {
+    let list = [], idx = -1, source = '', arrangements = null;
+    const active = () => idx >= 0 && idx < list.length;
+    const hasNext = () => active() && idx < list.length - 1;
+    function clear() { list = []; idx = -1; source = ''; arrangements = null; }
+    function _play(i) {
+        const fn = list[i];
+        // fromQueue keeps the queue from clearing itself; playSong decodeURIs.
+        window.playSong(encodeURIComponent(fn), arrangements ? arrangements[i] : undefined, { fromQueue: true });
+    }
+    function start(files, opts) {
+        files = (files || []).filter(Boolean);
+        if (!files.length) return false;
+        list = files.slice(); idx = 0;
+        source = (opts && opts.source) || '';
+        arrangements = (opts && opts.arrangements) || null;
+        if (window.fbNotify) {
+            try { window.fbNotify.show({ title: 'Playing ' + (source || 'queue'), message: files.length + ' songs', icon: '▶' }); } catch (e) { /* */ }
+        }
+        _play(idx);
+        return true;
+    }
+    function advance() {
+        if (!hasNext()) { clear(); return false; }
+        idx++;
+        _play(idx);
+        return true;
+    }
+    return {
+        start: start, advance: advance, hasNext: hasNext, active: active, clear: clear,
+        source: function () { return source; },
+        remaining: function () { return active() ? list.length - idx - 1 : 0; },
+    };
+})();
+
+// Make the song-end exit queue-aware (see above). Wrap window.closeCurrentSong
+// (and feedBack.closeCurrentSong) so that when a queue has a next track, we play
+// it instead of returning to the menu. The bareword closeCurrentSong() used by a
+// user-initiated exit is unaffected.
+(function () {
+    const realClose = window.closeCurrentSong;
+    function queueAwareClose() {
+        const q = window.feedBack.playQueue;
+        if (q && q.hasNext()) { q.advance(); return; }
+        if (q) q.clear();
+        return realClose.apply(this, arguments);
+    }
+    window.closeCurrentSong = queueAwareClose;
+    if (window.feedBack) window.feedBack.closeCurrentSong = queueAwareClose;
+})();
 
 // ── "Ask before leaving a song" (Gameplay tab, default OFF) ────────────────
 // Client-only localStorage pref (`confirmExitSong`); absence = OFF. When ON, a
