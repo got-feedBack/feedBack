@@ -29,6 +29,9 @@
     'use strict';
 
     window.feedBack = window.feedBack || {};
+    // Idempotent: a second injection of this module must not replace the live state
+    // with a fresh (empty) one — once we're registered, re-running is a no-op.
+    if (window.feedBack.workingTuning && window.feedBack.workingTuning.version === 1) return;
     const capabilities = window.feedBack.capabilities;
 
     const _byInstrument = {};   // key -> tuning state (the per-instrument map)
@@ -217,11 +220,53 @@
         return out;
     }
 
-    // Seed the SELECTED instrument's slot from settings on boot (best-effort 'assumed'
-    // starting point, NOT a persisted working tuning). settings.tuning may be an offsets
-    // list OR a name ("Drop D") — a name is resolved to offsets via /api/tunings so a
-    // named tuning isn't lost. If settings can't be read we still hydrate so consumers
-    // aren't stuck waiting; an explicit set()/select before we resolve wins (no clobber).
+    // ---- Opt-in "launch tuning" default (soft, per-instrument) -------------------
+    // A convenience the player opts into: "start me in THIS tuning on app open." Off
+    // by default (nothing stored) → boot seeds from /api/settings as before. It is
+    // only a SEED — the live working tuning still resets on restart.
+    const LAUNCH_KEY = 'v3-working-tuning-launch-default';
+    function _readLaunchMap() {
+        try { return JSON.parse(localStorage.getItem(LAUNCH_KEY) || '{}') || {}; }
+        catch (_) { return {}; }
+    }
+    function _writeLaunchMap(map) {
+        try {
+            if (map && Object.keys(map).length) localStorage.setItem(LAUNCH_KEY, JSON.stringify(map));
+            else localStorage.removeItem(LAUNCH_KEY);
+        } catch (_) { /* private mode */ }
+    }
+    function getLaunchDefault(instrument) {
+        const key = _resolveKey(instrument);
+        const d = _readLaunchMap()[key];
+        return d ? Object.assign(_defaultState(key), d, { source: 'launch-default' }) : null;
+    }
+    // Remember an instrument's CURRENT working tuning (or a supplied state) as its
+    // launch default. Opt-in — nothing calls this unless the player asks.
+    function setLaunchDefault(instrument, state) {
+        const key = _resolveKey(instrument);
+        const src = state || get(key);
+        const map = _readLaunchMap();
+        map[key] = {
+            offsets: Array.isArray(src.offsets) ? src.offsets.slice() : null,
+            stringCount: src.stringCount,
+            instrument: _splitKey(key).instrument,
+            referencePitch: src.referencePitch || 440,
+        };
+        _writeLaunchMap(map);
+        return getLaunchDefault(key);
+    }
+    function clearLaunchDefault(instrument) {
+        const key = _resolveKey(instrument);
+        const map = _readLaunchMap();
+        if (key in map) { delete map[key]; _writeLaunchMap(map); }
+    }
+
+    // Seed the SELECTED instrument's slot on boot (best-effort 'assumed' starting
+    // point, NOT a persisted working tuning): the player's opt-in launch default if one
+    // is set for this instrument, else /api/settings — where a NAMED tuning ("Drop D") is
+    // resolved to offsets via /api/tunings so it isn't lost. If neither can be read we
+    // still hydrate so consumers aren't stuck waiting; an explicit set()/select before we
+    // resolve wins (no clobber).
     function _seedFromSettings() {
         fetch('/api/settings')
             .then(function (r) { return r && r.ok ? r.json() : null; })
@@ -234,16 +279,25 @@
                 function commit(offsets) {
                     if (_touched) return;     // re-check: a write may have raced the /api/tunings fetch
                     _currentKey = key;
-                    _byInstrument[key] = {
-                        offsets: Array.isArray(offsets) ? offsets.slice(0, sc) : null,
-                        stringCount: sc,
-                        instrument: inst,
-                        referencePitch: Number(s.reference_pitch) || 440,
-                        provenance: 'assumed',
-                        verifiedStrings: null,
-                        verifiedAt: null,
-                        source: 'settings',
-                    };
+                    // Opt-in launch default wins over the raw profile; otherwise use the
+                    // resolved `offsets` (a named settings tuning was already turned into
+                    // offsets via /api/tunings before commit()).
+                    const launch = _readLaunchMap()[key];
+                    _byInstrument[key] = launch
+                        ? {
+                            offsets: Array.isArray(launch.offsets) ? launch.offsets.slice(0, sc) : null,
+                            stringCount: sc, instrument: inst,
+                            referencePitch: Number(launch.referencePitch) || 440,
+                            provenance: 'assumed', verifiedStrings: null, verifiedAt: null,
+                            source: 'launch-default',
+                        }
+                        : {
+                            offsets: Array.isArray(offsets) ? offsets.slice(0, sc) : null,
+                            stringCount: sc, instrument: inst,
+                            referencePitch: Number(s.reference_pitch) || 440,
+                            provenance: 'assumed', verifiedStrings: null, verifiedAt: null,
+                            source: 'settings',
+                        };
                 }
 
                 if (Array.isArray(s.tuning)) { commit(s.tuning); return; }
@@ -266,6 +320,24 @@
         if (_hydrated) return;
         _hydrated = true;
         _emitChanged(_currentKey || _resolveKey());
+    }
+
+    // A per-string mic verification is only trustworthy for the context it was done
+    // in — a new song means the player may have retuned, so a stale 'verified' must
+    // never suppress a needed prompt (fail toward re-checking). Decay the CURRENT
+    // instrument's verification back to 'assumed' on each song load; offsets are kept.
+    function _decayVerifiedOnSongLoad() {
+        const key = _currentKey || _resolveKey();
+        const st = _byInstrument[key];
+        if (st && st.provenance === 'verified') {
+            st.provenance = 'assumed';
+            st.verifiedStrings = null;
+            st.verifiedAt = null;
+            _emitChanged(key);
+        }
+    }
+    if (typeof window.feedBack.on === 'function') {
+        window.feedBack.on('song:loading', _decayVerifiedOnSongLoad);
     }
 
     // ---- Capability registration (mirrors capabilities/tuning.js) ----------------
@@ -309,6 +381,9 @@
         set: set,
         setCurrentInstrument: setCurrentInstrument,
         resetToDefault: resetToDefault,
+        getLaunchDefault: getLaunchDefault,
+        setLaunchDefault: setLaunchDefault,
+        clearLaunchDefault: clearLaunchDefault,
     });
 
     _seedFromSettings();
