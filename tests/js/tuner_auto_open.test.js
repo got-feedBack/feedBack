@@ -717,6 +717,21 @@ test('mic-verify: all strings in-tune-and-stable promotes to verified (with the 
     assert.equal(sets[0].n.verifiedStrings.length, 6);
 });
 
+test('mic-verify: derives the verified offsets from the tuning being checked (no song context)', () => {
+    // A manually-selected tuning (no '_current' song) must still stamp the RIGHT offsets,
+    // derived from the freqs being verified — not a stale currentSongOffsets.
+    const sandbox = createTunerSandbox();
+    const sets = [];
+    sandbox.window.feedBack.workingTuning = { get: () => ({ offsets: [0, 0, 0, 0, 0, 0] }), set: (n, o) => sets.push({ n, o }) };
+    const api = sandbox.window._tunerAutoOpen;
+    const DROP_D_FREQS = [73.42, 110, 146.83, 196, 246.94, 329.63];   // drop-D guitar
+    assert.ok(api.verifyStart(DROP_D_FREQS));   // NO explicit offsets, no song context
+    for (const f of DROP_D_FREQS) { for (let i = 0; i < 8; i++) api.verifyFeed(f, 2); }
+    assert.equal(api.verifyState().complete, true);
+    assert.equal(sets.length, 1);
+    assert.deepEqual(Array.from(sets[0].n.offsets), [-2, 0, 0, 0, 0, 0]);   // derived Drop D
+});
+
 test('mic-verify: an out-of-tune string never completes; cancel clears', () => {
     const sandbox = createTunerSandbox();
     sandbox.window.feedBack.workingTuning = { get: () => ({}), set() {} };

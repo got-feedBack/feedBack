@@ -827,11 +827,33 @@
     // Start a verify session for `targets` (freqs; defaults to the selected tuning).
     // Captures the tuning's OFFSETS now (explicit arg, else the current song's) so that
     // when it completes we stamp 'verified' onto the exact tuning that was confirmed.
+    // Per-string semitone offsets (from standard) of the tuning we're verifying, derived
+    // from its target freqs. This is authoritative for BOTH the song ('_current') tuning
+    // and a manually-selected tuning — unlike _state.currentSongOffsets, which for a manual
+    // tuning is a stale/different song's tuning that must NOT be stamped 'verified'. The
+    // player's reference pitch scales both the targets and the standard, so it cancels.
+    function _tuningOffsetsFromFreqs(freqs) {
+        const u = window._tunerUtils;
+        if (!u || typeof u.offsetsToFreqs !== 'function' || typeof u.freqToMidi !== 'function') return null;
+        const isBass = /^bass/.test(_state.selectedInstrument || '');   // the selected instrument, not the song's
+        const refScale = (Number(_state.referencePitch) || 440) / 440;
+        const std = u.offsetsToFreqs(new Array(freqs.length).fill(0), isBass);
+        if (!Array.isArray(std) || std.length !== freqs.length) return null;
+        const out = [];
+        for (let i = 0; i < freqs.length; i++) {
+            const f = Number(freqs[i]);
+            const s = Number(std[i]) * refScale;
+            if (!(f > 0) || !(s > 0)) return null;
+            out.push(Math.round(u.freqToMidi(f) - u.freqToMidi(s)) || 0);   // normalize -0 → 0
+        }
+        return out;
+    }
     function verifyStart(targets, offsets) {
         const freqs = (Array.isArray(targets) && targets.length) ? targets : _state.selectedTuning;
         if (!Array.isArray(freqs) || !freqs.length) return null;
-        const offs = (Array.isArray(offsets) && offsets.length) ? offsets.slice()
-            : (Array.isArray(_state.currentSongOffsets) ? _state.currentSongOffsets.slice() : null);
+        // Explicit offsets win (callers/tests that already have them); otherwise derive
+        // them from the tuning actually being verified.
+        const offs = (Array.isArray(offsets) && offsets.length) ? offsets.slice() : _tuningOffsetsFromFreqs(freqs);
         _verify = { targets: freqs.map((f) => ({ freq: f, streak: 0, done: false })), complete: false, offsets: offs };
         _verifiedPublished = false;
         return verifyState();
