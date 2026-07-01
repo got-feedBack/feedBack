@@ -1681,15 +1681,26 @@
     let _aspectPanelRO = null;        // readout <div>
     let _aspectPanelRAF = 0;          // readout poll handle
     let _aspectTargetSel = null;      // the "Target" <select>
+    let _aspectTgtRow = null;         // the Target row (hidden when only one pane)
     let _aspectHfovCb = null;         // hfov-override checkbox (synced explicitly)
     let _aspectHfovSl = null;         // hfov-override slider
     // Which pane the panel edits. '' = all panes (writes the shared base object);
-    // a pane key (e.g. 'panel0') writes that pane's sparse override, so one split
+    // a pane key (e.g. 'pane1') writes that pane's sparse override, so one split
     // pane can be framed independently of the others.
     let _aspectEditTarget = '';
-    // Set when a renderer reports a pane key/label we haven't seen, so the panel
-    // rebuilds the Target dropdown on its next readout tick.
+    // Bumped when the SET of live panes changes (add/prune) so the panel rebuilds
+    // the Target dropdown — never on a per-frame label re-report, which would
+    // flicker the <select>.
     let _aspectPanesDirty = true;
+    // Monotonic counter handing each renderer instance a stable pane id.
+    let _aspectPaneCounter = 0;
+    function _aspectNowMs() {
+        try { return (performance && performance.now) ? performance.now() : 0; } catch (e) { return 0; }
+    }
+    function _aspectPaneLabel(arrangement, uid) {
+        const a = (typeof arrangement === 'string') ? arrangement.trim() : '';
+        return a || ('Pane ' + uid);
+    }
 
     // Get-or-create the shared bridge object, seeded from defaults + localStorage.
     // May carry a sparse `__panels` map of per-pane overrides.
@@ -1708,8 +1719,10 @@
     function _aspectPersist() {
         try {
             const t = _aspectTune(), out = {};
+            // Persist only the shared base. Per-pane overrides (__panels) are
+            // keyed by ephemeral instance ids, so they're intentionally
+            // session-only — persisting them would leak stale keys forever.
             Object.keys(_ASPECT_DEFAULTS).forEach((k) => { out[k] = t[k]; });
-            if (t.__panels) out.__panels = t.__panels;
             localStorage.setItem(_ASPECT_LS, JSON.stringify(out));
         } catch (e) {}
     }
@@ -1724,18 +1737,27 @@
         Object.keys(_ASPECT_DEFAULTS).forEach((k) => { out[k] = (k in ov) ? ov[k] : base[k]; });
         return out;
     }
-    // Record a live pane so the Target dropdown can list it. Label prefers the
-    // arrangement name (e.g. "Panel 1 — Rhythm") so panes are easy to tell apart.
-    function _aspectRegisterPane(paneKey, arrangement) {
+    // Record a live pane so the Target dropdown can list it. Called every frame
+    // by each renderer with its stable pane key + arrangement. `seen` is
+    // refreshed each call for pruning; the dropdown is only marked dirty when a
+    // pane is newly added or its label first resolves — not on every re-report,
+    // which would flicker the <select>.
+    function _aspectRegisterPane(paneKey, uid, arrangement) {
         const reg = window.__h3dAspectPanes || (window.__h3dAspectPanes = {});
-        let label;
-        if (paneKey === 'main') { label = 'Main'; }
-        else { const n = parseInt(paneKey.slice(5), 10); label = 'Panel ' + ((isFinite(n) ? n : 0) + 1); }
-        if (arrangement) label += ' — ' + arrangement;
-        if (!reg[paneKey] || reg[paneKey].label !== label) {
-            reg[paneKey] = { label };
-            _aspectPanesDirty = true;
-        }
+        const label = _aspectPaneLabel(arrangement, uid);
+        let e = reg[paneKey];
+        if (!e) { e = reg[paneKey] = { label, seen: 0 }; _aspectPanesDirty = true; }
+        else if (e.label !== label) { e.label = label; _aspectPanesDirty = true; }
+        e.seen = _aspectNowMs();
+    }
+    // Drop panes not reported recently (song change, split teardown, pane close).
+    function _aspectPrunePanes() {
+        const reg = window.__h3dAspectPanes;
+        if (!reg) return;
+        const now = _aspectNowMs();
+        Object.keys(reg).forEach((k) => {
+            if (now - (reg[k].seen || 0) > 1500) { delete reg[k]; _aspectPanesDirty = true; }
+        });
     }
 
     // Read/write against the current edit target ('' → base, else pane override).
@@ -1759,6 +1781,9 @@
     // current selection when it's still valid.
     function _aspectBuildTargets() {
         if (!_aspectTargetSel) return;
+        // Don't yank a dropdown the user is actively interacting with — leave it
+        // dirty and rebuild on a later tick once it's no longer focused.
+        if (document.activeElement === _aspectTargetSel) return;
         const reg = window.__h3dAspectPanes || {};
         const keys = Object.keys(reg).sort();
         _aspectTargetSel.innerHTML = '';
@@ -1772,6 +1797,9 @@
         });
         if (_aspectEditTarget && !reg[_aspectEditTarget]) _aspectEditTarget = '';
         _aspectTargetSel.value = _aspectEditTarget;
+        // The Target row only matters with more than one pane (a split). With a
+        // single pane there's nothing to disambiguate, so hide it.
+        if (_aspectTgtRow) _aspectTgtRow.style.display = keys.length > 1 ? '' : 'none';
         _aspectPanesDirty = false;
     }
 
@@ -1805,6 +1833,7 @@
 
         // Target selector — which pane the controls below edit.
         const tgtRow = document.createElement('div'); tgtRow.style.cssText = 'margin:2px 0 7px;';
+        _aspectTgtRow = tgtRow;
         const tgtLab = document.createElement('div');
         tgtLab.textContent = 'Target'; tgtLab.style.cssText = 'color:#9fb0c8;margin-bottom:2px;';
         _aspectTargetSel = document.createElement('select');
@@ -1950,6 +1979,7 @@
         if (on && !_aspectPanelRAF) {
             const tick = () => {
                 if (!window.__h3dAspectPanelOpen) { _aspectPanelRAF = 0; return; }
+                _aspectPrunePanes();
                 if (_aspectPanesDirty) _aspectBuildTargets();
                 const ro = window.__h3dAspectReadout;
                 if (_aspectPanelRO && ro) {
@@ -3885,6 +3915,12 @@
         // __h3dAspectTune edits) without waiting for a resize. 0 until first
         // applySize().
         let _paneAspect = 0;
+        // Stable per-instance id for the wide-pane tuner's Target picker. Each
+        // renderer instance is exactly one pane, so keying overrides + the
+        // readout by this (rather than the split plugin's panel index, which can
+        // ping-pong with focus) keeps the picker steady and unambiguous. Assigned
+        // once in init(); survives destroy()/init() reuse of the same instance.
+        let _paneUid = 0;
         // True once applySize() has pinned the .h3d-wrap overlay to the
         // highway canvas's offset box. Stays false while the canvas has no
         // layout yet (init() can run before #highway has a real box, where
@@ -14346,8 +14382,8 @@
             // effectiveVfov returns the base vertical fov and cam.fov is restored
             // to it. The fov write is guarded on an actual change so a steady pane
             // costs nothing.
-            const _paneKey = _bgPanelKey(highwayCanvas);
-            _aspectRegisterPane(_paneKey, bundle && bundle.songInfo && bundle.songInfo.arrangement);
+            const _paneKey = 'pane' + _paneUid;
+            _aspectRegisterPane(_paneKey, _paneUid, bundle && bundle.songInfo && bundle.songInfo.arrangement);
             const _aspTune = _resolveTuneFor(_paneKey);
             const _aspActive = !!(_aspTune && _aspTune.enabled
                 && !(_aspTune.splitOnly && !_ssActive()));
@@ -14799,7 +14835,8 @@
                 }
                 _destroyed = _isReady = false;
                 _isFocused = true;
-                _registerAspectAbShortcut();   // session-global A/B toggle (self-guarded)
+                if (!_paneUid) _paneUid = ++_aspectPaneCounter;   // stable pane id for the tuner picker
+                _registerAspectAbShortcut();   // session-global tuner shortcut (self-guarded)
                 const myToken = ++_initToken;
                 highwayCanvas = canvas;
                 _invertedCached = !!(bundle && bundle.inverted);

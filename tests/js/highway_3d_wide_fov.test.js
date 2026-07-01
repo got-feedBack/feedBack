@@ -174,6 +174,24 @@ test('a Target select and pane registry drive the per-pane picker', () => {
         'camUpdate must register its pane each frame');
 });
 
+test('panes are keyed by a stable per-instance id, not the split panel index', () => {
+    // Keying by a stable instance uid keeps the Target picker steady; the split
+    // plugin's panel index can ping-pong with focus and cause flicker/dupes.
+    assert.match(src, /_paneUid\s*=\s*\+\+\s*_aspectPaneCounter/,
+        'each renderer instance must take a stable pane uid in init()');
+    assert.match(src, /const\s+_paneKey\s*=\s*'pane'\s*\+\s*_paneUid\s*;/,
+        'camUpdate must key the pane by its stable instance uid');
+});
+
+test('the target dropdown prunes dead panes and does not rebuild while focused', () => {
+    assert.match(src, /function\s+_aspectPrunePanes\s*\(\)[\s\S]*?delete\s+reg\[k\]/,
+        '_aspectPrunePanes must drop panes not seen recently');
+    assert.match(src, /_aspectPrunePanes\(\)\s*;[\s\S]*?if\s*\(\s*_aspectPanesDirty\s*\)\s*_aspectBuildTargets\(\)/,
+        'the readout tick must prune then rebuild only when dirty');
+    assert.match(src, /function\s+_aspectBuildTargets\s*\(\)[\s\S]*?document\.activeElement\s*===\s*_aspectTargetSel[\s\S]*?return/,
+        '_aspectBuildTargets must skip rebuilding while the select is focused');
+});
+
 test('the panel has a dismiss (close) control', () => {
     assert.match(
         src,
