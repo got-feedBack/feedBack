@@ -44,6 +44,11 @@
     // blank before the next window render lands.
     const OVERSCAN_ROWS = 2;
     const SCROLL_STATE_KEY = 'v3:songs-scroll-state';
+    // Persisted "how I'm looking" prefs (sort / format / view / drawer filters).
+    // The tester ask: "most users pick one sort and leave it" + remember filters.
+    // The search query and the artist/album drill-down are navigational, so they
+    // are deliberately NOT persisted; cold start stays the neutral Artist A–Z.
+    const PREFS_KEY = 'v3:songs-prefs';
     const btnCtrl = 'bg-gray-800/50 border border-gray-700 rounded-md px-3 py-2 text-sm text-fb-text outline-none focus:border-fb-primary';
 
     const state = {
@@ -126,6 +131,45 @@
     }
 
     function _libraryStateHash() { return buildLibraryStateHash(state); }
+
+    // Restore the persisted view prefs once per page load, before the first
+    // toolbar build so the selects render with the saved values. Every value is
+    // validated against its known option list, so a stale/removed setting can
+    // never wedge the UI — it just falls back to the default.
+    let _prefsRestored = false;
+    function applySavedPrefs() {
+        let saved;
+        try { saved = JSON.parse(localStorage.getItem(PREFS_KEY)); } catch (_) { return; }
+        if (!saved || typeof saved !== 'object') return;
+        if (SORTS.some(([v]) => v === saved.sort)) state.sort = saved.sort;
+        if (FORMATS.some(([v]) => v === saved.format)) state.format = saved.format;
+        if (saved.view === 'grid' || saved.view === 'tree' || saved.view === 'folder') state.view = saved.view;
+        const f = saved.filters;
+        if (f && typeof f === 'object') {
+            const arr = (x) => (Array.isArray(x) ? x.slice() : []);
+            state.filters = {
+                arr_has: arr(f.arr_has), arr_lacks: arr(f.arr_lacks),
+                stem_has: arr(f.stem_has), stem_lacks: arr(f.stem_lacks),
+                lyrics: f.lyrics || '', tunings: arr(f.tunings),
+            };
+        }
+    }
+    // Persist the current view prefs (best-effort; storage may be full/disabled).
+    // Called from reload(), which every sort/format/filter/view change funnels
+    // through — so this is the single write point.
+    function saveLibraryPrefs() {
+        try {
+            const f = state.filters;
+            localStorage.setItem(PREFS_KEY, JSON.stringify({
+                sort: state.sort, format: state.format, view: state.view,
+                filters: {
+                    arr_has: [...f.arr_has], arr_lacks: [...f.arr_lacks],
+                    stem_has: [...f.stem_has], stem_lacks: [...f.stem_lacks],
+                    lyrics: f.lyrics || '', tunings: [...f.tunings],
+                },
+            }));
+        } catch (_) { /* best-effort */ }
+    }
 
     function _saveLibraryScrollSnapshot() {
         const main = _getV3MainScroller();
@@ -1489,6 +1533,7 @@
         // tell whether the grid is stale (e.g. an off-screen search changed
         // state.q) and needs a refresh rather than a scroll-preserving no-op.
         state.renderedHash = _libraryStateHash();
+        saveLibraryPrefs();
         updateFilterBadge();
         // A sort/filter/search/view change rebuilds the grid from page 0, so any
         // in-flight letter jump is now paging through a dataset that's about to
@@ -1541,6 +1586,9 @@
     async function render() {
         const root = document.getElementById('v3-songs');
         if (!root) return;
+        // Restore last-used sort/format/view/filters once, before building the
+        // toolbar so its selects reflect the saved choice (default: Artist A–Z).
+        if (!_prefsRestored) { applySavedPrefs(); _prefsRestored = true; }
         const providers = await loadProviders();
         const [, tn] = await Promise.all([
             (async () => { state.accuracy = (await jget('/api/stats/best')) || {}; })(),
