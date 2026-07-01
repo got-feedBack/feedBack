@@ -305,6 +305,12 @@ window._tunerUI = function(state, actions) {
     function renderStringNotes() {
         if (!state.stringNoteContainer) return;
         state.stringNoteContainer.innerHTML = '';
+        // Show the mic-verify control only for a selected (non-free) tuning.
+        if (state.verifyRow) {
+            const hasTuning = !!(state.selectedTuning && state.selectedTuning.length && !state.freeTune);
+            state.verifyRow.classList.toggle('hidden', !hasTuning);
+            if (!hasTuning) resetVerifyUI();
+        }
         if (!state.selectedTuning || state.selectedTuning.length === 0) {
             _syncStringOrderHelp(0);
             return;
@@ -325,6 +331,41 @@ window._tunerUI = function(state, actions) {
             state.stringNoteContainer.appendChild(btn);
         });
         _syncStringOrderHelp(total);
+    }
+
+    // ── Mic-verify UI (working-tuning PR 9b) ───────────────────────────────────
+    function _markVerifiedStrings(done) {
+        if (!state.stringNoteContainer) return;
+        state.stringNoteContainer.querySelectorAll('[data-freq]').forEach((btn, i) => {
+            btn.classList.toggle('ring-2', !!done[i]);
+            btn.classList.toggle('ring-emerald-400', !!done[i]);
+        });
+    }
+    function _syncVerifyProgress(vs) {
+        if (!vs || !state.verifyStatus) return;
+        const total = vs.done.length;
+        const done = vs.done.filter(Boolean).length;
+        state.verifyStatus.classList.remove('hidden');
+        state.verifyStatus.textContent = vs.complete
+            ? '✓ In tune — tuning verified'
+            : (done + ' of ' + total + ' strings in tune');
+        _markVerifiedStrings(vs.done);
+        if (vs.complete && state.verifyBtn) state.verifyBtn.textContent = 'Verify tuning';
+    }
+    function _startVerify() {
+        if (!window._tunerAutoOpen || typeof window._tunerAutoOpen.verifyStart !== 'function') return;
+        const vs = window._tunerAutoOpen.verifyStart();
+        if (!vs) return;
+        if (state.verifyBtn) state.verifyBtn.textContent = 'Verifying — play each string…';
+        _syncVerifyProgress(vs);
+    }
+    function resetVerifyUI() {
+        if (window._tunerAutoOpen && typeof window._tunerAutoOpen.verifyCancel === 'function') {
+            window._tunerAutoOpen.verifyCancel();
+        }
+        if (state.verifyBtn) state.verifyBtn.textContent = 'Verify tuning';
+        if (state.verifyStatus) { state.verifyStatus.classList.add('hidden'); state.verifyStatus.textContent = ''; }
+        _markVerifiedStrings([]);
     }
 
     function updateUI(result) {
@@ -386,6 +427,13 @@ window._tunerUI = function(state, actions) {
         else _syncActiveStringFromFreq(targetFreq, isManual);
         if (window.feedBack && window.feedBack.emit) {
             window.feedBack.emit('tuner:frame', { note, cents, freq: displayFreq, hasSignal: true });
+        }
+        // Mic-verify: feed the matched string + cents to a running verify session
+        // and reflect per-string progress on the panel.
+        if (!isManual && !state.freeTune && window._tunerAutoOpen
+            && typeof window._tunerAutoOpen.verifyFeed === 'function') {
+            const vs = window._tunerAutoOpen.verifyFeed(targetFreq, Math.round(cents));
+            if (vs) _syncVerifyProgress(vs);
         }
     }
 
@@ -635,6 +683,22 @@ window._tunerUI = function(state, actions) {
         state.vizContainer.className = 'w-full';
         state.uiContainer.appendChild(state.vizContainer);
 
+        // Mic-verify control (working-tuning PR 9b): play each string in tune to
+        // confirm your tuning — promotes 'assumed' → 'verified'. Shown only for a
+        // selected (non-free) tuning; visibility managed in renderStringNotes().
+        state.verifyRow = document.createElement('div');
+        state.verifyRow.className = 'w-full mt-2 hidden';
+        state.verifyBtn = document.createElement('button');
+        state.verifyBtn.className = 'tuner-verify-btn w-full text-[11px] text-fb-textDim hover:text-fb-text border border-fb-border/40 hover:border-fb-border/70 rounded-lg py-1.5 transition-colors';
+        state.verifyBtn.textContent = 'Verify tuning';
+        state.verifyBtn.title = 'Play each string in tune to confirm — marks your tuning verified';
+        state.verifyBtn.onclick = () => _startVerify();
+        state.verifyRow.appendChild(state.verifyBtn);
+        state.verifyStatus = document.createElement('div');
+        state.verifyStatus.className = 'text-[10px] text-fb-textDim text-center mt-1 hidden';
+        state.verifyRow.appendChild(state.verifyStatus);
+        state.uiContainer.appendChild(state.verifyRow);
+
         // Auto-open nudge's explicit dismiss (hidden unless auto-opened; enable()
         // toggles it). Closes the same way as the × — disable().
         const skipBtn = document.createElement('button');
@@ -778,6 +842,7 @@ window._tunerUI = function(state, actions) {
         renderTuningOptions,
         renderStringNotes,
         updateUI,
+        resetVerify: resetVerifyUI,
         updateInstrumentDisplay: _updateInstrumentDisplay,
         updateSaveAsCustomVisibility: _updateSaveAsCustomVisibility,
         updateFreeTuneUI,

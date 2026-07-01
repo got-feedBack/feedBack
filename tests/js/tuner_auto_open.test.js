@@ -697,3 +697,52 @@ test('a transient /api/settings failure is not cached — the next coverage read
     const r2 = await api.coverageReport(DROP_D);        // retry: settings now readable → a real report
     assert.equal(r2.retune.length, 1, 'the retry actually computes coverage (Drop-D low string vs standard)');
 });
+// ── PR 9b: mic-verify (assumed -> verified via a per-string check) ──────────
+const VERIFY_TARGETS = [82.41, 110, 146.83, 196, 246.94, 329.63];   // guitar-6 standard freqs
+
+test('mic-verify: all strings in-tune-and-stable promotes to verified', () => {
+    const sandbox = createTunerSandbox();
+    const sets = [];
+    sandbox.window.feedBack.workingTuning = { get: () => ({ offsets: [0, 0, 0, 0, 0, 0] }), set: (n, o) => sets.push({ n, o }) };
+    const api = sandbox.window._tunerAutoOpen;
+    assert.ok(api.verifyStart(VERIFY_TARGETS));
+    for (let i = 0; i < 8; i++) api.verifyFeed(82.41, 2);        // one string alone isn't enough
+    assert.equal(api.verifyState().complete, false);
+    for (const f of VERIFY_TARGETS) { for (let i = 0; i < 8; i++) api.verifyFeed(f, 2); }
+    assert.equal(api.verifyState().complete, true);
+    assert.equal(sets.length, 1);
+    assert.equal(sets[0].o.provenance, 'verified');
+    assert.equal(sets[0].n.verifiedStrings.length, 6);
+});
+
+test('mic-verify: an out-of-tune string never completes; cancel clears', () => {
+    const sandbox = createTunerSandbox();
+    sandbox.window.feedBack.workingTuning = { get: () => ({}), set() {} };
+    const api = sandbox.window._tunerAutoOpen;
+    api.verifyStart([82.41, 110]);
+    for (let i = 0; i < 30; i++) api.verifyFeed(82.41, 25);      // 25c off -> never passes
+    assert.equal(api.verifyState().complete, false);
+    assert.deepEqual(api.verifyState().done, [false, false]);
+    api.verifyCancel();
+    assert.equal(api.verifyState(), null);
+});
+
+test('mic-verify: the in-tune streak resets if a frame drifts out', () => {
+    const sandbox = createTunerSandbox();
+    sandbox.window.feedBack.workingTuning = { get: () => ({}), set() {} };
+    const api = sandbox.window._tunerAutoOpen;
+    api.verifyStart([100]);
+    for (let i = 0; i < 5; i++) api.verifyFeed(100, 2);          // 5 in tune (need 8)
+    api.verifyFeed(100, 30);                                     // drift out -> streak resets
+    for (let i = 0; i < 7; i++) api.verifyFeed(100, 2);          // 7 more (not yet 8 in a row)
+    assert.equal(api.verifyState().done[0], false);
+    api.verifyFeed(100, 2);                                      // 8th consecutive -> done
+    assert.equal(api.verifyState().complete, true);
+});
+
+test('the tuner exposes the mic-verify API and only it claims verified (screen.js)', () => {
+    const src = fs.readFileSync(TUNER_SCREEN_JS, 'utf8');
+    assert.match(src, /verifyStart:/);
+    assert.match(src, /verifyFeed:/);
+    assert.match(src, /provenance: 'verified'/);   // the only place that stamps verified
+});

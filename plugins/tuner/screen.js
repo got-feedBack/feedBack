@@ -725,6 +725,8 @@
         _state.autoOpened = false;
         _releaseGate();   // dismissing a gated auto-open releases playback (it starts now)
         _state.manualTargetFreq = null;
+        verifyCancel();                       // a running mic-verify ends when the panel closes
+        _tunerUIApi?.resetVerify?.();
         if (_outsideClickClose) { document.removeEventListener('click', _outsideClickClose); _outsideClickClose = null; }
         if (_state.activeViz) { _state.activeViz.destroy(); _state.activeViz = null; }
         if (_state.uiContainer) { _state.uiContainer.classList.add('hidden'); _state.uiContainer.classList.remove('flex'); }
@@ -793,6 +795,58 @@
         _installAutoOpenListeners();
     }).catch(e => console.error(e));
     _installAutoOpenListeners();
+
+    // ── Mic-verify (working-tuning PR 9b) ──────────────────────────────────────
+    // A choreographed per-string check that promotes the current working tuning
+    // from 'assumed' to 'verified' — the ONLY thing that may ever claim 'verified'
+    // (audio-engine's honesty rule). The player plays each string; once every one
+    // reads in-tune (±VERIFY_TOL_CENTS) and holds for VERIFY_STABLE frames we stamp
+    // provenance:'verified' + verifiedStrings. Cancels on tuner close / tuning change.
+    const VERIFY_TOL_CENTS = 6;
+    const VERIFY_STABLE = 8;
+    let _verify = null;
+
+    function verifyState() {
+        if (!_verify) return null;
+        return {
+            complete: _verify.complete,
+            done: _verify.targets.map((t) => t.done),
+            remaining: _verify.targets.filter((t) => !t.done).length,
+        };
+    }
+    function verifyStart(targets) {
+        const freqs = (Array.isArray(targets) && targets.length) ? targets : _state.selectedTuning;
+        if (!Array.isArray(freqs) || !freqs.length) return null;
+        _verify = { targets: freqs.map((f) => ({ freq: f, streak: 0, done: false })), complete: false };
+        return verifyState();
+    }
+    function verifyCancel() { _verify = null; }
+    // Feed one processed frame (its matched target freq + cents-off). Advances the
+    // in-tune streak for that string; completes + stamps 'verified' when all pass.
+    function verifyFeed(targetFreq, cents) {
+        if (!_verify || _verify.complete || targetFreq == null) return verifyState();
+        const t = _verify.targets.find((x) => Math.abs(x.freq - targetFreq) < 0.5);
+        if (t && !t.done) {
+            if (isFinite(cents) && Math.abs(cents) <= VERIFY_TOL_CENTS) {
+                if (++t.streak >= VERIFY_STABLE) t.done = true;
+            } else {
+                t.streak = 0;
+            }
+        }
+        if (_verify.targets.every((x) => x.done)) {
+            _verify.complete = true;
+            _publishVerified(_verify.targets.length);
+        }
+        return verifyState();
+    }
+    function _publishVerified(stringCount) {
+        const wt = window.feedBack && window.feedBack.workingTuning;
+        if (!wt || typeof wt.set !== 'function') return;
+        const verifiedStrings = [];
+        for (let i = 0; i < stringCount; i++) verifiedStrings.push(true);
+        try { wt.set({ verifiedStrings }, { provenance: 'verified' }); } catch (_) { /* noop */ }
+    }
+
     window._tunerAutoOpen = {
         tuningIdentityKey: _tuningIdentityKey,
         sessionKey: _autoOpenSessionKey,
@@ -801,6 +855,10 @@
         coverageReport: _coverageReport,
         playerTuning: _playerTuning,
         publishWorkingTuning: _publishWorkingTuning,
+        verifyStart: verifyStart,
+        verifyFeed: verifyFeed,
+        verifyCancel: verifyCancel,
+        verifyState: verifyState,
         onSongLoading: _onAutoOpenSongLoadingHandler,
         getState() {
             return {
