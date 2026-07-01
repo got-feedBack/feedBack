@@ -1,0 +1,39 @@
+{
+  "id": "drum_highway_3d",
+  "name": "3D Drum Highway",
+  "version": "0.3.0",
+  "type": "visualization",
+  "bundled": true,
+  "script": "screen.js",
+  "settings": {
+    "html": "settings.html",
+    "category": "graphics"
+  },
+  "standards": [
+    "capability-pipelines.v1",
+    "plugin-runtime-idempotent.v1"
+  ],
+  "capabilities": {
+    "midi-input": {
+      "roles": [
+        "requester"
+      ],
+      "requests": [
+        "discover",
+        "list-sources",
+        "select-source",
+        "open-source",
+        "close-source"
+      ],
+      "mode": "active",
+      "compatibility": "degrade-noop",
+      "ownership": "requester-only",
+      "safety": "sensitive",
+      "description": "Reads the e-kit/MIDI-pad input through the core midi-input domain (Web-MIDI provider ships built-in with the domain). Absent domain \u2192 no MIDI devices, fail-soft.",
+      "version": 1
+    }
+  },
+  "category": "practice",
+  "description": "3D note highway for drum charts.",
+  "icon": "assets/thumb.svg"
+}
