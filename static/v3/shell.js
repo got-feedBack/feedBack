@@ -36,7 +36,7 @@
         { key: 'plugins',    screen: 'v3-plugins',       label: 'Plugins',         group: 'HOME',    icon: 'plug' },
         { key: 'settings',   screen: 'settings',         label: 'Settings',        group: 'HOME',    icon: 'gear' },
         { key: 'playlists',  screen: 'v3-playlists',     label: 'Playlists',       group: 'LIBRARY', icon: 'list' },
-        { key: 'songs',      screen: 'v3-songs',         label: 'Songs',           group: 'LIBRARY', icon: 'disc' },
+        { key: 'songs',      screen: 'v3-songs',         label: 'Song Library',    group: 'LIBRARY', icon: 'disc' },
         { key: 'lessons',    screen: 'v3-lessons',       label: 'Lessons',         group: 'LIBRARY', icon: 'lessons' },
         { key: 'favorites',  screen: 'favorites',        label: 'Favorites',       group: 'LIBRARY', icon: 'star' },
         { key: 'saved',      screen: 'v3-saved',         label: 'Saved for Later', group: 'LIBRARY', icon: 'bookmark' },
