@@ -1016,7 +1016,7 @@
             '<div class="flex items-start justify-between gap-2">' +
               '<div class="min-w-0">' +
                 '<div class="text-sm text-fb-text truncate" title="' + esc(c.title) + '">' + esc(c.title) + '</div>' +
-                '<div class="text-xs text-fb-textDim truncate">' + meta + ' · ' + acc + '</div>' +
+                '<div class="text-xs text-fb-textDim truncate">' + esc(meta) + ' · ' + acc + '</div>' +
                 '<div class="text-[10px] text-fb-textDim/60 truncate" title="' + esc(c.filename) + '">' + esc(c.filename) + '</div>' +
                 (prefLabel ? '<div class="text-[10px] font-semibold text-fb-primary mt-0.5">' + esc(prefLabel) + '</div>' : '') +
               '</div>' +

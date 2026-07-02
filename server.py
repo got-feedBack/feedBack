@@ -53,6 +53,7 @@ import loosefolder as loosefolder_mod
 from scan_worker import _extract_meta_for_file, _relpath, _scan_one
 
 import concurrent.futures
+import contextlib
 import contextvars
 import inspect
 import ipaddress
@@ -2704,11 +2705,20 @@ class MetadataDB:
         whitespace, lowercase, optionally drop a leading 'the ' (artist names)."""
         import re
         import unicodedata
-        s = unicodedata.normalize("NFKD", str(s or ""))
+        raw = str(s or "")
+        s = unicodedata.normalize("NFKD", raw)
         s = "".join(c for c in s if not unicodedata.combining(c)).lower()
         if fold_the:
             s = re.sub(r"^the\s+", "", s)
-        return re.sub(r"[^a-z0-9]+", "", s)
+        folded = re.sub(r"[^a-z0-9]+", "", s)
+        if folded:
+            return folded
+        # All-non-Latin titles (CJK/Cyrillic/Greek/Arabic) fold to "" above,
+        # which would collapse every such song into one bogus work. Fall back to
+        # the raw text lowercased with whitespace collapsed so distinct titles
+        # keep distinct keys. Latin names always hit the `folded` branch, so
+        # their behavior is unchanged.
+        return re.sub(r"\s+", " ", raw.strip().lower())
 
     @classmethod
     def _work_key(cls, artist, title) -> str:
@@ -3067,28 +3077,39 @@ class MetadataDB:
         # also what makes keyset seeking correct.
         order += ", filename"
 
-        total = self.conn.execute(f"SELECT COUNT(*) FROM songs {where}", params).fetchone()[0]
+        # Grouped reads filter through the materialized work_display (the
+        # `is_group_representative=1` predicate). rebuild_work_display does
+        # DELETE→INSERT→commit under self._lock, so a lock-free reader on
+        # another thread (shared conn, check_same_thread=False) could land its
+        # SELECT in the mid-rebuild window and see 0 rows. Hold self._lock
+        # across the representative COUNT+SELECT so it can't overlap a rebuild.
+        # _ensure_work_display already rebuilt above under its own lock (and
+        # self._lock is NOT reentrant), so we must NOT nest it here. Ungrouped
+        # reads stay lock-free (WAL) via nullcontext.
+        read_guard = self._lock if group else contextlib.nullcontext()
+        with read_guard:
+            total = self.conn.execute(f"SELECT COUNT(*) FROM songs {where}", params).fetchone()[0]
 
-        cols = ("SELECT filename, title, artist, album, year, duration, tuning, "
-                "arrangements, has_lyrics, mtime, format, stem_count, stem_ids, "
-                "tuning_name, tuning_offsets FROM songs ")
-        cursor = _decode_cursor(after) if after else None
-        eff_sort = _effective_keyset_sort(sort, direction)
-        if cursor and eff_sort in _KEYSET_SORTS:
-            # Keyset seek: rows strictly after the cursor in the total order
-            # `<col> <dir>, filename ASC` (NULL-aware, so == OFFSET exactly).
-            col, collate, primary_dir = _KEYSET_SORTS[eff_sort]
-            seek, seek_params = _keyset_seek(col, collate, primary_dir, cursor[0], cursor[1])
-            seek_where = where + (" AND " if where else " WHERE ") + seek
-            rows = self.conn.execute(
-                f"{cols}{seek_where} ORDER BY {order} LIMIT ?",
-                params + seek_params + [size],
-            ).fetchall()
-        else:
-            rows = self.conn.execute(
-                f"{cols}{where} ORDER BY {order} LIMIT ? OFFSET ?",
-                params + [size, page * size],
-            ).fetchall()
+            cols = ("SELECT filename, title, artist, album, year, duration, tuning, "
+                    "arrangements, has_lyrics, mtime, format, stem_count, stem_ids, "
+                    "tuning_name, tuning_offsets FROM songs ")
+            cursor = _decode_cursor(after) if after else None
+            eff_sort = _effective_keyset_sort(sort, direction)
+            if cursor and eff_sort in _KEYSET_SORTS:
+                # Keyset seek: rows strictly after the cursor in the total order
+                # `<col> <dir>, filename ASC` (NULL-aware, so == OFFSET exactly).
+                col, collate, primary_dir = _KEYSET_SORTS[eff_sort]
+                seek, seek_params = _keyset_seek(col, collate, primary_dir, cursor[0], cursor[1])
+                seek_where = where + (" AND " if where else " WHERE ") + seek
+                rows = self.conn.execute(
+                    f"{cols}{seek_where} ORDER BY {order} LIMIT ?",
+                    params + seek_params + [size],
+                ).fetchall()
+            else:
+                rows = self.conn.execute(
+                    f"{cols}{where} ORDER BY {order} LIMIT ? OFFSET ?",
+                    params + [size, page * size],
+                ).fetchall()
 
         estd = self._estd_set()
         favs = self.favorite_set()
@@ -3340,19 +3361,28 @@ class MetadataDB:
             where += mfrag
             params += mparams
             where += self._GROUP_REP_PREDICATE
-        total = self.conn.execute(f"SELECT COUNT(*) FROM songs {where}", params).fetchone()[0]
-        # NOCASE collation here mirrors `query_artists` and the per-
-        # letter `COUNT(DISTINCT artist COLLATE NOCASE)` below — without
-        # it, an artist stored under two different casings would inflate
-        # `total_artists` against the letter-bar breakdown the UI
-        # renders next to it.
-        artist_count = self.conn.execute(
-            f"SELECT COUNT(DISTINCT artist COLLATE NOCASE) FROM songs {where}", params
-        ).fetchone()[0]
-        rows = self.conn.execute(
-            f"SELECT UPPER(SUBSTR(artist, 1, 1)) as letter, COUNT(DISTINCT artist COLLATE NOCASE) "
-            f"FROM songs {where} GROUP BY letter", params
-        ).fetchall()
+        # Grouped stat counts filter through work_display (same
+        # is_group_representative=1 predicate as query_page); hold self._lock
+        # across these representative SELECTs so they can't observe a
+        # mid-rebuild empty table (see query_page for the full rationale).
+        # _ensure_work_display already rebuilt above under its own lock, so we
+        # do NOT nest it here (self._lock is non-reentrant). Ungrouped reads
+        # stay lock-free (WAL) via nullcontext.
+        read_guard = self._lock if group else contextlib.nullcontext()
+        with read_guard:
+            total = self.conn.execute(f"SELECT COUNT(*) FROM songs {where}", params).fetchone()[0]
+            # NOCASE collation here mirrors `query_artists` and the per-
+            # letter `COUNT(DISTINCT artist COLLATE NOCASE)` below — without
+            # it, an artist stored under two different casings would inflate
+            # `total_artists` against the letter-bar breakdown the UI
+            # renders next to it.
+            artist_count = self.conn.execute(
+                f"SELECT COUNT(DISTINCT artist COLLATE NOCASE) FROM songs {where}", params
+            ).fetchone()[0]
+            rows = self.conn.execute(
+                f"SELECT UPPER(SUBSTR(artist, 1, 1)) as letter, COUNT(DISTINCT artist COLLATE NOCASE) "
+                f"FROM songs {where} GROUP BY letter", params
+            ).fetchall()
         letters = {}
         for letter, count in rows:
             count = int(count or 0)
@@ -3373,10 +3403,12 @@ class MetadataDB:
         # only when the caller opts in, so non-rail callers skip the scan.
         if want_sort_letters:
             sort_col = "title" if sort in ("title", "title-desc") else "artist"
-            sort_rows = self.conn.execute(
-                f"SELECT UPPER(SUBSTR(COALESCE({sort_col}, ''), 1, 1)) AS letter, COUNT(*) "
-                f"FROM songs {where} GROUP BY letter", params
-            ).fetchall()
+            # Same representative-SELECT lock guard as the counts above.
+            with read_guard:
+                sort_rows = self.conn.execute(
+                    f"SELECT UPPER(SUBSTR(COALESCE({sort_col}, ''), 1, 1)) AS letter, COUNT(*) "
+                    f"FROM songs {where} GROUP BY letter", params
+                ).fetchall()
             sort_letters: dict[str, int] = {}
             for letter, count in sort_rows:
                 count = int(count or 0)
