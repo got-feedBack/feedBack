@@ -555,7 +555,9 @@ class MetadataDB:
                 tuning_name TEXT DEFAULT '',
                 tuning_sort_key INTEGER DEFAULT 0,
                 tuning_offsets TEXT DEFAULT '',
-                genre TEXT DEFAULT ''
+                genre TEXT DEFAULT '',
+                track_number INTEGER,
+                disc INTEGER
             )
         """)
         # Idempotent migrations for installs that predate each column.
@@ -577,6 +579,11 @@ class MetadataDB:
             # Primary genre from the feedpak `genres` list (spec 1.12.0). Cache;
             # repopulated on rescan.
             "ALTER TABLE songs ADD COLUMN genre TEXT DEFAULT ''",
+            # Album track order from the feedpak `track`/`disc` fields (spec
+            # 1.12.0). NULL when the pack doesn't author them; the album view
+            # falls back to title order. Cache; repopulated on rescan.
+            "ALTER TABLE songs ADD COLUMN track_number INTEGER",
+            "ALTER TABLE songs ADD COLUMN disc INTEGER",
         ):
             try:
                 self.conn.execute(ddl)
@@ -2557,8 +2564,8 @@ class MetadataDB:
             self.conn.execute(
                 "INSERT OR REPLACE INTO songs "
                 "(filename, mtime, size, title, artist, album, year, duration, tuning, arrangements, "
-                "has_lyrics, format, stem_count, stem_ids, tuning_name, tuning_sort_key, tuning_offsets, genre) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "has_lyrics, format, stem_count, stem_ids, tuning_name, tuning_sort_key, tuning_offsets, genre, track_number, disc) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (filename, mtime, size, meta.get("title", ""), meta.get("artist", ""),
                  meta.get("album", ""), meta.get("year", ""), meta.get("duration", 0),
                  meta.get("tuning", ""), json.dumps(meta.get("arrangements", [])),
@@ -2569,7 +2576,9 @@ class MetadataDB:
                  meta.get("tuning_name", "") or "",
                  int(meta.get("tuning_sort_key", 0) or 0),
                  meta.get("tuning_offsets", "") or "",
-                 meta.get("genre", "") or ""),
+                 meta.get("genre", "") or "",
+                 meta.get("track_number"),
+                 meta.get("disc")),
             )
             self.conn.commit()
             # A song's identity may have changed → the grouping read-model is stale.
@@ -3545,6 +3554,10 @@ class MetadataDB:
             # '2005' rather than alphabetic.
             "year": "(year = '') ASC, CAST(year AS INTEGER) ASC",
             "year-desc": "(year = '') ASC, CAST(year AS INTEGER) DESC",
+            # Album track order: authored track number (disc, then track); songs
+            # with no number fall to the bottom, ordered by title. Used by the
+            # album detail view. Alpha-by-title is the fallback when unauthored.
+            "track": "(track_number IS NULL) ASC, COALESCE(disc, 1), track_number, title COLLATE NOCASE",
             # Mastery = best accuracy across a song's arrangements, from the
             # separate song_stats table (so via a correlated subquery — this sort
             # drops to OFFSET paging, like tuning/year). Unscored ("not started")
@@ -3824,6 +3837,7 @@ class MetadataDB:
                      arrangements_has=None, arrangements_lacks=None,
                      stems_has=None, stems_lacks=None,
                      has_lyrics=None, tunings=None, mastery=None,
+                     match_states=None, genre=None,
                      naming_mode="legacy", page=0, size=120):
         """Distinct (artist, album) groups with a track count + a representative
         cover song, for the album-condensed browse (paged by album). Rows with no
@@ -3835,6 +3849,7 @@ class MetadataDB:
             arrangements_has=arrangements_has, arrangements_lacks=arrangements_lacks,
             stems_has=stems_has, stems_lacks=stems_lacks,
             has_lyrics=has_lyrics, tunings=tunings, mastery=mastery,
+            match_states=match_states, genre=genre,
             naming_mode=naming_mode,
         )
         awhere = where + " AND album IS NOT NULL AND album != ''"
@@ -7258,6 +7273,7 @@ async def list_library_albums(q: str = "", page: int = 0, size: int = 120,
                               arrangements_has: str = "", arrangements_lacks: str = "",
                               stems_has: str = "", stems_lacks: str = "",
                               has_lyrics: str = "", tunings: str = "", mastery: str = "",
+                              match: str = "", genre: str = "",
                               provider: str = "local"):
     """Album-condensed browse: distinct (artist, album) groups with a track count
     and a representative cover song. Paged by album. Same filters as /api/library."""
@@ -7267,6 +7283,7 @@ async def list_library_albums(q: str = "", page: int = 0, size: int = 120,
     albums, total = await _call_library_provider_async(
         library_provider, "query_albums",
         page=page, size=size, mastery=_split_csv(mastery),
+        match_states=_split_csv(match), genre=_split_csv(genre),
         **_library_filter_args(
             q=q, favorites=favorites, format=format, artist=artist, album=album,
             arrangements_has=arrangements_has, arrangements_lacks=arrangements_lacks,

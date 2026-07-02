@@ -153,7 +153,7 @@
         if (!saved || typeof saved !== 'object') return;
         if (SORTS.some(([v]) => v === saved.sort)) state.sort = saved.sort;
         if (FORMATS.some(([v]) => v === saved.format)) state.format = saved.format;
-        if (saved.view === 'grid' || saved.view === 'tree' || saved.view === 'folder') state.view = saved.view;
+        if (saved.view === 'grid' || saved.view === 'tree' || saved.view === 'folder' || saved.view === 'albums') state.view = saved.view;
         if (typeof saved.grouping === 'boolean') state.grouping = saved.grouping;
         const f = saved.filters;
         if (f && typeof f === 'object') {
@@ -2185,6 +2185,65 @@
     }
 
     // ── Tree ────────────────────────────────────────────────────────────────
+    // ── Albums (album-condensed browse; consumes /api/library/albums) ─────────
+    // Album cards -> click -> a track list (reusing /api/library?artist=&album=)
+    // with Play-album (feeds the play-queue). Respects the active drawer filters.
+    async function loadAlbums() {
+        const host = document.getElementById('v3-songs-albums');
+        if (!host) return;
+        host.innerHTML = '<p class="text-fb-textDim text-sm">Loading…</p>';
+        const data = await jget('/api/library/albums?' + queryParams().toString());
+        const albums = (data && data.albums) || [];
+        if (!albums.length) { host.innerHTML = '<p class="text-fb-textDim text-sm py-8 text-center">No albums match.</p>'; return; }
+        host.innerHTML =
+            '<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">' +
+            albums.map((a, i) =>
+                '<button data-album="' + i + '" class="group text-left">' +
+                '<div class="aspect-square rounded-lg overflow-hidden bg-fb-card mb-2">' +
+                (a.cover ? '<img src="' + esc(artUrl({ filename: a.cover })) + '" alt="" loading="lazy" decoding="async" class="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105" onerror="this.style.visibility=\'hidden\'">' : '') +
+                '</div>' +
+                '<div class="text-sm text-fb-text truncate">' + esc(a.album) + '</div>' +
+                '<div class="text-xs text-fb-textDim truncate">' + esc(a.artist) + ' · ' + (a.count || 0) + ' track' + (a.count === 1 ? '' : 's') + '</div>' +
+                '</button>').join('') + '</div>';
+        host.querySelectorAll('[data-album]').forEach((b) => b.addEventListener('click', () => {
+            const a = albums[Number(b.getAttribute('data-album'))];
+            if (a) openAlbum(a);
+        }));
+    }
+    async function openAlbum(a) {
+        const host = document.getElementById('v3-songs-albums');
+        if (!host) return;
+        host.innerHTML = '<p class="text-fb-textDim text-sm">Loading…</p>';
+        // Honour the active drawer filters (like the album grid) but pin THIS
+        // album's artist/album and force track order — so the track list and
+        // Play-album never include songs the user filtered out.
+        const p = queryParams({ artist: a.artist, album: a.album, size: '300', sort: 'track' }, { catalog: true });
+        const data = await jget('/api/library?' + p.toString());
+        const songs = (data && data.songs) || [];
+        host.innerHTML =
+            '<button data-albums-back class="text-sm text-fb-textDim hover:text-fb-text mb-4">← Albums</button>' +
+            '<div class="flex items-center justify-between gap-3 mb-4">' +
+            '<div class="min-w-0"><h2 class="text-2xl font-bold text-fb-text truncate">' + esc(a.album) + '</h2>' +
+            '<p class="text-sm text-fb-textDim truncate">' + esc(a.artist) + ' · ' + songs.length + ' track' + (songs.length === 1 ? '' : 's') + '</p></div>' +
+            (songs.length ? '<button data-album-playall class="bg-fb-primary hover:bg-fb-primaryHi text-white text-sm font-medium px-4 py-2 rounded-md shrink-0">▶ Play album</button>' : '') +
+            '</div>' +
+            '<ul class="space-y-1">' + songs.map((s, i) =>
+                '<li><button data-album-track="' + i + '" class="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-white/5 text-left">' +
+                '<span class="text-xs text-fb-textDim w-6 text-right">' + (i + 1) + '</span>' +
+                '<span class="flex-1 truncate text-sm text-fb-text">' + esc(s.title || s.filename) + '</span></button></li>').join('') + '</ul>';
+        host.querySelector('[data-albums-back]')?.addEventListener('click', () => loadAlbums());
+        host.querySelector('[data-album-playall]')?.addEventListener('click', () => {
+            const files = songs.map((s) => s.filename).filter(Boolean);
+            if (!files.length) return;
+            if (window.feedBack && window.feedBack.playQueue) window.feedBack.playQueue.start(files, { source: a.album });
+            else if (typeof window.playSong === 'function') window.playSong(enc(files[0]));
+        });
+        host.querySelectorAll('[data-album-track]').forEach((b) => b.addEventListener('click', () => {
+            const s = songs[Number(b.getAttribute('data-album-track'))];
+            if (s && window.playSong) window.playSong(enc(s.filename));
+        }));
+    }
+
     async function loadTree() {
         const host = document.getElementById('v3-songs-tree');
         if (!host) return;
@@ -2539,7 +2598,12 @@
         document.querySelectorAll('[data-fn="' + sel + '"] [data-fav]').forEach((btn) => {
             btn.textContent = fav ? '♥' : '♡';
             btn.setAttribute('aria-pressed', fav ? 'true' : 'false');
-            btn.classList.toggle('text-fb-accent', fav); btn.classList.toggle('text-white', !fav);
+            // Swap exactly the idle colour this heart was rendered with (grid =
+            // text-white, tree/List view = text-fb-textDim) — mirrors wireCards.
+            // A hardcoded text-white toggle would leave List-View rows' text-fb-textDim
+            // in place, so the heart changed glyph but stayed dim (never turned red).
+            const idle = btn.getAttribute('data-fav-idle') || 'text-white';
+            btn.classList.toggle('text-fb-accent', fav); btn.classList.toggle(idle, !fav);
         });
     }
 
@@ -2733,6 +2797,7 @@
         document.getElementById('v3-songs-gridsizer')?.classList.toggle('hidden', state.view !== 'grid');
         document.getElementById('v3-songs-tree')?.classList.toggle('hidden', state.view !== 'tree');
         document.getElementById('lib-folder-tree')?.classList.toggle('hidden', state.view !== 'folder');
+        document.getElementById('v3-songs-albums')?.classList.toggle('hidden', state.view !== 'albums');
         // Refresh the A–Z jump rail (shows only for the grid + alphabetical
         // sorts; hides itself otherwise). Independent of the grid load.
         refreshRail();
@@ -2744,7 +2809,7 @@
             _applyMainScrollTop(0);
             return _ensureFolderLibrary().then(() => window.folderLibrary?.load());
         }
-        const loaded = state.view === 'grid' ? loadGrid(true) : loadTree();
+        const loaded = state.view === 'grid' ? loadGrid(true) : state.view === 'albums' ? loadAlbums() : loadTree();
         _applyMainScrollTop(0);
         return loaded;
     }
@@ -2805,7 +2870,7 @@
             (providers.length > 1 ? '<select id="v3-songs-provider" class="' + ctrl + '">' + provOpts + '</select>' : '') +
             '<select id="v3-songs-artist" class="' + ctrl + ' max-w-[11rem]" aria-label="Artist">' + artistSelectHtml() + '</select>' +
             '<select id="v3-songs-album" class="' + ctrl + ' max-w-[11rem]" aria-label="Album"' + (state.artist ? '' : ' disabled') + '>' + albumSelectHtml() + '</select>' +
-            '<div class="flex rounded-md overflow-hidden border border-gray-700"><button id="v3-songs-grid-btn" class="px-3 py-2 text-sm">▦</button><button id="v3-songs-tree-btn" class="px-3 py-2 text-sm">≣</button><button id="v3-songs-folder-btn" class="px-3 py-2 text-sm" style="display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;width:2.25rem"><svg fill="currentColor" viewBox="0 0 16 16" style="width:12px;height:12px;flex-shrink:0"><path d="M1 3.5A1.5 1.5 0 012.5 2h3.086a1.5 1.5 0 011.06.44l.915.914H13.5A1.5 1.5 0 0115 4.914V12.5a1.5 1.5 0 01-1.5 1.5h-11A1.5 1.5 0 011 12.5v-9z"/></svg></button></div>' +
+            '<div class="flex rounded-md overflow-hidden border border-gray-700"><button id="v3-songs-grid-btn" class="px-3 py-2 text-sm">▦</button><button id="v3-songs-tree-btn" class="px-3 py-2 text-sm">≣</button><button id="v3-songs-albums-btn" title="Albums" class="px-3 py-2 text-sm">💿</button><button id="v3-songs-folder-btn" class="px-3 py-2 text-sm" style="display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;width:2.25rem"><svg fill="currentColor" viewBox="0 0 16 16" style="width:12px;height:12px;flex-shrink:0"><path d="M1 3.5A1.5 1.5 0 012.5 2h3.086a1.5 1.5 0 011.06.44l.915.914H13.5A1.5 1.5 0 0115 4.914V12.5a1.5 1.5 0 01-1.5 1.5h-11A1.5 1.5 0 011 12.5v-9z"/></svg></button></div>' +
             '<select id="v3-songs-sort" class="' + ctrl + '">' + opt(SORTS, state.sort) + '</select>' +
             '<select id="v3-songs-format" class="' + ctrl + '">' + opt(FORMATS, state.format) + '</select>' +
             '<button id="v3-songs-filters" class="relative ' + ctrl + ' flex items-center gap-2">Filters<span id="v3-songs-filter-count" class="hidden bg-fb-primary text-white text-xs rounded-full px-1.5">0</span></button>' +
@@ -2825,6 +2890,7 @@
             '<div id="v3-songs-grid" class="v3-grid-window grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4"></div>' +
             '</div>' +
             '<div id="v3-songs-tree" class="hidden"></div>' +
+            '<div id="v3-songs-albums" class="hidden"></div>' +
             '<div id="lib-folder-controls" style="display:none"></div>' +
             '<div id="lib-folder-tree" class="space-y-1 hidden"></div>' +
             '<div id="v3-songs-sentinel" class="h-8"></div>' +
@@ -2916,12 +2982,14 @@
             byId('v3-songs-grid-btn').className = 'px-3 py-2 text-sm ' + (v === 'grid' ? 'bg-fb-primary text-white' : 'text-fb-textDim');
             byId('v3-songs-tree-btn').className = 'px-3 py-2 text-sm ' + (v === 'tree' ? 'bg-fb-primary text-white' : 'text-fb-textDim');
             byId('v3-songs-folder-btn').className = 'px-3 py-2 text-sm ' + (v === 'folder' ? 'bg-fb-primary text-white' : 'text-fb-textDim');
+            { const ab = byId('v3-songs-albums-btn'); if (ab) ab.className = 'px-3 py-2 text-sm ' + (v === 'albums' ? 'bg-fb-primary text-white' : 'text-fb-textDim'); }
             if (v === 'folder') await _ensureFolderLibrary();
             return reload();
         };
         byId('v3-songs-grid-btn').addEventListener('click', () => setView('grid'));
         byId('v3-songs-tree-btn').addEventListener('click', () => setView('tree'));
         byId('v3-songs-folder-btn').addEventListener('click', () => setView('folder'));
+        byId('v3-songs-albums-btn')?.addEventListener('click', () => setView('albums'));
         // Await the initial load so a caller awaiting render() (the scroll
         // restore on screen re-entry) sees a populated grid + real state.total
         // before it tries to page deeper.
