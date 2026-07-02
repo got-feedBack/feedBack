@@ -1134,7 +1134,13 @@
             if (bulk.add.length) body.add_tags = bulk.add;
             if (bulk.remove.size) body.remove_tags = [...bulk.remove];
             if (!('set_difficulty' in body) && !body.add_tags && !body.remove_tags) { done(); return; }
-            await jsend('POST', '/api/songs/user-meta/batch', body);
+            // jsend returns null on HTTP error / network failure — don't tear down the
+            // selection or reload as if it worked. Surface the failure and let the user retry.
+            const res = await jsend('POST', '/api/songs/user-meta/batch', body);
+            if (!res) {
+                if (window.fbNotify) { try { window.fbNotify.show({ title: 'Bulk edit failed', message: 'Could not save your changes. Please try again.', icon: '⚠️', accent: '#EF4444' }); } catch (e) { /* */ } }
+                return;
+            }
             done();
             finishBatch();
         }
@@ -1947,7 +1953,15 @@
         if (catChanged) ops.push(fetch('/api/song/' + enc(fn) + '/meta', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: st.t.trim(), artist: st.a.trim(), album: st.al.trim(), year: String(st.y).trim() }) }));
         ops.push(fetch('/api/song/' + enc(fn) + '/user-meta', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_difficulty: st.diff, notes: st.notes, tags: st.tags }) }));
         if (st.artDataUrl) ops.push(fetch('/api/song/' + enc(fn) + '/art/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ image: st.artDataUrl }) }));
-        try { await Promise.all(ops); } catch (_) { /* */ }
+        // Fire the writes concurrently but know each outcome — a failed write must not
+        // look like a save. allSettled keeps partial results; treat a rejection OR a
+        // non-ok HTTP response as failure and keep the drawer open so the user can retry.
+        const results = await Promise.allSettled(ops);
+        const failed = results.some((r) => r.status === 'rejected' || (r.value && r.value.ok === false));
+        if (failed) {
+            if (window.fbNotify) { try { window.fbNotify.show({ title: 'Save failed', message: 'Could not save your changes. Please try again.', icon: '⚠️', accent: '#EF4444' }); } catch (e) { /* */ } }
+            return;
+        }
         closeDetails();
         try { reload(); } catch (_) { /* not on the songs grid */ }
     }
