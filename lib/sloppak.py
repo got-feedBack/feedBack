@@ -13,7 +13,6 @@ See the format spec in the project's sloppak plan for the full layout.
 
 from __future__ import annotations
 
-import json
 import logging
 import math
 import shutil
@@ -37,6 +36,7 @@ SONG_EXTS = (FEEDPAK_EXT, SLOPPAK_EXT)  # accepted on read/discovery
 
 import yaml
 
+from jsonc import load_json
 from safepath import safe_join
 from song import (
     Song,
@@ -423,7 +423,7 @@ def load_song(
             if not arr_path.exists():
                 continue
             try:
-                data = json.loads(arr_path.read_text(encoding="utf-8"))
+                data = load_json(arr_path)
             except Exception as e:
                 log.debug("sloppak: failed to parse arrangement %r: %s", rel, e)
                 continue
@@ -489,7 +489,7 @@ def load_song(
         raw_nt = None
         if nt_path is not None and nt_path.exists():
             try:
-                raw_nt = json.loads(nt_path.read_text(encoding="utf-8"))
+                raw_nt = load_json(nt_path)
             except Exception as e:
                 log.warning("sloppak: failed to parse notation %r: %s", notation_rel, e)
         if raw_nt is not None:
@@ -528,7 +528,7 @@ def load_song(
             dt_path = None
         if dt_path is not None and dt_path.exists():
             try:
-                raw = json.loads(dt_path.read_text(encoding="utf-8"))
+                raw = load_json(dt_path)
             except Exception as e:
                 log.warning("sloppak: failed to parse drum_tab %r: %s", drum_tab_rel, e)
                 raw = None
@@ -588,7 +588,7 @@ def load_song(
             st_path = None
         if st_path is not None and st_path.exists():
             try:
-                raw = json.loads(st_path.read_text(encoding="utf-8"))
+                raw = load_json(st_path)
             except Exception as e:
                 log.warning("sloppak: failed to parse song_timeline %r: %s", song_timeline_rel, e)
                 raw = None
@@ -686,7 +686,7 @@ def load_song(
             lyr_path = None
         if lyr_path is not None and lyr_path.exists():
             try:
-                raw = json.loads(lyr_path.read_text(encoding="utf-8"))
+                raw = load_json(lyr_path)
             except Exception as e:
                 log.debug("sloppak: failed to parse lyrics %r: %s", lyrics_rel, e)
                 raw = None
@@ -773,7 +773,7 @@ def load_song(
             k_path = None
         if k_path is not None and k_path.exists():
             try:
-                raw = json.loads(k_path.read_text(encoding="utf-8"))
+                raw = load_json(k_path)
             except Exception as e:
                 log.warning("sloppak: failed to parse keys %r: %s", keys_rel, e)
                 raw = None

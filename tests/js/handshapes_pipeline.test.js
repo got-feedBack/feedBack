@@ -62,7 +62,7 @@ test('bundle exposes handShapes to renderers with flat-list fallback', () => {
     const src = fs.readFileSync(HIGHWAY_JS, 'utf8');
     assert.match(
         src,
-        /\bhandShapes:\s*\([^)]*_filteredHandShapes[^)]*\)\s*\?\s*_filteredHandShapes\s*:\s*handShapes\b/,
+        /\bhandShapes\s*[:=]\s*\([^)]*_filteredHandShapes[^)]*\)\s*\?\s*_filteredHandShapes\s*:\s*handShapes\b/,
         'bundle must expose handShapes with the _filteredHandShapes-vs-handShapes ternary fallback',
     );
 });

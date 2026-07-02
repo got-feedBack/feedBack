@@ -454,6 +454,86 @@ def test_convert_file_writes_notation_sidecar_for_keys_only(tmp_path, monkeypatc
     assert beats[0]["notes"] == [{"midi": 60}]  # 48 + fret 12
 
 
+# A GP8 grand-staff piano (one Track, two <Staff> entries → two MasterBar/Bars
+# columns) followed by a guitar track. The treble stave carries a String=5 note
+# that only decodes against the 6-entry treble tuning — under the old
+# last-stave-tuning-wins bug it indexed out of range against the 5-entry bass
+# tuning and was silently dropped. The guitar's single note sits at column 2,
+# so it also exercises the bar-column offset after a multi-stave predecessor.
+_GPIF_GRAND_STAFF_PIANO = """
+<GPIF>
+  <Score><Title>T</Title><Artist>A</Artist></Score>
+  <Tracks>
+    <Track id="0"><Name>Piano</Name>
+      <Staves>
+        <Staff><Properties><Property name="Tuning">
+          <Pitches>76 71 67 62 57 52</Pitches></Property></Properties></Staff>
+        <Staff><Properties><Property name="Tuning">
+          <Pitches>50 45 40 35 30</Pitches></Property></Properties></Staff>
+      </Staves></Track>
+    <Track id="1"><Name>Lead Guitar</Name>
+      <Property name="Tuning"><Pitches>64 59 55 50 45 40</Pitches></Property></Track>
+  </Tracks>
+  <MasterBars>
+    <MasterBar><Time>4/4</Time><Bars>0 1 2</Bars></MasterBar>
+  </MasterBars>
+  <Bars>
+    <Bar id="0"><Voices>0</Voices></Bar>
+    <Bar id="1"><Voices>1</Voices></Bar>
+    <Bar id="2"><Voices>2</Voices></Bar>
+  </Bars>
+  <Voices>
+    <Voice id="0"><Beats>b0</Beats></Voice>
+    <Voice id="1"><Beats>b1</Beats></Voice>
+    <Voice id="2"><Beats>b2</Beats></Voice>
+  </Voices>
+  <Beats>
+    <Beat id="b0"><Rhythm ref="r0"/><Notes>n0</Notes></Beat>
+    <Beat id="b1"><Rhythm ref="r0"/><Notes>n1</Notes></Beat>
+    <Beat id="b2"><Rhythm ref="r0"/><Notes>n2</Notes></Beat>
+  </Beats>
+  <Notes>
+    <Note id="n0">
+      <Property name="String"><String>5</String></Property>
+      <Property name="Fret"><Fret>0</Fret></Property></Note>
+    <Note id="n1">
+      <Property name="String"><String>0</String></Property>
+      <Property name="Fret"><Fret>0</Fret></Property></Note>
+    <Note id="n2">
+      <Property name="String"><String>0</String></Property>
+      <Property name="Fret"><Fret>3</Fret></Property></Note>
+  </Notes>
+  <Rhythms><Rhythm id="r0"><NoteValue>Quarter</NoteValue></Rhythm></Rhythms>
+</GPIF>
+"""
+
+
+def test_convert_file_folds_grand_staff_and_offsets_bar_column(tmp_path, monkeypatch):
+    monkeypatch.setattr(gp2rs_gpx, "_load_gpif",
+                        lambda _p: ET.fromstring(_GPIF_GRAND_STAFF_PIANO))
+    out_files = gp2rs_gpx.convert_file(
+        "dummy.gpx", str(tmp_path), track_indices=[0, 1],
+        arrangement_names={0: "Keys", 1: "Lead"},
+    )
+    keys_xml = next(p for p in out_files if "Keys" in p)
+    guitar_xml = next(p for p in out_files if "Lead" in p)
+
+    def _notes(xml_path):
+        root = ET.parse(xml_path).getroot()
+        return [(int(n.get("string")), int(n.get("fret"))) for n in root.iter("note")]
+
+    # Both staves are folded into the one keys arrangement (keys encoding =
+    # midi//24, midi%24): treble E3 (52, the String=5 note the old bug dropped)
+    # AND bass D3 (50, the stave-1 column).
+    keys_midi = sorted(s * 24 + f for s, f in _notes(keys_xml))
+    assert keys_midi == [50, 52]
+    # The guitar note lives at bar column 2 (after the 2-column piano). Its own
+    # bar carries fret 3; the bass column it would wrongly read has fret 0, so a
+    # single fret-3 note proves the multi-stave column offset landed correctly.
+    guitar = _notes(guitar_xml)
+    assert len(guitar) == 1 and guitar[0][1] == 3
+
+
 def test_convert_file_sidecar_failure_does_not_break_conversion(tmp_path, monkeypatch):
     monkeypatch.setattr(gp2rs_gpx, "_load_gpif",
                         lambda _p: ET.fromstring(_GPIF_KEYS_AND_GUITAR))

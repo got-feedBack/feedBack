@@ -35,6 +35,9 @@
         ['title', 'Title A–Z'], ['title-desc', 'Title Z–A'],
         ['recent', 'Recently Added'], ['year-desc', 'Year (newest)'],
         ['year', 'Year (oldest)'], ['tuning', 'Tuning'],
+        // Mastery = best accuracy across arrangements (song_stats); unscored songs
+        // sort last either way. Ascending surfaces what needs work; never default.
+        ['mastery', 'Needs practice first'], ['mastery-desc', 'Most mastered first'],
     ];
     const FORMATS = [['', 'All formats'], ['sloppak', 'Feedpak'], ['loose', 'Folder']];
     const ARRANGEMENTS = ['Lead', 'Rhythm', 'Bass', 'Combo', 'Vocals'];
@@ -44,12 +47,17 @@
     // blank before the next window render lands.
     const OVERSCAN_ROWS = 2;
     const SCROLL_STATE_KEY = 'v3:songs-scroll-state';
+    // Persisted "how I'm looking" prefs (sort / format / view / drawer filters).
+    // The tester ask: "most users pick one sort and leave it" + remember filters.
+    // The search query and the artist/album drill-down are navigational, so they
+    // are deliberately NOT persisted; cold start stays the neutral Artist A–Z.
+    const PREFS_KEY = 'v3:songs-prefs';
     const btnCtrl = 'bg-gray-800/50 border border-gray-700 rounded-md px-3 py-2 text-sm text-fb-text outline-none focus:border-fb-primary';
 
     const state = {
         provider: 'local', view: 'grid', sort: 'artist', format: '', q: '',
         artist: '', album: '',
-        filters: { arr_has: [], arr_lacks: [], stem_has: [], stem_lacks: [], lyrics: '', tunings: [] },
+        filters: { arr_has: [], arr_lacks: [], stem_has: [], stem_lacks: [], lyrics: '', tunings: [], mastery: [] },
         page: 0, total: 0, loading: false, built: false, accuracy: {}, tuningNames: [],
         artistCatalog: [], renderedHash: '',
         scrollBound: false,
@@ -99,7 +107,8 @@
     function activeFilterCount() {
         const f = state.filters;
         return f.arr_has.length + f.arr_lacks.length + f.stem_has.length + f.stem_lacks.length +
-            (f.lyrics ? 1 : 0) + f.tunings.length + (state.artist ? 1 : 0) + (state.album ? 1 : 0);
+            (f.lyrics ? 1 : 0) + f.tunings.length + (f.mastery ? f.mastery.length : 0) +
+            (state.artist ? 1 : 0) + (state.album ? 1 : 0);
     }
 
     function _getV3MainScroller() { return document.getElementById('v3-main'); }
@@ -121,11 +130,51 @@
                 stem_lacks: [...(f.stem_lacks || [])].sort(),
                 lyrics: f.lyrics || '',
                 tunings: [...(f.tunings || [])].sort(),
+                mastery: [...(f.mastery || [])].sort(),
             },
         });
     }
 
     function _libraryStateHash() { return buildLibraryStateHash(state); }
+
+    // Restore the persisted view prefs once per page load, before the first
+    // toolbar build so the selects render with the saved values. Every value is
+    // validated against its known option list, so a stale/removed setting can
+    // never wedge the UI — it just falls back to the default.
+    let _prefsRestored = false;
+    function applySavedPrefs() {
+        let saved;
+        try { saved = JSON.parse(localStorage.getItem(PREFS_KEY)); } catch (_) { return; }
+        if (!saved || typeof saved !== 'object') return;
+        if (SORTS.some(([v]) => v === saved.sort)) state.sort = saved.sort;
+        if (FORMATS.some(([v]) => v === saved.format)) state.format = saved.format;
+        if (saved.view === 'grid' || saved.view === 'tree' || saved.view === 'folder') state.view = saved.view;
+        const f = saved.filters;
+        if (f && typeof f === 'object') {
+            const arr = (x) => (Array.isArray(x) ? x.slice() : []);
+            state.filters = {
+                arr_has: arr(f.arr_has), arr_lacks: arr(f.arr_lacks),
+                stem_has: arr(f.stem_has), stem_lacks: arr(f.stem_lacks),
+                lyrics: f.lyrics || '', tunings: arr(f.tunings),
+            };
+        }
+    }
+    // Persist the current view prefs (best-effort; storage may be full/disabled).
+    // Called from reload(), which every sort/format/filter/view change funnels
+    // through — so this is the single write point.
+    function saveLibraryPrefs() {
+        try {
+            const f = state.filters;
+            localStorage.setItem(PREFS_KEY, JSON.stringify({
+                sort: state.sort, format: state.format, view: state.view,
+                filters: {
+                    arr_has: [...f.arr_has], arr_lacks: [...f.arr_lacks],
+                    stem_has: [...f.stem_has], stem_lacks: [...f.stem_lacks],
+                    lyrics: f.lyrics || '', tunings: [...f.tunings],
+                },
+            }));
+        } catch (_) { /* best-effort */ }
+    }
 
     function _saveLibraryScrollSnapshot() {
         const main = _getV3MainScroller();
@@ -195,6 +244,7 @@
         if (f.stem_lacks.length) p.set('stems_lacks', f.stem_lacks.join(','));
         if (f.lyrics) p.set('has_lyrics', f.lyrics);
         if (f.tunings.length) p.set('tunings', f.tunings.join(','));
+        if (f.mastery && f.mastery.length) p.set('mastery', f.mastery.join(','));
         Object.entries(extra || {}).forEach(([k, v]) => p.set(k, v));
         return p;
     }
@@ -604,6 +654,41 @@
             '<button data-arr="' + esc(a.index != null ? a.index : '') + '" title="Play ' + esc(a.name) + '" class="text-[10px] px-1.5 py-0.5 rounded bg-gray-800/60 text-fb-textDim hover:bg-fb-primary hover:text-white transition">' + esc(a.name) + '</button>').join('');
     }
 
+    // ── Tuning-match flags (working-tuning PR 6) ───────────────────────────────
+    // Colour each song's tuning chip by whether your CURRENT working tuning covers
+    // it: green = play it now, amber = needs a retune. Uses the tuner plugin's
+    // coverage check (async) + the host workingTuning state — BOTH feature-detected,
+    // so without them the chips render exactly as before. Decoration runs AFTER the
+    // (sync) window paint so scrolling stays snappy; a token cancels a superseded pass.
+    let _tuningDecorToken = 0;
+    function _applyChipMatch(chip, stateName) {
+        chip.classList.remove('bg-fb-mid', 'bg-emerald-500', 'bg-amber-400');
+        chip.classList.add(stateName === 'match' ? 'bg-emerald-500'
+            : stateName === 'retune' ? 'bg-amber-400' : 'bg-fb-mid');
+        if (!chip.dataset.baseTitle) chip.dataset.baseTitle = chip.getAttribute('title') || '';
+        chip.setAttribute('title', chip.dataset.baseTitle + (stateName === 'match'
+            ? ' — matches your tuning' : stateName === 'retune' ? ' — needs a retune' : ''));
+    }
+    async function decorateTuningChips(grid) {
+        if (!grid) return;
+        const cov = window._tunerAutoOpen && window._tunerAutoOpen.coverageReport;
+        const hasWT = window.feedBack && window.feedBack.workingTuning
+            && typeof window.feedBack.workingTuning.get === 'function';
+        if (typeof cov !== 'function' || !hasWT) return;   // feature-detect → no flags
+        const token = ++_tuningDecorToken;
+        const chips = grid.querySelectorAll('[data-tuning-chip][data-tuning-offsets]');
+        for (const chip of chips) {
+            const offs = chip.getAttribute('data-tuning-offsets').split(',').map(Number);
+            if (!offs.length || offs.some((n) => !isFinite(n))) continue;
+            // Pass the instrument so coverage uses the right base pitches (bass vs guitar).
+            const arrangement = chip.dataset.tuningBass === '1' ? 'Bass' : 'Lead';
+            let rep = null;
+            try { rep = await cov({ tuning: offs, stringCount: offs.length, arrangement: arrangement }); } catch (_) { rep = null; }
+            if (token !== _tuningDecorToken) return;   // superseded by a re-paint / tuning change
+            if (rep) _applyChipMatch(chip, rep.covered ? 'match' : 'retune');
+        }
+    }
+
     function songCard(song) {
         const fav = song.favorite;
         const key = cardKey(song);
@@ -626,11 +711,22 @@
                 ? ('Custom Tuning: ' + targetNotes)
                 : tuningLabel;
             const pos = 'absolute top-2 ' + (state.selectMode ? 'left-9' : 'left-2');
+            // Tag the chip with its offsets so decorateTuningChips() can colour it
+            // green (matches your current tuning) / amber (needs a retune) after paint.
+            // Also flag a bass-only song (every arrangement is a bass part) so coverage
+            // scores its bass tuning against the bass base pitches, not guitar — otherwise
+            // a 4-string bass tuning read as guitar can false-match a guitar player.
+            const chipArrs = song.arrangements || [];
+            const chipIsBass = chipArrs.length > 0
+                && chipArrs.every((a) => /\bbass\b/i.test((a && a.name) || ''));
+            const matchAttr = (rawOffsets && rawOffsets.length)
+                ? ' data-tuning-chip data-tuning-offsets="' + esc(rawOffsets.join(',')) + '"'
+                    + (chipIsBass ? ' data-tuning-bass="1"' : '') : '';
             if (targetNotes) {
-                tuning = '<span class="' + pos + ' bg-fb-mid text-black text-[9px] font-bold px-1.5 py-0.5 rounded-sm leading-tight max-w-[5.5rem] text-center" title="' + esc(badgeTitle) + '">'
+                tuning = '<span class="' + pos + ' bg-fb-mid text-black text-[9px] font-bold px-1.5 py-0.5 rounded-sm leading-tight max-w-[5.5rem] text-center"' + matchAttr + ' title="' + esc(badgeTitle) + '">'
                     + esc('Custom Tuning') + '<br><span class="font-semibold tracking-wide">' + esc(targetNotes) + '</span></span>';
             } else {
-                tuning = '<span class="' + pos + ' bg-fb-mid text-black text-[10px] font-bold px-1.5 py-0.5 rounded-sm" title="' + esc(badgeTitle) + '">' + esc(tuningLabel) + '</span>';
+                tuning = '<span class="' + pos + ' bg-fb-mid text-black text-[10px] font-bold px-1.5 py-0.5 rounded-sm"' + matchAttr + ' title="' + esc(badgeTitle) + '">' + esc(tuningLabel) + '</span>';
             }
         }
         // Display-only (pointer-events-none) so a click falls through to the
@@ -815,33 +911,122 @@
         finishBatch();
     }
 
-    // Prompt for a target playlist (pick a listed number, or type a new name to
-    // create it) and add the given song filenames to it. Shared by the
-    // select-mode batch bar and the per-card ⋮ menu's single-song add. Returns
-    // the playlist id (or null if cancelled).
+    // Modern "Add to playlist" picker - replaces the old run-on numbered prompt
+    // ("1. Foo  2. Bar ...", which didn't scale past a couple of playlists). Shows a
+    // checkbox list of playlists with membership PRE-CHECK (a song already in a
+    // playlist shows checked; a multi-song selection shows the indeterminate box
+    // when only some are in), an inline "New playlist" row, and a search box once
+    // the list is long. Toggling a row adds/removes the given songs via the
+    // existing REST; only rows the user actually TOUCHED are changed. Resolves
+    // true if any change was applied, else null (cancelled / no-op). Shared by the
+    // per-card more-menu and the select-mode batch bar.
+    function openPlaylistPicker(fns) {
+        return new Promise((resolve) => { (async () => {
+            const lists = ((await jget('/api/playlists')) || []).filter((p) => !p.system_key);
+            // Pre-check membership: fetch each playlist's songs once (playlists are
+            // few, and this is a one-off on open, not a hot path). ALL selected in
+            // -> checked; SOME -> indeterminate.
+            const counts = await Promise.all(lists.map(async (p) => {
+                const pl = await jget('/api/playlists/' + p.id);
+                const has = new Set(((pl && pl.songs) || []).map((s) => s.filename));
+                return fns.reduce((n, fn) => n + (has.has(fn) ? 1 : 0), 0);
+            }));
+            const rows = lists.map((p, i) => ({
+                id: p.id, name: p.name, count: p.count || 0,
+                initial: counts[i] === fns.length ? 'all' : (counts[i] > 0 ? 'some' : 'none'),
+                checked: counts[i] === fns.length, touched: false,
+            }));
+
+            const overlay = document.createElement('div');
+            overlay.className = 'fixed inset-0 z-[200] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4';
+            let query = '';
+            const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); done(null); } };
+            function done(applied) { overlay.remove(); document.removeEventListener('keydown', onKey); resolve(applied || null); }
+            document.addEventListener('keydown', onKey);
+            overlay.addEventListener('click', (e) => { if (e.target === overlay) done(null); });
+
+            const boxFor = (r) => r.touched ? (r.checked ? '☑' : '☐')
+                : (r.initial === 'all' ? '☑' : r.initial === 'some' ? '▣' : '☐');
+            function rowHtml(r) {
+                return '<button type="button" data-pl="' + esc(String(r.id)) + '" class="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-white/5 text-left">' +
+                    '<span class="text-lg leading-none w-5 text-fb-primary">' + boxFor(r) + '</span>' +
+                    '<span class="flex-1 truncate text-sm text-fb-text">' + esc(r.name) + '</span>' +
+                    '<span class="text-xs text-fb-textDim">' + (r.count || 0) + '</span></button>';
+            }
+            function listHtml() {
+                const q = query.trim().toLowerCase();
+                const shown = q ? rows.filter((r) => r.name.toLowerCase().includes(q)) : rows;
+                if (!shown.length) return '<p class="text-sm text-fb-textDim text-center py-6">' + (rows.length ? 'No matches.' : 'No playlists yet - create one above.') + '</p>';
+                return shown.map(rowHtml).join('');
+            }
+            function bindRows() {
+                overlay.querySelectorAll('[data-pl]').forEach((b) => b.addEventListener('click', () => {
+                    const r = rows.find((x) => String(x.id) === b.getAttribute('data-pl'));
+                    if (!r) return;
+                    r.touched = true; r.checked = !r.checked;
+                    repaintList();
+                }));
+            }
+            function repaintList() { const el = overlay.querySelector('[data-list]'); if (el) { el.innerHTML = listHtml(); bindRows(); } }
+            async function createNew() {
+                const inp = overlay.querySelector('[data-new]');
+                const name = ((inp && inp.value) || '').trim();
+                if (!name) return;
+                const created = await jsend('POST', '/api/playlists', { name });
+                if (created && created.id) {
+                    rows.unshift({ id: created.id, name: created.name || name, count: 0, initial: 'none', checked: true, touched: true });
+                    query = ''; paint();
+                    overlay.querySelector('[data-new]')?.focus();
+                }
+            }
+            async function apply() {
+                // Act only where the final state differs from what's already stored.
+                const acts = rows.filter((r) => r.touched && ((r.checked && r.initial !== 'all') || (!r.checked && r.initial !== 'none')));
+                for (const r of acts) {
+                    for (const fn of fns) {
+                        try {
+                            if (r.checked) await fetch('/api/playlists/' + r.id + '/songs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename: fn }) });
+                            else await fetch('/api/playlists/' + r.id + '/songs/' + encodeURIComponent(fn), { method: 'DELETE' });
+                        } catch (e) { /* */ }
+                    }
+                }
+                if (window.v3Playlists) { try { window.v3Playlists.refresh(); } catch (e) { /* */ } }
+                if (acts.length && window.fbNotify) {
+                    try { window.fbNotify.show({ title: 'Playlists updated', message: 'Updated ' + acts.length + ' playlist' + (acts.length === 1 ? '' : 's'), icon: '\U0001f3b5' }); } catch (e) { /* */ }
+                }
+                done(acts.length ? true : null);
+            }
+            function paint() {
+                overlay.innerHTML =
+                    '<div class="bg-fb-card rounded-xl border border-fb-border/50 w-full max-w-md p-5 space-y-4" role="dialog" aria-label="Add to playlist">' +
+                    '<div class="flex items-center justify-between"><h3 class="text-lg font-semibold text-fb-text">Add ' + fns.length + ' song' + (fns.length === 1 ? '' : 's') + ' to playlist</h3>' +
+                    '<button type="button" data-x class="text-fb-textDim hover:text-fb-text text-xl leading-none">✕</button></div>' +
+                    '<div class="flex gap-2"><input data-new type="text" placeholder="+ New playlist name" class="' + btnCtrl + ' flex-1"><button type="button" data-create class="bg-fb-card/60 hover:bg-fb-card border border-fb-border/50 text-fb-text px-3 rounded-md text-sm">Create</button></div>' +
+                    (rows.length > 8 ? '<input data-search type="text" placeholder="Search playlists..." class="' + btnCtrl + ' w-full" value="' + esc(query) + '">' : '') +
+                    '<div data-list class="max-h-72 overflow-y-auto v3-scroll -mx-1 px-1">' + listHtml() + '</div>' +
+                    '<div class="flex justify-end"><button type="button" data-done class="bg-fb-primary hover:bg-fb-primaryHi text-white text-sm font-medium px-5 py-2 rounded-md">Done</button></div>' +
+                    '</div>';
+                overlay.querySelector('[data-x]').addEventListener('click', () => done(null));
+                overlay.querySelector('[data-done]').addEventListener('click', apply);
+                overlay.querySelector('[data-create]').addEventListener('click', createNew);
+                overlay.querySelector('[data-new]').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); createNew(); } });
+                const s = overlay.querySelector('[data-search]');
+                if (s) s.addEventListener('input', (e) => { query = e.target.value; repaintList(); });
+                bindRows();
+            }
+
+            document.body.appendChild(overlay);
+            paint();
+            (overlay.querySelector('[data-search]') || overlay.querySelector('[data-new]'))?.focus();
+        })(); });
+    }
+
+    // Open the picker for the given song filenames. Shared by the select-mode
+    // batch bar and the per-card more-menu. Resolves truthy if a change was applied.
     async function addFilenamesToPlaylist(filenames) {
         const fns = Array.from(filenames || []);
         if (!fns.length) return null;
-        const lists = (await jget('/api/playlists')) || [];
-        const choices = lists.filter((p) => !p.system_key);
-        const labels = choices.map((p, i) => (i + 1) + '. ' + p.name).join('   ');
-        const ans = ((await window.uiPrompt({
-            title: 'Add ' + fns.length + ' song' + (fns.length === 1 ? '' : 's') + ' to a playlist',
-            label: (labels ? labels + ' ' : '') + 'Type a number above, or a new playlist name:',
-            okLabel: 'Add',
-            placeholder: 'Number or new playlist name',
-        })) || '').trim();
-        if (!ans) return null;
-        let pid = null;
-        const num = parseInt(ans, 10);
-        if (!isNaN(num) && choices[num - 1]) pid = choices[num - 1].id;
-        else { const created = await jsend('POST', '/api/playlists', { name: ans }); pid = created && created.id; }
-        if (!pid) return null;
-        for (const fn of fns) {
-            try { await fetch('/api/playlists/' + pid + '/songs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename: fn }) }); } catch (e) { /* */ }
-        }
-        if (window.v3Playlists) { try { window.v3Playlists.refresh(); } catch (e) { /* */ } }
-        return pid;
+        return openPlaylistPicker(fns);
     }
 
     async function batchAddToPlaylist() {
@@ -1032,6 +1217,7 @@
         grid.style.top = (firstRow * rowH) + 'px';
         grid.innerHTML = _renderCardsRange(start, end);
         wireCards(grid);
+        decorateTuningChips(grid);   // colour tuning chips by working-tuning match (async, feature-detected)
         state.winRange = { start, end };
         state.renderedSelectMode = state.selectMode;
         if (sm && typeof sm.emit === 'function') {
@@ -1409,6 +1595,8 @@
             section('Arrangements', ARRANGEMENTS.map((a) => triPill('arr', a, a, triState(f.arr_has, f.arr_lacks, a))).join('')) +
             section('Stems (sloppak)', STEMS.map((s) => triPill('stem', s, s, triState(f.stem_has, f.stem_lacks, s))).join('')) +
             section('Lyrics', ['', '1', '0'].map((v) => '<button data-lyrics="' + v + '" class="px-2 py-1 rounded-md text-xs border ' + (f.lyrics === v ? 'bg-fb-primary text-white border-fb-primary' : 'bg-gray-800/50 text-fb-textDim border-gray-700') + '">' + (v === '' ? 'Any' : v === '1' ? 'Has lyrics' : 'No lyrics') + '</button>').join('')) +
+            // Progress (mastery bands) — multi-select; server filters via song_stats.
+            section('Progress', [['mastered', 'Mastered'], ['in_progress', 'In progress'], ['not_started', 'Not started']].map((it) => '<button data-mastery="' + it[0] + '" class="px-2 py-1 rounded-md text-xs border ' + (f.mastery.includes(it[0]) ? 'bg-fb-primary text-white border-fb-primary' : 'bg-gray-800/50 text-fb-textDim border-gray-700') + '">' + it[1] + '</button>').join('')) +
             section('Tuning', (state.tuningNames || []).map((t) => {
                 // Filter on the server's grouping key (raw offsets for customs)
                 // so two "Custom Tuning" entries are distinct; show their target
@@ -1440,10 +1628,11 @@
             renderDrawer();
         }));
         d.querySelectorAll('[data-lyrics]').forEach((b) => b.addEventListener('click', () => { f.lyrics = b.getAttribute('data-lyrics'); renderDrawer(); }));
+        d.querySelectorAll('[data-mastery]').forEach((b) => b.addEventListener('click', () => { const v = b.getAttribute('data-mastery'); const i = f.mastery.indexOf(v); if (i >= 0) f.mastery.splice(i, 1); else f.mastery.push(v); renderDrawer(); }));
         d.querySelector('[data-drawer-save]')?.addEventListener('click', saveCurrentAsCollection);
         d.querySelector('[data-drawer-close]')?.addEventListener('click', closeDrawer);
         d.querySelector('[data-drawer-clear]')?.addEventListener('click', async () => {
-            state.filters = { arr_has: [], arr_lacks: [], stem_has: [], stem_lacks: [], lyrics: '', tunings: [] };
+            state.filters = { arr_has: [], arr_lacks: [], stem_has: [], stem_lacks: [], lyrics: '', tunings: [], mastery: [] };
             state.artist = '';
             state.album = '';
             renderDrawer();
@@ -1489,6 +1678,7 @@
         // tell whether the grid is stale (e.g. an off-screen search changed
         // state.q) and needs a refresh rather than a scroll-preserving no-op.
         state.renderedHash = _libraryStateHash();
+        saveLibraryPrefs();
         updateFilterBadge();
         // A sort/filter/search/view change rebuilds the grid from page 0, so any
         // in-flight letter jump is now paging through a dataset that's about to
@@ -1541,6 +1731,9 @@
     async function render() {
         const root = document.getElementById('v3-songs');
         if (!root) return;
+        // Restore last-used sort/format/view/filters once, before building the
+        // toolbar so its selects reflect the saved choice (default: Artist A–Z).
+        if (!_prefsRestored) { applySavedPrefs(); _prefsRestored = true; }
         const providers = await loadProviders();
         const [, tn] = await Promise.all([
             (async () => { state.accuracy = (await jget('/api/stats/best')) || {}; })(),
@@ -1567,6 +1760,7 @@
             '<select id="v3-songs-format" class="' + ctrl + '">' + opt(FORMATS, state.format) + '</select>' +
             '<button id="v3-songs-filters" class="relative ' + ctrl + ' flex items-center gap-2">Filters<span id="v3-songs-filter-count" class="hidden bg-fb-primary text-white text-xs rounded-full px-1.5">0</span></button>' +
             '<button id="v3-songs-select" class="' + ctrl + (state.selectMode ? ' bg-fb-primary text-white' : '') + '">Select</button>' +
+            '<button id="v3-songs-refresh" title="Refresh library (scan for new songs)" class="' + ctrl + '">⟳ Refresh</button>' +
             '<button id="v3-songs-upload" class="' + ctrl + '">Upload</button>' +
             '</div></div></div>' +
             // Practice-aware library home: a repertoire progress meter + a
@@ -1624,6 +1818,16 @@
             if (legacy) { legacy.click(); watchUploadScan(); }
         });
         byId('v3-songs-select').addEventListener('click', () => setSelectMode(!state.selectMode));
+        byId('v3-songs-refresh')?.addEventListener('click', refreshLibrary);
+        // Reflect a scan already in progress (Settings button or a background
+        // pass) on the Refresh button, so its state isn't just tied to clicks here.
+        (async () => {
+            try {
+                const r = await fetch('/api/scan-status');
+                const sd = r.ok ? await r.json() : null;
+                if (sd && sd.running) { _setRefreshState(sd); _watchScan({ announce: false }); }
+            } catch (e) { /* */ }
+        })();
 
         // Bulletproof multi-select: in select mode, a capture-phase click on the
         // grid toggles the card and STOPS the event, so nothing (a per-card
@@ -1753,6 +1957,73 @@
     // legacy screens, so without this newly-uploaded songs wouldn't appear in
     // v3 until a manual refresh. Bounded so a no-op upload can't poll forever.
     let _uploadScanTimer = null;
+    // ── Library refresh (rescan) from the Songs toolbar ───────────────────────
+    // The tester ask: a media-server-style "I dropped files in my folder, hit
+    // refresh" button, with live progress. Reuses the SAME machinery the Settings
+    // Rescan buttons drive (/api/rescan + /api/scan-status) and emits
+    // library:changed so the grid reloads. A scan already running (Settings or a
+    // background pass) is reflected on the button too.
+    let _refreshPoll = null;
+    function _setRefreshState(sd) {
+        const btn = document.getElementById('v3-songs-refresh');
+        if (!btn) return;
+        if (sd && sd.running) {
+            // Determinate count only exists in the 'scanning' stage; 'listing' is
+            // indeterminate (total 0), so show a plain "Scanning…" then.
+            const det = (sd.stage === 'scanning' && sd.total) ? ' ' + sd.done + '/' + sd.total : '';
+            btn.textContent = '⟳ Scanning' + det + '…';
+            btn.disabled = true;
+            btn.classList.add('opacity-70');
+            const pct = sd.total ? Math.round((sd.done / sd.total) * 100) + '% · ' : '';
+            btn.title = 'Scanning new/changed songs… ' + pct + (sd.current || '');
+        } else {
+            btn.textContent = '⟳ Refresh';
+            btn.disabled = false;
+            btn.classList.remove('opacity-70');
+            btn.title = 'Refresh library (scan for new songs)';
+        }
+    }
+    // Show a completion toast (reuses the shared fbNotify surface), suppressed
+    // while in a song. Honest + never-punishing copy; the precise "N added" count
+    // arrives with the background-scan delta work — until then this is a generic,
+    // truthful confirmation.
+    function _scanCompleteToast(sd) {
+        if (document.querySelector('.screen.active') && document.querySelector('.screen.active').id === 'player') return;
+        if (!window.fbNotify) return;
+        const msg = (sd && sd.error) ? 'Scan finished with an error' : 'Your library is up to date';
+        try { window.fbNotify.show({ title: 'Library scan complete', message: msg, icon: '🔄', accent: '#22C55E' }); } catch (e) { /* */ }
+    }
+    // Poll scan-status until the scan finishes, driving the button state. On
+    // completion, emit library:changed (grid reloads via the listener below) and,
+    // for a user-initiated refresh (announce), show the toast. announce:false is
+    // used when we only attached to a scan we didn't start.
+    function _watchScan(opts) {
+        if (_refreshPoll) return;
+        const announce = !opts || opts.announce !== false;
+        let sawRunning = false, ticks = 0;
+        _refreshPoll = setInterval(async () => {
+            ticks++;
+            let sd = null;
+            try { const r = await fetch('/api/scan-status'); if (r.ok) sd = await r.json(); } catch (e) { /* */ }
+            _setRefreshState(sd);
+            if (sd && sd.running) sawRunning = true;
+            // A user-initiated refresh that never saw a running scan = nothing to
+            // do (already up to date); give prompt feedback instead of waiting.
+            const noopDone = announce && !sawRunning && ticks >= 3;
+            if ((sawRunning && sd && !sd.running) || noopDone || ticks >= 180) {
+                clearInterval(_refreshPoll); _refreshPoll = null;
+                _setRefreshState(null);
+                if (sawRunning && window.feedBack) { try { window.feedBack.emit('library:changed', { reason: 'rescan' }); } catch (e) { /* */ } }
+                if (announce) _scanCompleteToast(sd);
+            }
+        }, 1000);
+    }
+    async function refreshLibrary() {
+        if (_refreshPoll) return;                 // a scan is already in progress
+        try { await fetch('/api/rescan', { method: 'POST' }); } catch (e) { /* */ }
+        _watchScan({ announce: true });
+    }
+
     function watchUploadScan() {
         if (_uploadScanTimer) clearInterval(_uploadScanTimer);
         let sawRunning = false, ticks = 0;
@@ -1857,6 +2128,14 @@
             const active = document.querySelector('.screen.active');
             if (active && active.id === 'v3-songs') { _libraryDirty = false; reload(); }
             else _libraryDirty = true;
+        });
+        // Your live tuning changed (retune / instrument swap / reset) → re-colour the
+        // visible tuning chips against the new tuning. Cheap: re-decorates in place,
+        // no re-fetch or re-paint. No-op off the Songs grid or without the capability.
+        sm.on('working-tuning-changed', () => {
+            if (typeof songsActive === 'function' && !songsActive()) return;
+            if (state.view !== 'grid') return;
+            decorateTuningChips(_gridEl());
         });
     }
 })();

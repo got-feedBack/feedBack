@@ -1929,6 +1929,7 @@ class MetadataDB:
                      stems_lacks: list[str] | None = None,
                      has_lyrics: int | None = None,
                      tunings: list[str] | None = None,
+                     mastery: list[str] | None = None,
                      naming_mode: str = "legacy") -> tuple[str, list]:
         """Shared WHERE-clause builder for query_page / query_artists /
         query_stats. Returns (where_sql, params). Leading 'WHERE' is
@@ -1947,6 +1948,19 @@ class MetadataDB:
         if album_filter:
             where += " AND album = ? COLLATE NOCASE"
             params.append(album_filter)
+        # Mastery bands = best accuracy across a song's arrangements (song_stats,
+        # a separate table -> correlated subquery). mastered >= 0.9, in_progress =
+        # attempted but < 0.9, not_started = no score. OR within the selected set.
+        if mastery:
+            _msub = "(SELECT MAX(best_accuracy) FROM song_stats s WHERE s.filename = songs.filename)"
+            _bands = {
+                "mastered": f"{_msub} >= 0.9",
+                "in_progress": f"({_msub} IS NOT NULL AND {_msub} < 0.9)",
+                "not_started": f"{_msub} IS NULL",
+            }
+            _sel = [_bands[b] for b in mastery if b in _bands]
+            if _sel:
+                where += " AND (" + " OR ".join(_sel) + ")"
         if q:
             where += " AND (title LIKE ? COLLATE NOCASE OR artist LIKE ? COLLATE NOCASE OR album LIKE ? COLLATE NOCASE)"
             params += [f"%{q}%"] * 3
@@ -2099,6 +2113,7 @@ class MetadataDB:
                    stems_lacks: list[str] | None = None,
                    has_lyrics: int | None = None,
                    tunings: list[str] | None = None,
+                   mastery: list[str] | None = None,
                    after: str | None = None,
                    naming_mode: str = "legacy") -> tuple[list[dict], int]:
         """Server-side paginated search. Returns (songs, total_count).
@@ -2112,7 +2127,7 @@ class MetadataDB:
             artist_filter=artist_filter, album_filter=album_filter,
             arrangements_has=arrangements_has, arrangements_lacks=arrangements_lacks,
             stems_has=stems_has, stems_lacks=stems_lacks,
-            has_lyrics=has_lyrics, tunings=tunings, naming_mode=naming_mode,
+            has_lyrics=has_lyrics, tunings=tunings, mastery=mastery, naming_mode=naming_mode,
         )
 
         sort_map = {
@@ -2153,6 +2168,20 @@ class MetadataDB:
             # '2005' rather than alphabetic.
             "year": "(year = '') ASC, CAST(year AS INTEGER) ASC",
             "year-desc": "(year = '') ASC, CAST(year AS INTEGER) DESC",
+            # Mastery = best accuracy across a song's arrangements, from the
+            # separate song_stats table (so via a correlated subquery — this sort
+            # drops to OFFSET paging, like tuning/year). Unscored ("not started")
+            # songs push to the BOTTOM in both directions (the IS NULL term);
+            # ascending is "needs practice first" (weakest measured first),
+            # descending is "most mastered first".
+            "mastery": (
+                "((SELECT MAX(best_accuracy) FROM song_stats s WHERE s.filename = songs.filename) IS NULL) ASC, "
+                "(SELECT MAX(best_accuracy) FROM song_stats s WHERE s.filename = songs.filename) ASC"
+            ),
+            "mastery-desc": (
+                "((SELECT MAX(best_accuracy) FROM song_stats s WHERE s.filename = songs.filename) IS NULL) ASC, "
+                "(SELECT MAX(best_accuracy) FROM song_stats s WHERE s.filename = songs.filename) DESC"
+            ),
         }
         order = sort_map.get(sort, "artist COLLATE NOCASE")
         # Legacy `dir=desc` toggle: only safe to append on simple sort
@@ -4950,7 +4979,7 @@ async def list_library(q: str = "", page: int = 0, size: int = 24, sort: str = "
                        arrangements_has: str = "", arrangements_lacks: str = "",
                        stems_has: str = "", stems_lacks: str = "",
                        has_lyrics: str = "", tunings: str = "", provider: str = "local",
-                       after: str = "", naming_mode: str = "legacy"):
+                       mastery: str = "", after: str = "", naming_mode: str = "legacy"):
     """Paginated library search through the selected library provider.
 
     `after` is an opaque keyset cursor (feedBack#636 item 3): pass back the
@@ -4974,6 +5003,7 @@ async def list_library(q: str = "", page: int = 0, size: int = 24, sort: str = "
         direction=dir,
         after=((after or None) if is_local else None),
         naming_mode=naming_mode,
+        mastery=_split_csv(mastery),
         **_library_filter_args(
             q=q, favorites=favorites, format=format,
             artist=artist, album=album,
@@ -7842,15 +7872,63 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
         if 0 <= arrangement < len(song.arrangements):
             best = arrangement
         else:
-            # Check user's default arrangement preference
+            # Read the user's config once: their selected instrument (route the chart
+            # to the matching part) and their default-arrangement preference.
             pref = ""
+            sel_instrument = ""
             config_file = CONFIG_DIR / "config.json"
             if config_file.exists():
                 try:
-                    pref = json.loads(config_file.read_text(encoding="utf-8")).get("default_arrangement", "")
+                    _cfg = json.loads(config_file.read_text(encoding="utf-8"))
+                    pref = _cfg.get("default_arrangement", "")
+                    sel_instrument = (_cfg.get("instrument", "") or "")
                 except Exception:
                     pass
-            if pref:
+            # Instrument routing: load the part that matches the selected instrument so
+            # "your instrument" and "the chart you play" line up. The default ordering
+            # is Lead/guitar-first, so without this a bass player gets handed a guitar
+            # chart (and any tune-check then compares a 4-string bass against a 6-string
+            # part). Currently routes bass -> a Bass arrangement; guitar — and any
+            # unknown/future instrument (drums, keys) — falls through to the
+            # preference/most-notes logic below, which already lands on a guitar part.
+            # Drums/keys get their own match when those arrangement types + selector
+            # entries land. Only applies when no explicit arrangement was requested, so
+            # a manual arrangement switch is always respected.
+            if sel_instrument.lower() == "bass":
+                # Candidate bass parts, preferring the structured pathBass flag; the
+                # normalized smart name (itself pathBass-derived) and raw name are
+                # fallbacks for sources without the flag.
+                bass_idxs = [
+                    i
+                    for i, a in enumerate(song.arrangements)
+                    if getattr(a, "path_bass", False)
+                    or (smart_names[i] or "").lower().startswith("bass")
+                    or "bass" in (getattr(a, "name", "") or "").lower()
+                ]
+                if bass_idxs:
+                    # Among the bass parts: (1) honor the saved default-arrangement
+                    # preference if it names one of them (so a bass player who prefers
+                    # "Bass 2"/"Alt. Bass" keeps it), (2) else the canonical main "Bass",
+                    # (3) else the first bass part in order.
+                    pref_bass = -1
+                    if pref:
+                        for i in bass_idxs:
+                            nm = (smart_names[i] if naming_mode == "smart" and i < len(smart_names)
+                                  else getattr(song.arrangements[i], "name", ""))
+                            if nm == pref:
+                                pref_bass = i
+                                break
+                    if pref_bass >= 0:
+                        best = pref_bass
+                    else:
+                        best = next(
+                            (i for i in bass_idxs
+                             if (smart_names[i] if i < len(smart_names) else "") == "Bass"),
+                            bass_idxs[0],
+                        )
+            # User's default arrangement preference (only when instrument routing did not
+            # already resolve a part — i.e. guitar, or a bass player with no bass part).
+            if best < 0 and pref:
                 if naming_mode == "smart":
                     best = _pick_smart_arrangement(song.arrangements, smart_names, pref)
                 else:

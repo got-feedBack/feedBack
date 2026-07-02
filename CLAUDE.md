@@ -231,6 +231,18 @@ window.feedBackViz_my_viz = function () {
             // toneChanges, toneBase, mastery, hasPhraseData, inverted,
             // lefty, renderScale, lyricsVisible, the 2D coordinate
             // helpers project and fretX, and getNoteState (see below).
+            // The bundle OBJECT is reused across frames (mutated in
+            // place — no per-frame allocation): never cache it or
+            // compare its identity between frames; field values are
+            // only valid for the current draw call. Array FIELDS still
+            // swap reference when chart data changes, so field-identity
+            // caches (`myRef !== bundle.chords`) remain valid.
+            // Windowed-iteration helpers (stable fn refs): bundle
+            // .lowerBoundT(arr, time) is a lower-bound binary search on
+            // `.t` (notes/chords); bundle.lowerBoundTime(arr, time) on
+            // `.time` (beats/anchors/sections). Use these to cull to
+            // the visible window instead of full-scanning chart arrays
+            // per frame.
             // `stringCount` is the active arrangement's string count (4
             // for bass, 6 for guitar, 7+ for extended-range GP imports —
             // size string-indexed geometry against this, not a hardcoded

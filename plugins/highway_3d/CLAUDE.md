@@ -157,6 +157,8 @@ Every per-frame renderer call receives a `bundle` from feedBack core. Fields use
 
 `tuning` and `capo` aren't consumed by this plugin.
 
+Core reuses the bundle OBJECT across frames (mutated in place); never cache it or compare its identity between frames — field values are only valid for the current draw call. Field-identity caches on ARRAY fields (this plugin's `_mergeCacheChordsRef === bundle.chords` etc.) remain valid: arrays still swap reference when chart data changes. Core also exposes `bundle.lowerBoundT(arr, time)` (lower-bound on `.t`, notes/chords) and `bundle.lowerBoundTime(arr, time)` (on `.time`, beats/anchors/sections) — prefer these over the local `lowerBoundT` helper when a downlevel-host fallback isn't needed.
+
 ### Score FX (notedetect game-scoring layer)
 
 - **"+N" score pops** → `_fxSpawnPop()` from `drawNote()` (just after the provider verdict-override block), drawn by `drawScoreFx()` (called from the `lyricsCtx` block in `draw()`, right after `drawNotedetectLabels()`). Fixed 24-slot pool (`_fxPops`), deduped per `popKey` via the TTL'd `_fxSeen` map (pruned in `drawScoreFx`). Pops rise/fade over 700 ms; font size scales with the multiplier tier.

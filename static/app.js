@@ -5990,6 +5990,56 @@ function _resolvePlayerOrigin() {
 // next song:ready. song:ready also fires on arrangement switches / seeks,
 // which never arm the flag, so those don't auto-restart.
 let _pendingAutostart = false;
+// Autoplay gate (window.feedBack.holdAutoplay): a plugin (the tuner) can defer the
+// auto-start of a freshly-loaded song until it's cleared — "tune before you play".
+// The hold is claimed synchronously on song:loading (so it beats this song:ready
+// autostart); release() — or a fail-open backstop — runs the deferred start.
+// Generation-guarded so a newer song invalidates a stale hold. Manual Play never
+// flows through here, so Play always wins.
+let _autoplayHeld = false;
+let _autoplayStart = null;
+let _autoplayGen = 0;
+let _autoplayBackstop = null;
+const AUTOPLAY_HOLD_BACKSTOP_MS = 12000;
+function _clearAutoplayHold() {
+    if (_autoplayBackstop) { clearTimeout(_autoplayBackstop); _autoplayBackstop = null; }
+    _autoplayHeld = false;
+    _autoplayStart = null;
+    _autoplayGen++;
+}
+function _releaseAutoplay(gen) {
+    if (gen !== _autoplayGen) return;            // a newer song superseded this hold
+    if (_autoplayBackstop) { clearTimeout(_autoplayBackstop); _autoplayBackstop = null; }
+    _autoplayHeld = false;
+    const start = _autoplayStart;
+    _autoplayStart = null;
+    if (typeof start === 'function') start();
+}
+let _autoplayHoldToken = 0;
+window.feedBack.holdAutoplay = function () {
+    const gen = _autoplayGen;
+    const token = ++_autoplayHoldToken;   // this hold's identity — a stale release from an earlier hold is a no-op
+    _autoplayHeld = true;
+    if (_autoplayBackstop) clearTimeout(_autoplayBackstop);
+    // Fail-open: a hold that's never released (a plugin that claimed but wedged before
+    // it could decide) must never permanently block the song. Once the holder commits
+    // to an intentional, user-dismissable hold it calls release.settle() to cancel this
+    // — so the backstop can't cut off e.g. a user still tuning past the timeout.
+    _autoplayBackstop = setTimeout(() => _releaseAutoplay(gen), AUTOPLAY_HOLD_BACKSTOP_MS);
+    let released = false;
+    function release() {
+        if (released || gen !== _autoplayGen || token !== _autoplayHoldToken) return;
+        released = true;
+        _releaseAutoplay(gen);
+    }
+    // Cancel the fail-open backstop WITHOUT releasing: the holder has taken explicit
+    // responsibility for releasing (on dismiss), and a song switch clears the hold anyway.
+    release.settle = function () {
+        if (gen !== _autoplayGen || token !== _autoplayHoldToken) return;
+        if (_autoplayBackstop) { clearTimeout(_autoplayBackstop); _autoplayBackstop = null; }
+    };
+    return release;
+};
 window.feedBack.on('song:ready', () => {
     if (!_pendingAutostart) return;
     _pendingAutostart = false;
@@ -6014,27 +6064,30 @@ window.feedBack.on('song:ready', () => {
         if (authors.length) _creditsTimer = setTimeout(hideSongCreditsOverlay, _CREDITS_HOLD_MS);
         return;
     }
-    // "Countdown before song": play a 4-beat count-in, then start. Otherwise
-    // reuse the Play button's start path directly (handles HTML5 + _juceMode).
-    if (_countdownBeforeSongEnabled()) {
-        // The count-in (~2.5s) gives the credits their on-screen dwell.
-        Promise.resolve(startSongCountIn()).catch((err) => console.warn('[app] song count-in failed:', err));
-    } else if (authors.length) {
-        // No count-in window — hold the credits a couple seconds, then start.
-        // _cancelCountIn() and changeArrangement() both clear _creditsTimer, so
-        // a teardown / arrangement switch during the hold cancels this play.
-        _creditsTimer = setTimeout(() => {
-            _creditsTimer = null;
-            // If playback doesn't actually start (e.g. HTML5 autoplay rejection),
-            // song:play never fires — clear the credits promptly rather than
-            // waiting for the backstop. On success the song:play listener owns it.
+    // The actual auto-start: a count-in (which handles HTML5 + _juceMode) or the
+    // Play path directly. Guarded so a manual Play during a gate / credits hold
+    // can't double-toggle, and so a stale (released-after-leaving) start never
+    // begins playback off the player.
+    const start = () => {
+        if (isPlaying) return;
+        if (!document.getElementById('player')?.classList.contains('active')) { hideSongCreditsOverlay(); return; }
+        if (_countdownBeforeSongEnabled()) {
+            Promise.resolve(startSongCountIn()).catch((err) => console.warn('[app] song count-in failed:', err));
+        } else {
             Promise.resolve(togglePlay())
                 .then(() => { if (!isPlaying) hideSongCreditsOverlay(); })
                 .catch((err) => { console.warn('[app] autoplay failed:', err); hideSongCreditsOverlay(); });
-        }, _CREDITS_HOLD_MS);
-    } else {
-        Promise.resolve(togglePlay()).catch((err) => console.warn('[app] autoplay failed:', err));
-    }
+        }
+    };
+    // A plugin (the tuner) may gate playback until it's cleared. The hold was
+    // claimed on song:loading; stash the start and let release()/the backstop run
+    // it. _cancelCountIn()/changeArrangement() clear _creditsTimer below, so a
+    // teardown during the credits dwell still cancels a non-gated play.
+    if (_autoplayHeld) { _autoplayStart = start; return; }
+    // Not gated: a count-in starts now (it owns its on-screen dwell); otherwise
+    // let the credits dwell a couple seconds first, then start.
+    if (_countdownBeforeSongEnabled() || !authors.length) start();
+    else _creditsTimer = setTimeout(() => { _creditsTimer = null; start(); }, _CREDITS_HOLD_MS);
 });
 
 // ── Resume last session ────────────────────────────────────────────────────
@@ -6328,9 +6381,17 @@ let artAbortController = null;
 
 async function playSong(filename, arrangement, options) {
     console.log('playSong called:', filename);
+    // A manual (non-queue) play abandons any active play-queue, so a stale queue
+    // can't hijack the next song's end. The queue passes fromQueue to keep itself.
+    if ((!options || !options.fromQueue) && window.feedBack && window.feedBack.playQueue) {
+        window.feedBack.playQueue.clear();
+    }
     if (!options || options.bridge !== false) {
         _recordPlaybackBridge('playback.window-play-song', 'window.playSong', 'legacy playSong entry point used');
     }
+    // Invalidate any prior song's autoplay gate before plugins re-claim it on the
+    // song:loading emit below.
+    _clearAutoplayHold();
     window.feedBack.emit('song:loading', { filename, arrangement: arrangement ?? null });
 
     // Cancel any pending art/metadata requests
@@ -6667,10 +6728,74 @@ if (window.feedBack) window.feedBack.restartCurrentSong = restartCurrentSong;
 // (Esc shortcut uses the same origin-aware target). showScreen() owns the
 // full teardown: song:stop, audio unload, highway.stop(), count-in cancel.
 function closeCurrentSong() {
+    // A real close (user Escape/✕, or the queue-aware wrapper once the queue is
+    // exhausted) abandons any play-queue so a stale one can't advance later.
+    if (window.feedBack && window.feedBack.playQueue) window.feedBack.playQueue.clear();
     return showScreen(_playerOriginScreen || 'home');
 }
 window.closeCurrentSong = closeCurrentSong;
 if (window.feedBack) window.feedBack.closeCurrentSong = closeCurrentSong;
+
+// ── Play-queue: sequential playback of a playlist / album ──────────────────
+// Playing a list should advance to the next track when a song ends, instead of
+// returning to the menu (the long-standing "plays one song then boots to menu"
+// gap — a queue was simply never implemented). Advancing rides the SAME exit
+// choke point as auto-exit and a results-card close: window.closeCurrentSong().
+// Song-end paths call window.closeCurrentSong() (the auto-exit grace timer, and
+// a results screen's release()), so wrapping it lets the queue advance on song
+// end AND after the user dismisses a score card. A *user* exit (Escape / the ✕)
+// calls the bareword closeCurrentSong(), which we deliberately leave alone, so
+// leaving the player still leaves — and abandons the queue.
+window.feedBack.playQueue = (function () {
+    let list = [], idx = -1, source = '', arrangements = null;
+    const active = () => idx >= 0 && idx < list.length;
+    const hasNext = () => active() && idx < list.length - 1;
+    function clear() { list = []; idx = -1; source = ''; arrangements = null; }
+    function _play(i) {
+        const fn = list[i];
+        // fromQueue keeps the queue from clearing itself; playSong decodeURIs.
+        window.playSong(encodeURIComponent(fn), arrangements ? arrangements[i] : undefined, { fromQueue: true });
+    }
+    function start(files, opts) {
+        files = (files || []).filter(Boolean);
+        if (!files.length) return false;
+        list = files.slice(); idx = 0;
+        source = (opts && opts.source) || '';
+        arrangements = (opts && opts.arrangements) || null;
+        if (window.fbNotify) {
+            try { window.fbNotify.show({ title: 'Playing ' + (source || 'queue'), message: files.length + ' songs', icon: '▶' }); } catch (e) { /* */ }
+        }
+        _play(idx);
+        return true;
+    }
+    function advance() {
+        if (!hasNext()) { clear(); return false; }
+        idx++;
+        _play(idx);
+        return true;
+    }
+    return {
+        start: start, advance: advance, hasNext: hasNext, active: active, clear: clear,
+        source: function () { return source; },
+        remaining: function () { return active() ? list.length - idx - 1 : 0; },
+    };
+})();
+
+// Make the song-end exit queue-aware (see above). Wrap window.closeCurrentSong
+// (and feedBack.closeCurrentSong) so that when a queue has a next track, we play
+// it instead of returning to the menu. The bareword closeCurrentSong() used by a
+// user-initiated exit is unaffected.
+(function () {
+    const realClose = window.closeCurrentSong;
+    function queueAwareClose() {
+        const q = window.feedBack.playQueue;
+        if (q && q.hasNext()) { q.advance(); return; }
+        if (q) q.clear();
+        return realClose.apply(this, arguments);
+    }
+    window.closeCurrentSong = queueAwareClose;
+    if (window.feedBack) window.feedBack.closeCurrentSong = queueAwareClose;
+})();
 
 // ── "Ask before leaving a song" (Gameplay tab, default OFF) ────────────────
 // Client-only localStorage pref (`confirmExitSong`); absence = OFF. When ON, a
@@ -9652,6 +9777,12 @@ async function startSongCountIn() {
 
 // Time display + highway sync
 let lastAudioTime = 0;
+// hud-time write cache: the 60 Hz tick below used to rewrite textContent
+// (and getElementById) every tick even though the mm:ss display only
+// changes once a second — each write invalidates layout. Write-on-change
+// with a cached element ref (re-resolved if detached).
+let _hudTimeEl = null;
+let _hudTimeLast = '';
 setInterval(() => {
     let ct = _audioTime();
     const dur = _audioDuration();
@@ -9679,7 +9810,12 @@ setInterval(() => {
             ct = lastAudioTime;
         }
         lastAudioTime = ct;
-        document.getElementById('hud-time').textContent = `${formatTime(ct)} / ${formatTime(dur)}`;
+        const hudText = `${formatTime(ct)} / ${formatTime(dur)}`;
+        if (hudText !== _hudTimeLast) {
+            if (!_hudTimeEl || !_hudTimeEl.isConnected) _hudTimeEl = document.getElementById('hud-time');
+            if (_hudTimeEl) _hudTimeEl.textContent = hudText;
+            _hudTimeLast = hudText;
+        }
         if (dur) {
             _maybeRefreshSectionPracticeDuration(dur);
         }

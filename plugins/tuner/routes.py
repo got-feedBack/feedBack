@@ -35,6 +35,7 @@ def setup(app: FastAPI, context: dict):
             "customTunings": {},
             "visualizationMode": "default",
             "audioInputMode": "auto",
+            "autoOpenOnTuningChange": False,
         }
         if not config_file.exists():
             return defaults
@@ -51,6 +52,11 @@ def setup(app: FastAPI, context: dict):
             res["visualizationMode"] = str(data.get("visualizationMode", "default"))
             raw_mode = str(data.get("audioInputMode", "auto"))
             res["audioInputMode"] = raw_mode if raw_mode in ("auto", "browser") else "auto"
+            # Fail closed: only a real JSON boolean enables the opt-in. A hand-edited /
+            # migrated / bad-client value (e.g. the string "false" or "0") must NOT be
+            # coerced to True by bool().
+            _auto_open = data.get("autoOpenOnTuningChange", False)
+            res["autoOpenOnTuningChange"] = _auto_open if isinstance(_auto_open, bool) else False
 
             if not isinstance(res["customTunings"], dict):
                 res["customTunings"] = {}

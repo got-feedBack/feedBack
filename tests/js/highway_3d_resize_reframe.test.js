@@ -61,10 +61,25 @@ test('draw() reads the live canvas box once per frame', () => {
 test('backing-store drift branch is preserved (splitscreen path)', () => {
     // The original check that catches the splitscreen hw.resize override
     // resizing the element without calling renderer.resize() must remain.
+    // The comparison is hoisted into _bsChanged (checked with cheap property
+    // reads every frame, and it forces the throttled box read to run on the
+    // same frame); the branch body is unchanged.
     assert.match(
         src,
-        /if\s*\(\s*highwayCanvas\.width\s*!==\s*_lastHwW\s*\|\|\s*highwayCanvas\.height\s*!==\s*_lastHwH\s*\)\s*\{\s*_lastHwW\s*=\s*highwayCanvas\.width\s*;\s*_lastHwH\s*=\s*highwayCanvas\.height\s*;\s*if\s*\(\s*box\.w\s*>\s*0\s*&&\s*box\.h\s*>\s*0\s*\)\s*applySize\(\s*box\.w\s*,\s*box\.h\s*\)\s*;/,
-        'the backing-store (canvas.width/height) drift branch must still re-apply',
+        /const\s+_bsChanged\s*=\s*highwayCanvas\.width\s*!==\s*_lastHwW\s*\|\|\s*highwayCanvas\.height\s*!==\s*_lastHwH\s*;/,
+        'the backing-store (canvas.width/height) comparison must run every frame',
+    );
+    assert.match(
+        src,
+        /if\s*\(\s*_bsChanged\s*\)\s*\{\s*_lastHwW\s*=\s*highwayCanvas\.width\s*;\s*_lastHwH\s*=\s*highwayCanvas\.height\s*;\s*if\s*\(\s*box\.w\s*>\s*0\s*&&\s*box\.h\s*>\s*0\s*\)\s*applySize\(\s*box\.w\s*,\s*box\.h\s*\)\s*;/,
+        'the backing-store drift branch must still re-apply',
+    );
+    // The throttle must never delay the backing-store path: _bsChanged is
+    // part of the gate that forces the box read on the same frame.
+    assert.match(
+        src,
+        /if\s*\(\s*_bsChanged\s*\|\|\s*!_wrapPinned\s*\|\|\s*_boxCheckCountdown\s*===\s*0\s*\)/,
+        'the box-read gate must include _bsChanged so backing-store changes re-apply immediately',
     );
 });
 

@@ -82,7 +82,7 @@ test('draw() only adapts during active playback and feeds the HUD', () => {
 
 test('bundle + canvas sizing use the effective scale, not the raw user value', () => {
     const src = fs.readFileSync(highwayJs, 'utf8');
-    assert.match(src, /renderScale:\s*_effectiveRenderScale\(\)/, 'bundle.renderScale must be the effective scale');
+    assert.match(src, /renderScale\s*[:=]\s*_effectiveRenderScale\(\)/, 'bundle.renderScale must be the effective scale');
     assert.match(src, /canvas\.width\s*=\s*Math\.round\(w\s*\*\s*_effectiveRenderScale\(\)\)/, 'canvas backing store must use effective scale');
 });
 

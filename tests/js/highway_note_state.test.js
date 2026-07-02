@@ -51,7 +51,7 @@ test('_makeBundle exposes getNoteState (stable reference, no per-frame alloc)', 
     const fn = extractBlock(src, 'function _makeBundle()');
     // The bundle field must point straight at _noteState — not a fresh
     // arrow each frame (the per-frame allocation the review flagged).
-    assert.match(fn, /getNoteState:\s*_noteState\b/, 'bundle.getNoteState must be the stable _noteState reference');
+    assert.match(fn, /getNoteState\s*[:=]\s*_noteState\b/, 'bundle.getNoteState must be the stable _noteState reference');
 });
 
 test('_makeBundle exposes getNoteStateProvider as a stable reference (feedBack#254)', () => {
@@ -64,7 +64,7 @@ test('_makeBundle exposes getNoteStateProvider as a stable reference (feedBack#2
     // identity-based guards in renderer code.
     assert.match(
         fn,
-        /getNoteStateProvider:\s*_getNoteStateProvider\b/,
+        /getNoteStateProvider\s*[:=]\s*_getNoteStateProvider\b/,
         'bundle.getNoteStateProvider must be the stable _getNoteStateProvider reference (not a per-frame arrow)'
     );
     // Sanity: the stable accessor exists per-createHighway-instance

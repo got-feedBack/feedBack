@@ -24,6 +24,18 @@
     let rafId = null, running = false;
     let lastMove = 0, lastUpNext = 0;
     let openPop = null;       // { btn, pop }
+    // Hover state over #player-controls, maintained by mouseenter/mouseleave
+    // (wired in start()). tickIdle previously called matches(':hover') every
+    // rAF frame, which forces a style recalc — profiled hot (feedBack perf).
+    let overControls = false;
+    const _onControlsEnter = () => { overControls = true; };
+    const _onControlsLeave = () => { overControls = false; };
+    // Up-Next pill: cached element refs (re-resolved when detached) and
+    // last-written values, so the 6 Hz recompute only touches the DOM when
+    // something actually changed — unconditional textContent/width writes
+    // re-triggered layout every tick.
+    let upnextEls = null;     // { pill, nm, eta, fill }
+    let upnextLast = { name: null, eta: null, prog: -1, hidden: null };
 
     // ── v3 UI signal + plugin-control slot API ───────────────────────────────
     // Lets plugins detect v3 (window.feedBack.uiVersion === 'v3') and mount
@@ -169,28 +181,52 @@
     }
 
     // ── Up Next pill ─────────────────────────────────────────────────────────
+    function _upnextRefs() {
+        // Cache refs; re-resolve only when a node detached (screen re-mount).
+        if (!upnextEls || !upnextEls.pill || !upnextEls.pill.isConnected) {
+            const pill = $('v3-upnext');
+            if (!pill) return null;
+            upnextEls = {
+                pill,
+                nm: $('v3-upnext-name'),
+                eta: $('v3-upnext-eta'),
+                fill: $('v3-upnext-bar-fill'),
+            };
+            // Fresh nodes → forget last-written state so everything re-syncs.
+            upnextLast = { name: null, eta: null, prog: -1, hidden: null };
+        }
+        return upnextEls;
+    }
+    function _upnextSetHidden(els, hidden) {
+        if (upnextLast.hidden === hidden) return;
+        upnextLast.hidden = hidden;
+        els.pill.classList.toggle('hidden', hidden);
+    }
     function updateUpNext() {
-        const pill = $('v3-upnext');
-        if (!pill) return;
+        const els = _upnextRefs();
+        if (!els) return;
         // Gated by the core "Show 'Up Next'" pref (Gameplay tab, default ON).
-        if (window.feedBack && window.feedBack.showUpNext === false) { pill.classList.add('hidden'); return; }
+        if (window.feedBack && window.feedBack.showUpNext === false) { _upnextSetHidden(els, true); return; }
         const hw = window.highway;
         const secs = (hw && typeof hw.getSections === 'function') ? hw.getSections() : null;
         const t = (hw && typeof hw.getTime === 'function') ? hw.getTime() : null;
-        if (!Array.isArray(secs) || !secs.length || t == null || isNaN(t)) { pill.classList.add('hidden'); return; }
+        if (!Array.isArray(secs) || !secs.length || t == null || isNaN(t)) { _upnextSetHidden(els, true); return; }
         let next = null;
         for (let i = 0; i < secs.length; i++) {
             if (typeof secs[i].time === 'number' && secs[i].time > t + 0.05) { next = secs[i]; break; }
         }
-        if (!next) { pill.classList.add('hidden'); return; }
+        if (!next) { _upnextSetHidden(els, true); return; }
         const dt = Math.max(0, next.time - t);
-        const nm = $('v3-upnext-name'), eta = $('v3-upnext-eta');
-        if (nm) nm.textContent = next.name || '—';
-        if (eta) eta.textContent = 'in ' + dt.toFixed(1) + 's';
+        // Coarsened eta (whole seconds from 10 s out, 1 decimal inside) +
+        // write-on-change: drops textContent writes (each a layout pass)
+        // from ~6/s to ~1/s.
+        const name = next.name || '—';
+        const etaText = 'in ' + (dt >= 10 ? Math.round(dt) + '' : dt.toFixed(1)) + 's';
+        if (els.nm && name !== upnextLast.name) { upnextLast.name = name; els.nm.textContent = name; }
+        if (els.eta && etaText !== upnextLast.eta) { upnextLast.eta = etaText; els.eta.textContent = etaText; }
         // Progress bar: fraction of the current section elapsed toward `next`.
         // Previous boundary is the last section at/before now (else song start).
-        const fill = $('v3-upnext-bar-fill');
-        if (fill) {
+        if (els.fill) {
             let prevT = 0;
             for (let i = 0; i < secs.length; i++) {
                 if (typeof secs[i].time === 'number' && secs[i].time <= t) prevT = secs[i].time;
@@ -198,9 +234,15 @@
             }
             const span = next.time - prevT;
             const prog = span > 0 ? Math.max(0, Math.min(1, (t - prevT) / span)) : 0;
-            fill.style.width = (prog * 100).toFixed(1) + '%';
+            const q = Math.round(prog * 1000) / 1000;
+            if (q !== upnextLast.prog) {
+                upnextLast.prog = q;
+                // scaleX is compositor-only — width writes re-ran layout.
+                // Pairs with transform-origin:left on #v3-upnext-bar-fill.
+                els.fill.style.transform = 'scaleX(' + q + ')';
+            }
         }
-        pill.classList.remove('hidden');
+        _upnextSetHidden(els, false);
     }
 
     // ── Speed visual (bars + chevrons reflect #speed-slider) ──────────────────
@@ -230,8 +272,8 @@
         if (!p) return;
         const playBtn = $('btn-play');
         const playing = playBtn && playBtn.getAttribute('aria-pressed') === 'true';
-        const controls = $('player-controls');
-        const overControls = controls && typeof controls.matches === 'function' && controls.matches(':hover');
+        // overControls maintained by mouseenter/mouseleave (see start()) —
+        // matches(':hover') here forced a per-frame style recalc.
         // Keep the transport up while paused, hovering it, or a popover is open.
         if (openPop || overControls || !playing) { lastMove = now(); return; }
         if (now() - lastMove > IDLE_MS) {
@@ -249,6 +291,16 @@
             // Re-sync the lyrics icon so programmatic highway.setLyricsVisible()
             // (e.g. from lyrics_karaoke) isn't left stale; cheap + idempotent.
             syncLyricsIcon();
+            // Reconcile the edge-driven hover flag against ground truth at
+            // this throttled cadence (~6 Hz, not per frame). Covers both
+            // failure modes of pure mouseenter/mouseleave tracking: a
+            // missed mouseleave (controls hidden/detached under the
+            // pointer → flag stuck true, transport never auto-hides) and
+            // a re-created #player-controls node whose listeners were
+            // lost (flag stuck false-ish / dead). matches(':hover') on a
+            // detached node is simply false, so this also self-clears.
+            const c = $('player-controls');
+            overControls = !!(c && typeof c.matches === 'function' && c.matches(':hover'));
         }
         tickIdle();
         rafId = requestAnimationFrame(loop);
@@ -263,6 +315,12 @@
         wireRail();
         p.addEventListener('mousemove', revealChrome);
         p.addEventListener('touchstart', revealChrome, { passive: true });
+        const c = $('player-controls');
+        if (c) {
+            overControls = typeof c.matches === 'function' && c.matches(':hover');
+            c.addEventListener('mouseenter', _onControlsEnter);
+            c.addEventListener('mouseleave', _onControlsLeave);
+        }
         const s = $('speed-slider');
         if (s && !s.dataset.pcVizWired) { s.dataset.pcVizWired = '1'; s.addEventListener('input', updateSpeedViz); }
         updateSpeedViz();
@@ -281,6 +339,12 @@
             p.removeEventListener('touchstart', revealChrome);
             p.classList.remove('chrome-active', 'chrome-idle');
         }
+        const c = $('player-controls');
+        if (c) {
+            c.removeEventListener('mouseenter', _onControlsEnter);
+            c.removeEventListener('mouseleave', _onControlsLeave);
+        }
+        overControls = false;
         closePop();
     }
     function syncActivation() {

@@ -367,10 +367,15 @@ input, textarea, select,
 }
 #player-hud .v3-upnext .v3-upnext-bar-fill {
     height: 100%;
-    width: 0%;
+    /* Fill is driven via transform: scaleX(0..1) from player-chrome.js —
+       compositor-only, unlike the previous width writes which re-ran
+       layout on every update tick. */
+    width: 100%;
+    transform: scaleX(0);
+    transform-origin: left;
     border-radius: inherit;
     background: linear-gradient(90deg, #22d3ee, #a855f7, #f472b6);
-    transition: width .12s linear;
+    transition: transform .12s linear;
 }
 
 /* — Live performance HUD (top-right, read-only) — */

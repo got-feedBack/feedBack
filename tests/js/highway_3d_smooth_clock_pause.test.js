@@ -43,13 +43,13 @@ test('core _makeBundle exposes isPlaying derived from the chart-clock anchor', (
     const src = fs.readFileSync(highwayJs, 'utf8');
     const fn = extractBlock(src, 'function _makeBundle()');
     // Field present in the bundle.
-    assert.match(fn, /\bisPlaying\s*:/, 'bundle must expose isPlaying');
+    assert.match(fn, /\bisPlaying\s*[:=]/, 'bundle must expose isPlaying');
     // It is computed from the same anchor/advance state getTime() uses, not a
     // hardcoded literal — anchor must exist AND the clock must have advanced
     // within the interp cap.
     assert.match(
         fn,
-        /isPlaying\s*:\s*!Number\.isNaN\(\s*_chartAnchorPerfNow\s*\)/,
+        /isPlaying\s*[:=]\s*!Number\.isNaN\(\s*_chartAnchorPerfNow\s*\)/,
         'isPlaying must gate on a live anchor (_chartAnchorPerfNow not NaN)',
     );
     assert.match(
