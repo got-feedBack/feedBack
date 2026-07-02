@@ -505,12 +505,12 @@
     }
 
     // ── Practice-aware library home (repertoire meter + "Keep practicing") ─────
-    // Both read data we already have: state.accuracy (/api/stats/best =
-    // {filename: best_accuracy}) and /api/stats/recent. A song is "in your
-    // repertoire" at the same threshold the green accuracy badge uses (>= 0.9);
-    // a started song below that is "in progress". This is descriptive
-    // encouragement — it never gates content, decays, or nags (the goal-gradient
-    // / endowed-progress idea, kept healthy).
+    // The meter reads state.accuracy (/api/stats/best = {filename: best_accuracy});
+    // the shelf reads the growth-edge recommender (/api/library/practice-suggestions,
+    // P3). A song is "in your repertoire" at the same threshold the green accuracy
+    // badge uses (>= 0.9); a started song below that is "in progress". This is
+    // descriptive encouragement — it never gates content, decays, or nags (the
+    // goal-gradient / endowed-progress idea, kept healthy).
     const MASTERY_ACCURACY = 0.9;
 
     function _repertoireCounts() {
@@ -525,9 +525,9 @@
     // The home block is the unfiltered "front door": shown on the grid view when
     // the user isn't running a focused query (search / filter) or selecting.
     // Local provider only — the meter's mastered count and the shelf both read
-    // local practice stats (state.accuracy / /api/stats/recent), so on a remote
-    // provider they'd mix local numerators with a remote song total and play
-    // local files while browsing a remote library. Hide it there.
+    // local practice stats (state.accuracy / the practice-suggestions endpoint),
+    // so on a remote provider they'd mix local numerators with a remote song total
+    // and play local files while browsing a remote library. Hide it there.
     function libHomeVisible() {
         return state.view === 'grid' && state.provider === 'local'
             && !state.selectMode && !state.q && activeFilterCount() === 0;
@@ -543,10 +543,10 @@
         const myToken = ++_homeToken;
         // Unfiltered library size for the meter denominator (the grid's
         // state.total tracks the active filter; the meter is library-wide) +
-        // recently-played rows for the shelf, fetched together.
-        const [stats, recent] = await Promise.all([
+        // the growth-edge "practice next" shelf rows, fetched together.
+        const [stats, suggestions] = await Promise.all([
             jget('/api/library/stats?provider=' + enc(state.provider)),
-            jget('/api/stats/recent?limit=24'),
+            jget('/api/library/practice-suggestions?limit=8'),
         ]);
         if (_homeToken !== myToken || !libHomeVisible()) {            // changed mid-fetch
             if (_homeToken === myToken) host.classList.add('hidden');
@@ -554,22 +554,13 @@
         }
         const total = (stats && (stats.total_songs ?? stats.total)) || 0;
         if (total <= 0) { host.classList.add('hidden'); return; }    // empty library
-        // Shelf = recently-played, not-yet-mastered songs, newest first. Mastery
-        // is per-SONG (state.accuracy = MAX best across arrangements, what the
-        // green badge shows) — recents are per-(song,arrangement), so dedupe by
-        // filename and gate on the song's best, keeping the shelf and its badges
-        // consistent (no green-badged "keep practicing" card, no dupes).
-        const acc = state.accuracy || {};
-        const seen = new Set();
-        const shelf = (Array.isArray(recent) ? recent : [])
-            .filter((r) => {
-                if (!r || seen.has(r.filename)) return false;
-                const best = acc[r.filename];
-                if (typeof best !== 'number' || best >= MASTERY_ACCURACY) return false;
-                seen.add(r.filename);
-                return true;
-            })
-            .slice(0, 8);
+        // Shelf = the growth-edge recommender (P3): attempted-but-not-mastered
+        // songs ordered by difficulty-appropriateness × mastery-proximity, so it
+        // points at the version worth practicing next rather than just the most
+        // recent. The server already gates (not-mastered) + aggregates per song,
+        // so the rows are the shelf as-is; each row's `arrangement` is the one
+        // closest to mastery (what a click should open).
+        const shelf = Array.isArray(suggestions) ? suggestions : [];
 
         const { mastered, learning } = _repertoireCounts();
         const pct = Math.max(0, Math.min(100, Math.round((mastered / total) * 100)));
@@ -606,7 +597,7 @@
         // The home block sits above the grid sizer, so its height shifts where the
         // window maps in scroll space — repaint the window once it's laid out.
         if (state.view === 'grid') requestWindowRender();
-        // Wire shelf cards → play (mirrors playCard's local path; recents are
+        // Wire shelf cards → play (mirrors playCard's local path; suggestions are
         // always local-library rows, so no provider sync is needed).
         host.querySelectorAll('.v3-kp-card').forEach((btn) => btn.addEventListener('click', () => {
             const fn = btn.getAttribute('data-kp');

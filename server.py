@@ -501,6 +501,13 @@ def next_library_cursor(sort: str, last_song: dict | None) -> str | None:
     return _encode_cursor([last_song[key], last_song["filename"]])
 
 
+# Song-level "mastered" threshold — best accuracy across a song's arrangements
+# at/above this counts as in your repertoire. One number shared by the green
+# accuracy badge, the Repertoire meter, the mastery filter/sort, and the P3
+# growth-edge recommender (matches the frontend MASTERY_ACCURACY).
+MASTERY_ACCURACY = 0.9
+
+
 class MetadataDB:
     def __init__(self):
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -1660,6 +1667,78 @@ class MetadataDB:
             {"filename": r[0], "best_score": r[1], "best_accuracy": r[2], "plays": r[3]}
             for r in rows
         ]
+
+    # ── FUTURE ENHANCEMENT (revisit once the feedpak difficulty spec is locked) ──
+    # The library-metadata design (§8) calls for user-difficulty to be
+    # PER-ARRANGEMENT ("easy on bass ≠ easy on lead") and SEEDED FROM the authored/
+    # derived difficulty so it's never blank. Neither ships here on purpose:
+    #   • personal difficulty is currently per-FILENAME (P1's song_user_meta);
+    #     per-arrangement is a P1-schema + Details-drawer (P2) re-scope; and
+    #   • there is NO authored/derived difficulty field on `songs` yet — that waits
+    #     on the feedpak difficulty spec (the #37-family FEP), which is unmerged.
+    # So this recommender ships the growth-edge PAYOFF now and degrades gracefully
+    # (an unrated song is treated as mid). When the feedpak difficulty field lands,
+    # revisit: (1) seed unset user-difficulty from authored instead of assuming mid,
+    # and (2) score per (filename, arrangement) rather than per song.
+    @staticmethod
+    def _growth_edge_score(best_accuracy: float, user_difficulty) -> float:
+        """The 'practice next' score = difficulty-appropriateness × proximity to
+        mastery. Peaks where a song is BOTH at a productive challenge level (the
+        mid difficulty band) AND close to — but not yet at — mastery (the
+        goal-gradient push). An UNSET personal difficulty is treated as mid, so
+        the recommender still works before anything is rated (it degrades to
+        closest-to-mastery-first) — see P3 notes: authored/derived difficulty
+        seeding waits on the feedpak difficulty spec.
+
+        diff_weight: 3 → 1.0, 2/4 → 0.8, 1/5 → 0.6 (extremes deprioritized, never
+        zeroed — you grow on the challenging middle, not the trivially easy or the
+        frustratingly hard). Never writes anything."""
+        d = user_difficulty if user_difficulty is not None else 3
+        weight = 1.0 - abs(d - 3) * 0.2
+        return weight * (best_accuracy or 0.0)
+
+    def growth_edge_suggestions(self, limit: int = 8) -> list[dict]:
+        """Attempted-but-not-yet-mastered songs ranked by the growth-edge score —
+        the 'Keep practicing' recommender that replaces recency-only ordering.
+        Song-level (best accuracy across arrangements, like the badge); the
+        suggested `arrangement` is the one you're closest to mastering, so the
+        shelf opens the version worth pushing. Read-only."""
+        limit = max(1, min(24, int(limit)))
+        rows = self.conn.execute(
+            "SELECT filename, arrangement, best_accuracy, plays, last_played_at "
+            "FROM song_stats WHERE 1=1 " + self._existing_song_filter()
+        ).fetchall()
+        # Aggregate per song: best accuracy + the arrangement that owns it, total
+        # plays, most-recent play (used as a stable tiebreak).
+        agg: dict = {}
+        for fn, arr, acc, plays, lp in rows:
+            a = agg.get(fn)
+            if a is None:
+                a = agg[fn] = {"acc": None, "arr": 0, "plays": 0, "lp": None}
+            a["plays"] += (plays or 0)
+            if acc is not None and (a["acc"] is None or acc > a["acc"]):
+                a["acc"] = acc
+                a["arr"] = arr
+            if lp and (not a["lp"] or lp > a["lp"]):
+                a["lp"] = lp
+        cands = [(fn, a) for fn, a in agg.items()
+                 if a["plays"] > 0 and a["acc"] is not None and a["acc"] < MASTERY_ACCURACY]
+        if not cands:
+            return []
+        diffs = self.user_meta_map([fn for fn, _ in cands])   # {filename: 1..5}
+        out = []
+        for fn, a in cands:
+            d = diffs.get(fn)
+            out.append({
+                "filename": fn,
+                "best_accuracy": a["acc"],
+                "arrangement": a["arr"],
+                "last_played_at": a["lp"],
+                "user_difficulty": d,
+                "growth_score": round(self._growth_edge_score(a["acc"], d), 6),
+            })
+        out.sort(key=lambda r: (r["growth_score"], r["last_played_at"] or ""), reverse=True)
+        return out[:limit]
 
     # ── Playlists ─────────────────────────────────────────────────────────--
     SAVED_KEY = "saved_for_later"
@@ -6061,6 +6140,30 @@ def api_top_stats(limit: int = 5):
     from urllib.parse import quote
     out = []
     for r in meta_db.top_stats(limit):
+        meta = meta_db.conn.execute(
+            "SELECT title, artist, tuning_name FROM songs WHERE filename = ?",
+            (r["filename"],),
+        ).fetchone()
+        title, artist, tuning_name = meta if meta else (None, None, None)
+        out.append({
+            **r,
+            "title": title or r["filename"],
+            "artist": artist or "",
+            "tuning_name": tuning_name or "",
+            "art_url": f"/api/song/{quote(r['filename'])}/art",
+        })
+    return out
+
+
+@app.get("/api/library/practice-suggestions")
+def api_practice_suggestions(limit: int = 8):
+    """Growth-edge 'practice next' shelf (P3): attempted-but-not-mastered songs
+    ranked by difficulty-appropriateness × mastery-proximity, joined to song
+    metadata. Replaces the recency-only 'Keep practicing' shelf ordering. Local
+    library only — reads local practice stats."""
+    from urllib.parse import quote
+    out = []
+    for r in meta_db.growth_edge_suggestions(limit):
         meta = meta_db.conn.execute(
             "SELECT title, artist, tuning_name FROM songs WHERE filename = ?",
             (r["filename"],),
