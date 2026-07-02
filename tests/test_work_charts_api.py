@@ -128,7 +128,8 @@ def test_chart_work_grouped_pair(client, server):
     wk = _wk(server, "a.archive")
     for fn in ("a.archive", "b.archive"):
         body = client.get(f"/api/chart/{fn}/work").json()
-        assert body == {"filename": fn, "work_key": wk, "chart_count": 2}
+        assert body == {"filename": fn, "work_key": wk, "chart_count": 2,
+                        "is_split": False}
 
 
 def test_chart_work_singleton(client, server):

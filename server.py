@@ -288,10 +288,16 @@ def _env_flag(name: str) -> bool:
 # raw offsets so distinct customs stay distinct, while named tunings keep
 # grouping by name (stable across the offsets-column migration). Used by both
 # the tuning-names listing and the filter WHERE so the contract matches.
-_TUNING_GROUP_KEY_SQL = (
-    "CASE WHEN tuning_name = 'Custom Tuning' AND COALESCE(tuning_offsets, '') != '' "
-    "THEN tuning_offsets ELSE tuning_name END"
-)
+def _tuning_group_key_sql(alias: str) -> str:
+    """The tuning grouping key (name for named tunings, raw offsets for
+    customs) against an explicit table alias — the grouped filter law (§7.1)
+    evaluates chart-intrinsic predicates inside a member subquery, where bare
+    column names would resolve against the wrong scope."""
+    return (f"CASE WHEN {alias}.tuning_name = 'Custom Tuning' AND COALESCE({alias}.tuning_offsets, '') != '' "
+            f"THEN {alias}.tuning_offsets ELSE {alias}.tuning_name END")
+
+
+_TUNING_GROUP_KEY_SQL = _tuning_group_key_sql("songs")
 
 
 # ── SQLite metadata cache ─────────────────────────────────────────────────────
@@ -2446,18 +2452,23 @@ class MetadataDB:
                      mastery: list[str] | None = None,
                      tags_has: list[str] | None = None,
                      user_difficulty_in: list[str] | None = None,
-                     naming_mode: str = "legacy") -> tuple[str, list]:
+                     naming_mode: str = "legacy",
+                     include_intrinsic: bool = True) -> tuple[str, list]:
         """Shared WHERE-clause builder for query_page / query_artists /
         query_stats. Returns (where_sql, params). Leading 'WHERE' is
         included so callers paste it directly. See feedBack#129/#69.
+
+        Clauses are two classes (the §7.1 filter law): work-identity +
+        practice-state predicates live here; CHART-INTRINSIC predicates
+        (format / arrangements / stems / lyrics / tuning) are built by
+        `_build_intrinsic_where` and appended when `include_intrinsic`.
+        Grouped queries pass include_intrinsic=False and re-apply the
+        intrinsic set as a match-if-ANY-member subquery instead.
         """
         where = "WHERE title != ''"
         params: list = []
         if favorites_only:
             where += " AND filename IN (SELECT filename FROM favorites)"
-        if format_filter:
-            where += " AND format = ?"
-            params.append(format_filter)
         if artist_filter:
             # The dropdown/tree list CANONICAL names (query_artists), so a filter
             # value is canonical — expand it to every raw variant aliased to it so
@@ -2509,6 +2520,35 @@ class MetadataDB:
         if q:
             where += " AND (title LIKE ? COLLATE NOCASE OR artist LIKE ? COLLATE NOCASE OR album LIKE ? COLLATE NOCASE)"
             params += [f"%{q}%"] * 3
+        if include_intrinsic:
+            ifrag, iparams = self._build_intrinsic_where(
+                "songs", format_filter=format_filter,
+                arrangements_has=arrangements_has, arrangements_lacks=arrangements_lacks,
+                stems_has=stems_has, stems_lacks=stems_lacks,
+                has_lyrics=has_lyrics, tunings=tunings, naming_mode=naming_mode)
+            where += ifrag
+            params += iparams
+        return where, params
+
+    def _build_intrinsic_where(self, alias: str, format_filter: str = "",
+                               arrangements_has: list[str] | None = None,
+                               arrangements_lacks: list[str] | None = None,
+                               stems_has: list[str] | None = None,
+                               stems_lacks: list[str] | None = None,
+                               has_lyrics: int | None = None,
+                               tunings: list[str] | None = None,
+                               naming_mode: str = "legacy") -> tuple[str, list]:
+        """CHART-INTRINSIC predicates (format / arrangements / stems / lyrics /
+        tuning) as ' AND …' fragments against an explicit table alias. Flat
+        queries apply them to `songs` directly; grouped queries evaluate them
+        against each work member `m` inside an EXISTS (§7.1 filter law — a
+        work matches when ANY of its charts does, so a song you own in Drop D
+        isn't hidden because your preferred chart is E Standard)."""
+        where = ""
+        params: list = []
+        if format_filter:
+            where += f" AND {alias}.format = ?"
+            params.append(format_filter)
         # arrangements_has / arrangements_lacks: OR within axis (any-of).
         # Uses JSON1's json_each which yields one row per arrangement, then
         # matches the relevant field. The whole subquery is wrapped in EXISTS
@@ -2561,13 +2601,13 @@ class MetadataDB:
                         f"Bonus {arr_type}%",
                     ] + extra_null_params
                 where += (
-                    " AND EXISTS (SELECT 1 FROM json_each(songs.arrangements) WHERE "
+                    f" AND EXISTS (SELECT 1 FROM json_each({alias}.arrangements) WHERE "
                     + " OR ".join(f"({c})" for c in clauses)
                     + ")"
                 )
             else:
                 placeholders = ",".join(["?"] * len(arr_has))
-                where += (" AND EXISTS (SELECT 1 FROM json_each(songs.arrangements) "
+                where += (f" AND EXISTS (SELECT 1 FROM json_each({alias}.arrangements) "
                           f"WHERE json_extract(value, '$.name') IN ({placeholders}))")
                 params += arr_has
         arr_lacks = [a for a in (arrangements_lacks or []) if a in self._ALLOWED_ARRANGEMENT_NAMES]
@@ -2607,29 +2647,29 @@ class MetadataDB:
                         f"Bonus {arr_type}%",
                     ] + extra_null_params
                 where += (
-                    " AND NOT EXISTS (SELECT 1 FROM json_each(songs.arrangements) WHERE "
+                    f" AND NOT EXISTS (SELECT 1 FROM json_each({alias}.arrangements) WHERE "
                     + " OR ".join(f"({c})" for c in clauses)
                     + ")"
                 )
             else:
                 placeholders = ",".join(["?"] * len(arr_lacks))
-                where += (" AND NOT EXISTS (SELECT 1 FROM json_each(songs.arrangements) "
+                where += (f" AND NOT EXISTS (SELECT 1 FROM json_each({alias}.arrangements) "
                           f"WHERE json_extract(value, '$.name') IN ({placeholders}))")
                 params += arr_lacks
         stems_h = [s for s in (stems_has or []) if s in self._ALLOWED_STEM_IDS]
         if stems_h:
             placeholders = ",".join(["?"] * len(stems_h))
-            where += (" AND EXISTS (SELECT 1 FROM json_each(songs.stem_ids) "
+            where += (f" AND EXISTS (SELECT 1 FROM json_each({alias}.stem_ids) "
                       f"WHERE value IN ({placeholders}))")
             params += stems_h
         stems_l = [s for s in (stems_lacks or []) if s in self._ALLOWED_STEM_IDS]
         if stems_l:
             placeholders = ",".join(["?"] * len(stems_l))
-            where += (" AND NOT EXISTS (SELECT 1 FROM json_each(songs.stem_ids) "
+            where += (f" AND NOT EXISTS (SELECT 1 FROM json_each({alias}.stem_ids) "
                       f"WHERE value IN ({placeholders}))")
             params += stems_l
         if has_lyrics in (0, 1):
-            where += " AND has_lyrics = ?"
+            where += f" AND {alias}.has_lyrics = ?"
             params.append(has_lyrics)
         if tunings:
             # Keep the input cap conservative (32) so a hostile caller
@@ -2641,10 +2681,21 @@ class MetadataDB:
                 # Match the same grouping key tuning_names() returns so a single
                 # "Custom Tuning" pill selects exactly its offset set while named
                 # tunings still match by name.
-                where += (f" AND {_TUNING_GROUP_KEY_SQL} "
+                where += (f" AND {_tuning_group_key_sql(alias)} "
                           f"COLLATE NOCASE IN ({placeholders})")
                 params += tn
         return where, params
+
+    # Under group=1, chart-intrinsic filters match if ANY member of the work
+    # matches (§7.1 filter law). A pure predicate on the representative scan —
+    # no GROUP BY, no row multiplication — so the keyset cursor stays valid.
+    def _grouped_member_match(self, intrinsic_frag: str, intrinsic_params: list) -> tuple[str, list]:
+        if not intrinsic_frag:
+            return "", []
+        return ((" AND EXISTS (SELECT 1 FROM songs m JOIN work_display mw ON mw.filename = m.filename "
+                 "WHERE mw.effective_work_key = (SELECT w0.effective_work_key FROM work_display w0 "
+                 "WHERE w0.filename = songs.filename)" + intrinsic_frag + ")"),
+                list(intrinsic_params))
 
     # ── Multi-chart grouping engine (P5a) ────────────────────────────────────
     @staticmethod
@@ -2679,13 +2730,17 @@ class MetadataDB:
     @staticmethod
     def _pick_representative(members: list, prefs: dict) -> str:
         """The keeper chart of a group: the user's chart_group_pref when its file
-        is present, else auto-pick = most-complete (arrangements) → most-played →
-        newest → filename. `members` = dicts {fn, wk, arr, plays, mtime}."""
+        is present, else auto-pick = MOST-PLAYED (history-sticky, §7.1: real
+        practice wins — a newer/'more complete' import must not silently take
+        the pick from the chart your reps accrued on, and a one-off try of an
+        alternate can't out-rank a practiced incumbent) → most-complete
+        (arrangements) → newest → filename. An all-unplayed group therefore
+        still picks by completeness. `members` = dicts {fn, wk, arr, plays, mtime}."""
         if members:
             pref = prefs.get(members[0]["wk"])
             if pref and any(m["fn"] == pref for m in members):
                 return pref
-        best = min(members, key=lambda m: (-m["arr"], -m["plays"], -m["mtime"], m["fn"]))
+        best = min(members, key=lambda m: (-m["plays"], -m["arr"], -m["mtime"], m["fn"]))
         return best["fn"]
 
     def _load_work_members(self):
@@ -2858,8 +2913,11 @@ class MetadataDB:
             "SELECT effective_work_key, group_size FROM work_display WHERE filename = ?",
             (key,)).fetchone()
         if not row:
-            return {"filename": key, "work_key": None, "chart_count": 0}
-        return {"filename": key, "work_key": row[0], "chart_count": row[1]}
+            return {"filename": key, "work_key": None, "chart_count": 0, "is_split": False}
+        split = self.conn.execute(
+            "SELECT 1 FROM chart_group_split WHERE filename = ?", (key,)).fetchone()
+        return {"filename": key, "work_key": row[0], "chart_count": row[1],
+                "is_split": bool(split)}
 
     # Predicate that narrows a query to one representative chart per work — the
     # keyset-safe grouping filter (see query_page / query_stats).
@@ -2894,7 +2952,15 @@ class MetadataDB:
         `WHERE is_group_representative = 1` predicate over the materialized
         work_display, so the total counts WORKS not charts and the keyset seek /
         sort / A–Z all stay correct over the representative subset. Each grouped
-        row carries `chart_count` (the ⚑ N)."""
+        row carries `chart_count` (the ⚑ N).
+
+        Filter law under grouping (P5e, §7.1): work-identity (artist/album/q)
+        + practice-state (favorites/mastery/tags/difficulty) predicates stay on
+        the representative row (identity ≈ the work; practice-state anchors on
+        the preferred chart), while CHART-INTRINSIC predicates (format/
+        arrangements/stems/lyrics/tuning) match if ANY member of the work does
+        — and when the representative itself doesn't match, the row carries a
+        `display_chart` override so the card can show/play the matching one."""
         where, params = self._build_where(
             q=q, favorites_only=favorites_only, format_filter=format_filter,
             artist_filter=artist_filter, album_filter=album_filter,
@@ -2902,10 +2968,19 @@ class MetadataDB:
             stems_has=stems_has, stems_lacks=stems_lacks,
             has_lyrics=has_lyrics, tunings=tunings, mastery=mastery,
             tags_has=tags_has, user_difficulty_in=user_difficulty_in,
-            naming_mode=naming_mode,
+            naming_mode=naming_mode, include_intrinsic=not group,
         )
+        ifrag, iparams = "", []
         if group:
             self._ensure_work_display()
+            ifrag, iparams = self._build_intrinsic_where(
+                "m", format_filter=format_filter,
+                arrangements_has=arrangements_has, arrangements_lacks=arrangements_lacks,
+                stems_has=stems_has, stems_lacks=stems_lacks,
+                has_lyrics=has_lyrics, tunings=tunings, naming_mode=naming_mode)
+            mfrag, mparams = self._grouped_member_match(ifrag, iparams)
+            where += mfrag
+            params += mparams
             where += self._GROUP_REP_PREDICATE
 
         sort_map = {
@@ -2961,6 +3036,22 @@ class MetadataDB:
                 "(SELECT MAX(best_accuracy) FROM song_stats s WHERE s.filename = songs.filename) DESC"
             ),
         }
+        if group and sort in ("mastery", "mastery-desc"):
+            # Sort law (§7.1): mastery aggregates MAX across the WHOLE group —
+            # a song surfaces on any chart you've touched, even when the
+            # preferred chart is unplayed. Mastery never keysets (OFFSET
+            # paging), so the aggregate can't disturb a cursor. The recency
+            # ("Recently Added") aggregate is deliberately NOT applied: mtime
+            # IS a keyset sort, so its aggregate would need materializing into
+            # work_display to stay cursor-safe — deferred until wanted (the
+            # auto-pick's `newest` factor already surfaces new charts of
+            # unplayed works; played works stay put by the sticky rule).
+            _gm = ("(SELECT MAX(st.best_accuracy) FROM song_stats st "
+                   "JOIN work_display sw ON sw.filename = st.filename "
+                   "WHERE sw.effective_work_key = (SELECT w1.effective_work_key "
+                   "FROM work_display w1 WHERE w1.filename = songs.filename))")
+            sort_map["mastery"] = f"({_gm} IS NULL) ASC, {_gm} ASC"
+            sort_map["mastery-desc"] = f"({_gm} IS NULL) ASC, {_gm} DESC"
         order = sort_map.get(sort, "artist COLLATE NOCASE")
         # Legacy `dir=desc` toggle: only safe to append on simple sort
         # clauses that don't already encode a direction. Compound /
@@ -3036,16 +3127,65 @@ class MetadataDB:
         # Grouped rows carry the ⚑ N (chart_count) + the work_key from the
         # materialized read-model, so the card can render the "N charts" chip and
         # address the Charts drawer (GET /api/work/{work_key}/charts) without a
-        # second request.
+        # second request — plus `is_split` (P5e) so the ⋮ menu can offer the
+        # "Rejoin other versions" undo on a split-out chart.
         if group and fns:
             ph = ",".join("?" * len(fns))
-            wd = {r[0]: (r[1], r[2]) for r in self.conn.execute(
-                f"SELECT filename, group_size, work_key FROM work_display WHERE filename IN ({ph})", fns).fetchall()}
+            wd = {r[0]: (r[1], r[2], r[3]) for r in self.conn.execute(
+                "SELECT filename, group_size, work_key, effective_work_key "
+                f"FROM work_display WHERE filename IN ({ph})", fns).fetchall()}
+            splits = {r[0] for r in self.conn.execute(
+                f"SELECT filename FROM chart_group_split WHERE filename IN ({ph})", fns).fetchall()}
+            eff_by_fn = {}
             for s in songs:
-                gs, wk = wd.get(s["filename"], (1, None))
+                gs, wk, eff = wd.get(s["filename"], (1, None, None))
                 s["chart_count"] = gs
                 s["work_key"] = wk
+                s["is_split"] = s["filename"] in splits
+                if eff:
+                    eff_by_fn[s["filename"]] = eff
+            if ifrag:
+                self._attach_display_charts(songs, eff_by_fn, ifrag, iparams)
         return songs, total
+
+    def _attach_display_charts(self, songs: list[dict], eff_by_fn: dict,
+                               intrinsic_frag: str, intrinsic_params: list) -> None:
+        """§7.1: when chart-intrinsic filters admit a work through a member the
+        REPRESENTATIVE doesn't itself satisfy, the card 'switches its displayed
+        chart to a matching one'. The row (sort keys, cursor identity, the
+        mastery/favorite anchor) stays the representative's — only the
+        display/play facts ride along under `display_chart`, so keyset paging
+        and the practice-state anchor are untouched. `intrinsic_frag`/`params`
+        are the member-aliased ('m') predicates already built by the caller."""
+        keys = sorted(set(eff_by_fn.values()))
+        if not keys:
+            return
+        ph = ",".join("?" * len(keys))
+        rows = self.conn.execute(
+            "SELECT mw.effective_work_key, m.filename, m.title, m.duration, m.tuning, "
+            "m.arrangements, m.has_lyrics, m.mtime, m.format, m.stem_count, m.stem_ids, "
+            "m.tuning_name, m.tuning_offsets "
+            "FROM songs m JOIN work_display mw ON mw.filename = m.filename "
+            f"WHERE mw.effective_work_key IN ({ph}){intrinsic_frag} "
+            "ORDER BY mw.is_group_representative DESC, m.mtime DESC, m.filename",
+            keys + list(intrinsic_params)).fetchall()
+        best: dict = {}
+        for r in rows:
+            best.setdefault(r[0], r)   # rep-first, then newest — one match per work
+        for s in songs:
+            m = best.get(eff_by_fn.get(s["filename"]))
+            if not m or m[1] == s["filename"]:
+                continue   # the representative itself matches (or nothing does)
+            s["display_chart"] = {
+                "filename": m[1], "title": m[2] or m[1], "duration": m[3],
+                "tuning": m[4],
+                "arrangements": _ensure_smart_names(json.loads(m[5]) if m[5] else []),
+                "has_lyrics": bool(m[6]), "mtime": m[7],
+                "format": m[8] or "archive",
+                "stem_count": int(m[9] or 0),
+                "stem_ids": json.loads(m[10]) if m[10] else [],
+                "tuning_name": m[11] or "", "tuning_offsets": m[12] or "",
+            }
 
     def query_artists(self, letter: str = "", q: str = "",
                       favorites_only: bool = False,
@@ -3184,9 +3324,21 @@ class MetadataDB:
             arrangements_has=arrangements_has, arrangements_lacks=arrangements_lacks,
             stems_has=stems_has, stems_lacks=stems_lacks,
             has_lyrics=has_lyrics, tunings=tunings, naming_mode=naming_mode,
+            include_intrinsic=not group,
         )
         if group:
+            # Same filter law as query_page (§7.1): chart-intrinsic predicates
+            # match-if-ANY-member, applied identically here so the letter-bar
+            # counts stay in lockstep with the grouped grid.
             self._ensure_work_display()
+            ifrag, iparams = self._build_intrinsic_where(
+                "m", format_filter=format_filter,
+                arrangements_has=arrangements_has, arrangements_lacks=arrangements_lacks,
+                stems_has=stems_has, stems_lacks=stems_lacks,
+                has_lyrics=has_lyrics, tunings=tunings, naming_mode=naming_mode)
+            mfrag, mparams = self._grouped_member_match(ifrag, iparams)
+            where += mfrag
+            params += mparams
             where += self._GROUP_REP_PREDICATE
         total = self.conn.execute(f"SELECT COUNT(*) FROM songs {where}", params).fetchone()[0]
         # NOCASE collation here mirrors `query_artists` and the per-
