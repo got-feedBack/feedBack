@@ -82,6 +82,13 @@ tunes one of these, mirror the change here (and in `keys_highway_3d`):
   as the guitar's, except `default` which is this plugin's original
   palette); one pick drives both of the guitar's background/highway axes
 - `_applyCinematic()` — ambient/key rebalance (values tuned per plugin)
+- `BG_STYLES` (off/particles/lights/geometric) + `_bgGetAnalyser()` /
+  `_bgReadBands()` — background ambience + the stems-first audio-analyser
+  bridge (guitar's diagnostics plumbing dropped; butterchurn/image/video
+  out of scope)
+- `_drawScoreFx()` — the guitar's drawScoreFx overlay adapted to this
+  plugin's internal scoring (pops / tier rings / milestone bursts /
+  streak-break wash)
 
 ## Why a separate plugin (vs. drum mode inside highway_3d)?
 

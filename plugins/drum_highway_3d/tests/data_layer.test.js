@@ -148,3 +148,17 @@ test('FX defaults: theme-PR controls ship enabled at stock-neutral values', () =
     assert.equal(FX_DEFAULTS.glow, 0.5);      // 0.5 = 1.0x multiplier (stock)
     assert.equal(FX_DEFAULTS.vibrancy, 0.85); // ≈ the stock 0.32 stripe base
 });
+
+test('bg styles: validated id set, particles default, no out-of-scope styles', () => {
+    const { BG_STYLE_IDS, readBgStyleSetting } = load().__test;
+    // Host-realm copy — the vm array's foreign prototype trips deepEqual.
+    assert.deepEqual([...BG_STYLE_IDS], ['off', 'particles', 'lights', 'geometric']);
+    assert.equal(readBgStyleSetting(), 'particles'); // no localStorage in the vm
+});
+
+test('FX defaults: ambience + score FX ship enabled', () => {
+    const { FX_DEFAULTS } = load().__test;
+    assert.equal(FX_DEFAULTS.scoreFx, true);
+    assert.equal(FX_DEFAULTS.bgIntensity, 0.5);
+    assert.equal(FX_DEFAULTS.bgReactive, true);
+});
