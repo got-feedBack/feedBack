@@ -813,6 +813,43 @@ class MetadataDB:
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_wanted_identity "
             "ON wanted(artist COLLATE NOCASE, title COLLATE NOCASE, source, source_ref)"
         )
+        # Metadata-enrichment cache (P7, library-metadata design §4/§5/§6): one
+        # row per song holding its match lifecycle + the canonical values a
+        # confident match supplies. A CACHE/OVERRIDE layer — canonical values
+        # are displayed, NEVER auto-written into the pack file. Never purged on
+        # rescan (only by the explicit per-song delete); re-derivable, so a lost
+        # row just re-enriches. `content_hash` keys the row to the metadata a
+        # match depends on (normalized artist|title|album|duration — NOT the
+        # filename), which makes enrichment idempotent AND rename-survivable.
+        # match_state lifecycle: unscanned → matched(source,score) | manual |
+        # failed. A `manual` row is the user's pinned pick — NEVER auto-reset;
+        # `failed` retries on backoff via `attempts` (the matcher, P8, owns
+        # that policy). Additive + idempotent.
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS song_enrichment (
+                filename TEXT PRIMARY KEY,
+                content_hash TEXT,
+                match_state TEXT NOT NULL DEFAULT 'unscanned',
+                match_source TEXT,
+                match_score REAL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                mb_recording_id TEXT,
+                mb_release_id TEXT,
+                mb_artist_id TEXT,
+                isrc TEXT,
+                canon_artist TEXT,
+                canon_album TEXT,
+                canon_title TEXT,
+                canon_year TEXT,
+                canon_artist_sort TEXT,
+                genres TEXT,
+                art_cache_path TEXT,
+                art_state TEXT,
+                fetched_at TEXT
+            )
+        """)
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_enrichment_hash ON song_enrichment(content_hash)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_enrichment_state ON song_enrichment(match_state)")
         # Progression (spec 010): instrument paths, challenges, quests, the
         # Decibels wallet, and the cosmetics shop. Targets/titles live in the
         # bundled content (data/progression/); these tables hold only player
@@ -2527,6 +2564,100 @@ class MetadataDB:
                 self.conn.commit()
                 self._work_display_dirty = True   # membership changed → regroup
             return len(stale)
+
+    # ── Metadata enrichment (P7 — plumbing; the matcher itself is the next
+    # slice) ─────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def enrichment_content_hash(artist, title, album, duration) -> str:
+        """Identity hash of the metadata a match keys on — normalized
+        artist|title|album|duration. Deliberately excludes the filename, so a
+        renamed pack keeps its enrichment (rename-survivable), and an unchanged
+        hash makes re-enrichment a no-op (idempotent). Whitespace/case-folded
+        so trivial edits don't invalidate a match; duration is rounded to whole
+        seconds for the same reason."""
+        def norm(s):
+            return " ".join(str(s or "").lower().split())
+        try:
+            dur = str(int(round(float(duration or 0))))
+        except (TypeError, ValueError):
+            dur = "0"
+        raw = "|".join([norm(artist), norm(title), norm(album), dur])
+        return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+    def enrichment_pending(self, limit: int = 500) -> list[dict]:
+        """Songs whose enrichment row needs (re)matching: no row yet, or an
+        `unscanned`/`matched` row whose content_hash no longer matches the
+        song's current metadata (an edit changed the identity → re-match).
+        `manual` rows are the user's pinned pick and are NEVER re-queued;
+        `failed` rows wait for the matcher's backoff policy (next slice) rather
+        than being re-queued here every pass."""
+        rows = self.conn.execute(
+            "SELECT s.filename, s.artist, s.title, s.album, s.duration, "
+            "e.content_hash, e.match_state "
+            "FROM songs s LEFT JOIN song_enrichment e ON e.filename = s.filename "
+            "WHERE s.title != '' AND (e.filename IS NULL OR e.match_state IN ('unscanned', 'matched')) "
+            "ORDER BY s.filename LIMIT ?", (max(1, int(limit)),)).fetchall()
+        out = []
+        for fn, artist, title, album, duration, ehash, state in rows:
+            h = self.enrichment_content_hash(artist, title, album, duration)
+            # No row yet, still unmatched, or the identity changed under a
+            # match → needs the matcher. A matched row with an unchanged hash
+            # is settled (idempotence).
+            if state is None or state == "unscanned" or ehash != h:
+                out.append({"filename": fn, "artist": artist, "title": title,
+                            "album": album, "duration": duration,
+                            "content_hash": h, "match_state": state})
+        return out
+
+    def upsert_enrichment_stub(self, filename: str, content_hash: str) -> None:
+        """Write/refresh a row's identity hash ahead of matching. A row whose
+        hash changed drops back to `unscanned` (the old match no longer applies)
+        — EXCEPT a `manual` row, which is the user's explicit pick and survives
+        metadata edits untouched."""
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO song_enrichment (filename, content_hash, match_state) "
+                "VALUES (?, ?, 'unscanned') "
+                "ON CONFLICT(filename) DO UPDATE SET "
+                "  match_state = CASE WHEN song_enrichment.match_state = 'manual' "
+                "                     THEN song_enrichment.match_state "
+                "                     WHEN song_enrichment.content_hash IS NOT excluded.content_hash "
+                "                     THEN 'unscanned' "
+                "                     ELSE song_enrichment.match_state END, "
+                "  content_hash = CASE WHEN song_enrichment.match_state = 'manual' "
+                "                      THEN song_enrichment.content_hash "
+                "                      ELSE excluded.content_hash END",
+                (filename, content_hash))
+            self.conn.commit()
+
+    def get_enrichment(self, filename: str) -> dict | None:
+        row = self.conn.execute(
+            "SELECT filename, content_hash, match_state, match_source, match_score, attempts, "
+            "mb_recording_id, mb_release_id, mb_artist_id, isrc, "
+            "canon_artist, canon_album, canon_title, canon_year, canon_artist_sort, "
+            "genres, art_cache_path, art_state, fetched_at "
+            "FROM song_enrichment WHERE filename = ?", (filename,)).fetchone()
+        if not row:
+            return None
+        keys = ("filename", "content_hash", "match_state", "match_source", "match_score",
+                "attempts", "mb_recording_id", "mb_release_id", "mb_artist_id", "isrc",
+                "canon_artist", "canon_album", "canon_title", "canon_year",
+                "canon_artist_sort", "genres", "art_cache_path", "art_state", "fetched_at")
+        out = dict(zip(keys, row))
+        try:
+            out["genres"] = json.loads(out["genres"]) if out["genres"] else []
+        except (ValueError, TypeError):
+            out["genres"] = []
+        return out
+
+    def enrichment_state_counts(self) -> dict:
+        """{match_state: count} over rows whose song still exists (dead rows are
+        filtered at read time, matching the never-purged-on-rescan contract)."""
+        rows = self.conn.execute(
+            "SELECT e.match_state, COUNT(*) FROM song_enrichment e "
+            "JOIN songs s ON s.filename = e.filename GROUP BY e.match_state").fetchall()
+        return {r[0]: r[1] for r in rows}
 
     def _estd_set(self) -> set[str]:
         """Get set of filenames that have a retuned variant (_EStd_ or _DropD_) in the DB."""
@@ -5067,9 +5198,109 @@ def _scan_runner():
         with _scan_kick_lock:
             if not _scan_rescan_pending:
                 _scan_status["running"] = False
-                return
+                break
             _scan_rescan_pending = False
             _scan_status["running"] = True
+    # Enrichment rides scan completion (library-metadata design §6): the scan
+    # pool is a side-effect-free, no-network process pool by design, so
+    # enrichment is a SEPARATE post-scan pass — non-blocking, the library is
+    # usable immediately. The 5-minute periodic rescan re-kicks it, which is
+    # the natural low-priority retry hook.
+    _kick_enrich()
+
+
+# ── Metadata enrichment worker (P7 — plumbing) ────────────────────────────────
+# A single throttled daemon thread + queue, mirroring _kick_scan/_scan_runner
+# (single-flight + coalescing; NOT a pool — external lookups are rate-limited
+# to ~1/s, which makes a pool pointless). This slice ships the full lifecycle
+# around a NO-OP matcher: the queue walk, the identity hashing, the throttle
+# seam, and the status surface — so the real text matcher (next slice) replaces
+# exactly one function (_enrich_one) and inherits everything else.
+
+_enrich_kick_lock = threading.Lock()
+_enrich_pending_pass = False
+_enrich_status = {"running": False, "processed": 0, "last_pass_at": None}
+# Minimum spacing between EXTERNAL lookups (design: ≤1 req/s + local cache).
+_ENRICH_MIN_INTERVAL = 1.1
+_enrich_last_fetch = 0.0
+
+
+def _enrichment_art_dir() -> Path:
+    """The size-capped art cache dir (populated by the Cover Art slice; the
+    LRU cap policy lands with it). Under CONFIG_DIR so Settings backup/restore
+    and the docker volume already cover it."""
+    d = CONFIG_DIR / "art_cache"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _enrich_throttle():
+    """Block until an external lookup is allowed. Matchers MUST call this
+    before every network request — and must NOT hold meta_db._lock across the
+    request (fetch outside the lock, write inside)."""
+    global _enrich_last_fetch
+    wait = _ENRICH_MIN_INTERVAL - (time.monotonic() - _enrich_last_fetch)
+    if wait > 0:
+        time.sleep(wait)
+    _enrich_last_fetch = time.monotonic()
+
+
+def _enrich_one(row: dict) -> None:
+    """P7's NO-OP matcher: stamp/refresh the row's identity hash (which also
+    drops a stale match back to `unscanned`, never a `manual` pick) and stop.
+    The text-match pipeline replaces this function; anything that reaches the
+    network must go through _enrich_throttle() and must not hold meta_db._lock
+    across the fetch."""
+    meta_db.upsert_enrichment_stub(row["filename"], row["content_hash"])
+
+
+def _background_enrich():
+    """One pass over the rows needing (re)matching. A single bounded pass —
+    with the no-op matcher, `unscanned` rows legitimately stay unscanned, so
+    looping until the queue drains would spin forever."""
+    _enrich_status["processed"] = 0
+    try:
+        pending = meta_db.enrichment_pending(limit=100000)
+    except Exception:
+        log.exception("enrichment: pending query failed")
+        return
+    for row in pending:
+        try:
+            _enrich_one(row)
+        except Exception as e:
+            log.warning("enrichment failed for %s: %s", row.get("filename"), e)
+        _enrich_status["processed"] += 1
+    _enrich_status["last_pass_at"] = time.time()
+    if pending:
+        log.info("Enrichment pass: %d rows refreshed", len(pending))
+
+
+def _kick_enrich() -> bool:
+    """Request an enrichment pass, single-flight + coalescing (the _kick_scan
+    contract): True = a worker thread was started, False = one is running and
+    a follow-up pass was queued."""
+    global _enrich_pending_pass
+    with _enrich_kick_lock:
+        if _enrich_status["running"]:
+            _enrich_pending_pass = True
+            return False
+        _enrich_status["running"] = True
+    threading.Thread(target=_enrich_runner, daemon=True).start()
+    return True
+
+
+def _enrich_runner():
+    global _enrich_pending_pass
+    while True:
+        try:
+            _background_enrich()
+        except Exception:
+            log.exception("background enrichment failed unexpectedly")
+        with _enrich_kick_lock:
+            if not _enrich_pending_pass:
+                _enrich_status["running"] = False
+                return
+            _enrich_pending_pass = False
 
 
 # ── Register plugin API endpoints (lightweight, before app starts) ───────────
@@ -5540,6 +5771,20 @@ def get_version():
 @app.get("/api/scan-status")
 def scan_status():
     return _scan_status
+
+
+@app.get("/api/enrichment/status")
+def enrichment_status():
+    """Enrichment pipeline state: worker flags + row counts by match_state.
+    Ambient tool-state for the match-review UI (never a home-screen score —
+    design §11); also what tests poke."""
+    return {
+        "running": _enrich_status["running"],
+        "processed": _enrich_status["processed"],
+        "last_pass_at": _enrich_status["last_pass_at"],
+        "states": meta_db.enrichment_state_counts(),
+        "total_songs": meta_db.count(),
+    }
 
 
 @app.get("/api/startup-status")
@@ -6035,6 +6280,9 @@ def delete_song(filename: str):
             meta_db.conn.execute("DELETE FROM work_display WHERE filename = ?", (cache_key,))
             meta_db.conn.execute("DELETE FROM chart_group_pref WHERE preferred_filename = ?", (cache_key,))
             meta_db._work_display_dirty = True
+            # Enrichment is never purged on rescan (delete_missing), only here
+            # on the explicit per-song delete — the never-clobber contract.
+            meta_db.conn.execute("DELETE FROM song_enrichment WHERE filename = ?", (cache_key,))
             meta_db.conn.commit()
 
         _invalidate_song_caches(cache_key)
