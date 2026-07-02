@@ -8,6 +8,11 @@ name: ship-ci
 on:
   pull_request:
     branches: [main, 'release/**']
+  # Trunk-based: post-merge CI on main catches semantic conflicts between
+  # independently-green PRs; push on release/** covers stabilization
+  # cherry-picks that land without a PR.
+  push:
+    branches: [main, 'release/**']
 
 permissions:
   contents: read

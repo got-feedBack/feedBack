@@ -1,0 +1,63 @@
+name: rc
+
+# Release-candidate images for stabilization: every push to a release/**
+# branch builds and pushes ghcr.io tags :rc (moving) and
+# :rc-<version>-<date> (pinned). Final versioned images still come from
+# release.yml on tag push.
+on:
+  push:
+    branches: ['release/**']
+
+permissions:
+  contents: read
+
+# One build per branch at a time; a newer push supersedes an in-flight one.
+concurrency:
+  group: rc-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-docker:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Derive RC tags
+        id: meta
+        run: |
+          # release/v0.3.0 -> 0.3.0 (tolerate a missing v prefix too)
+          version="${GITHUB_REF_NAME#release/}"
+          version="${version#v}"
+          date="$(date -u +%Y%m%d)"
+          {
+            echo "tags<<TAGS_EOF"
+            echo "ghcr.io/got-feedback/feedback:rc"
+            echo "ghcr.io/got-feedback/feedback:rc-${version}-${date}"
+            echo "TAGS_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
