@@ -998,6 +998,66 @@ class MetadataDB:
         self.conn.execute("DELETE FROM song_user_meta WHERE filename = ?", (filename,))
         self.conn.execute("DELETE FROM song_tags WHERE filename = ?", (filename,))
 
+    def batch_user_meta(self, filenames, *, set_difficulty="__keep__",
+                        add_tags=None, remove_tags=None) -> int:
+        """Apply personal-meta edits across MANY songs in one transaction —
+        the bulk-edit primitive behind the batch bar. Additive by design so a
+        bulk action never silently clobbers per-song data the user can't see:
+
+        - `set_difficulty`: an int 1–5 sets it on every song; `None` clears it
+          on every song; the `__keep__` sentinel leaves each song's own value
+          untouched (mixed-state "leave unchanged"). Notes are preserved; a row
+          that ends up difficulty-less AND notes-less is dropped (no empty shell,
+          matching set_song_user_meta).
+        - `add_tags` / `remove_tags`: tag sets ADDED to / REMOVED from each song
+          (never a full-replace — bulk must not wipe a song's other tags). A tag
+          in both add and remove resolves to add (explicit set wins).
+
+        Returns the count of songs touched. Caller normalizes tags is NOT
+        assumed — we normalize here so the endpoint and the DB agree."""
+        add = []
+        seen: set = set()
+        for t in (add_tags or []):
+            nt = _normalize_tag(t)
+            if nt and nt not in seen:
+                seen.add(nt)
+                add.append(nt)
+        rem = {nt for nt in (_normalize_tag(t) for t in (remove_tags or [])) if nt}
+        rem -= set(add)  # add wins a conflict
+        fns = list(dict.fromkeys(filenames or []))  # dedupe, keep order
+        if not fns:
+            return 0
+        with self._lock:
+            for fn in fns:
+                if set_difficulty != "__keep__":
+                    cur = self.conn.execute(
+                        "SELECT notes FROM song_user_meta WHERE filename = ?",
+                        (fn,)).fetchone()
+                    cur_notes = cur[0] if cur else None
+                    if set_difficulty is None and not (cur_notes or "").strip():
+                        self.conn.execute(
+                            "DELETE FROM song_user_meta WHERE filename = ?", (fn,))
+                    else:
+                        self.conn.execute(
+                            "INSERT INTO song_user_meta (filename, user_difficulty, notes, updated_at) "
+                            "VALUES (?, ?, ?, datetime('now')) "
+                            "ON CONFLICT(filename) DO UPDATE SET "
+                            "user_difficulty = excluded.user_difficulty, "
+                            "updated_at = excluded.updated_at",
+                            (fn, set_difficulty, cur_notes))
+                if rem:
+                    ph = ",".join("?" * len(rem))
+                    self.conn.execute(
+                        f"DELETE FROM song_tags WHERE filename = ? AND tag IN ({ph})",
+                        [fn, *rem])
+                if add:
+                    self.conn.executemany(
+                        "INSERT OR IGNORE INTO song_tags (filename, tag, created_at) "
+                        "VALUES (?, ?, datetime('now'))",
+                        [(fn, t) for t in add])
+            self.conn.commit()
+        return len(fns)
+
     # ── Player profile (fee[dB]ack v0.3.0) ─────────────────────────────────
     def get_profile(self) -> dict:
         row = self.conn.execute(
@@ -5350,6 +5410,53 @@ def put_song_user_meta(filename: str, data: dict):
     if tags != "__absent__":
         meta_db.set_song_tags(key, tags)
     return meta_db.get_song_user_meta(key)
+
+
+@app.post("/api/songs/user-meta/batch")
+def batch_song_user_meta(data: dict):
+    """Bulk personal-meta edit over a selection — one request instead of N×2
+    per-song round-trips (the batch bar's apply-to-all). DB-only; never touches
+    files. Body:
+      {"filenames": [...],            # required, non-empty
+       "set_difficulty": 1-5 | null,  # optional: set on all / clear on all
+       "add_tags": [...],             # optional: add to all (never full-replace)
+       "remove_tags": [...]}          # optional: remove from all
+    Omit `set_difficulty` entirely to leave each song's difficulty as-is
+    (mixed-state "leave unchanged"). Returns {"updated": N, "tags": [...]} so the
+    caller can refresh the tag-filter list without a second call."""
+    fns = data.get("filenames")
+    if not isinstance(fns, list) or not fns:
+        return JSONResponse({"error": "filenames must be a non-empty array"}, 400)
+    if not all(isinstance(f, str) and f for f in fns):
+        return JSONResponse({"error": "filenames must be non-empty strings"}, 400)
+
+    kwargs: dict = {}
+    if "set_difficulty" in data:
+        v = data["set_difficulty"]
+        if v is None or v == "":
+            kwargs["set_difficulty"] = None
+        else:
+            if isinstance(v, bool) or (isinstance(v, float) and not v.is_integer()):
+                return JSONResponse({"error": "set_difficulty must be an integer 1–5 or null"}, 400)
+            try:
+                iv = int(v)
+            except (TypeError, ValueError):
+                return JSONResponse({"error": "set_difficulty must be an integer 1–5 or null"}, 400)
+            if not (1 <= iv <= 5):
+                return JSONResponse({"error": "set_difficulty must be 1–5 or null"}, 400)
+            kwargs["set_difficulty"] = iv
+
+    add_tags = data.get("add_tags")
+    remove_tags = data.get("remove_tags")
+    for name, val in (("add_tags", add_tags), ("remove_tags", remove_tags)):
+        if val is not None and not isinstance(val, list):
+            return JSONResponse({"error": f"{name} must be an array of strings"}, 400)
+    if "set_difficulty" not in data and not add_tags and not remove_tags:
+        return JSONResponse({"error": "Nothing to apply"}, 400)
+
+    keys = [meta_db._canonical_song_filename(f) for f in fns]
+    n = meta_db.batch_user_meta(keys, add_tags=add_tags, remove_tags=remove_tags, **kwargs)
+    return {"updated": n, "tags": meta_db.all_tags()}
 
 
 @app.get("/api/tags")
