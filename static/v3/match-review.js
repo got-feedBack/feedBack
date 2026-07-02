@@ -401,16 +401,28 @@
     // Markup lives statically in index.html (the v3 settings pattern); this
     // wires it. All null-guarded so v2 (which lacks the elements) no-ops.
     function wireSettingsCard() {
-        const toggle = document.getElementById('enrich-enabled');
         const sel = document.getElementById('enrich-threshold');
+        const order = document.getElementById('enrich-review-order');
         const btn = document.getElementById('enrich-match-now');
-        if (!toggle && !sel && !btn) return;
+        // Boolean toggles, element id → settings key. enrich-enabled is the
+        // master background switch; the rest are the R1 scraper options
+        // (per-source + per-field auto-apply).
+        const toggles = [
+            ['enrich-enabled', 'enrich_enabled'],
+            ['enrich-src-musicbrainz', 'enrich_src_musicbrainz'],
+            ['enrich-src-caa', 'enrich_src_caa'],
+            ['enrich-apply-names', 'enrich_apply_names'],
+            ['enrich-apply-year', 'enrich_apply_year'],
+            ['enrich-apply-genres', 'enrich_apply_genres'],
+            ['enrich-apply-art', 'enrich_apply_art'],
+        ].map(([id, key]) => [document.getElementById(id), key]).filter(([el]) => el);
+        if (!toggles.length && !sel && !btn) return;
         (async () => {
             try {
                 const r = await fetch('/api/settings');
                 if (r.ok) {
                     const cfg = await r.json();
-                    if (toggle) toggle.checked = cfg.enrich_enabled !== false;
+                    for (const [el, key] of toggles) el.checked = cfg[key] !== false;
                     if (sel) {
                         const t = Number(cfg.enrich_auto_threshold);
                         const want = Number.isFinite(t) ? t : 0.9;
@@ -421,13 +433,20 @@
                         }
                         if (best) sel.value = best.value;
                     }
+                    if (order) {
+                        const v = String(cfg.enrich_review_order || 'missing_first');
+                        order.value = ['missing_first', 'artist', 'recent'].includes(v) ? v : 'missing_first';
+                    }
                 }
             } catch (_) { /* leave markup defaults */ }
             refreshChip();   // also fills #enrich-status
         })();
         const save = (key, value) => post('/api/settings', { [key]: value });
-        toggle?.addEventListener('change', () => save('enrich_enabled', !!toggle.checked));
+        for (const [el, key] of toggles) {
+            el.addEventListener('change', () => save(key, !!el.checked));
+        }
         sel?.addEventListener('change', () => save('enrich_auto_threshold', Number(sel.value)));
+        order?.addEventListener('change', () => save('enrich_review_order', order.value));
         btn?.addEventListener('click', async () => {
             await post('/api/enrichment/kick');
             const line = document.getElementById('enrich-status');
