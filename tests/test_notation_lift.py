@@ -85,6 +85,26 @@ def test_split_hands_narrow_group_goes_by_mean_vs_middle_c():
     assert "rh" in high and "lh" not in high  # mean ~65.5 ≥ 60
 
 
+def test_split_hands_straddling_middle_c_splits_at_middle_c():
+    # [G2, E3, C4] = [43, 52, 60]: largest gap is G2→E3 (9) but the musically
+    # correct split is E3|C4. Middle-C boundary → lh=[G2,E3], rh=[C4].
+    notes = [{"t": 0.0, "midi": m, "sus": 0} for m in (43, 52, 60)]
+    hands = nl.split_hands(notes)
+    assert sorted(n["midi"] for n in hands["lh"]) == [43, 52]
+    assert [n["midi"] for n in hands["rh"]] == [60]
+
+
+def test_split_hands_middle_c_split_falls_back_when_it_makes_unplayable_hand():
+    # Em7-shape RH voicing over a low bass note: [E2, B3, D4, G4] = [40,59,62,67].
+    # A hard middle-C split would put E2+B3 in the LH — a 19-semitone span that
+    # re-violates the 12-semitone threshold. Must fall back to the largest gap,
+    # isolating E2 in the LH and keeping the treble voicing in the RH.
+    notes = [{"t": 0.0, "midi": m, "sus": 0} for m in (40, 59, 62, 67)]
+    hands = nl.split_hands(notes)
+    assert [n["midi"] for n in hands["lh"]] == [40]
+    assert sorted(n["midi"] for n in hands["rh"]) == [59, 62, 67]
+
+
 # ── Timing ───────────────────────────────────────────────────────────────────
 
 def test_downbeat_times_filters_non_downbeats_and_sorts():

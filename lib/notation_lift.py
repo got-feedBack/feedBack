@@ -118,11 +118,20 @@ def split_hands(notes: list[dict]) -> dict[str, list[dict]]:
             # this correctly handles bass+treble chords from piano imports where
             # the largest-gap heuristic picks the wrong split point (e.g.
             # [G2, E3, C4]: largest gap is G2→E3 but the real split is E3|C4).
-            # Fall back to the largest internal gap only when all notes land on
-            # one side of middle C.
+            # BUT only when both resulting hands are themselves playable: a bass
+            # note under a treble voicing that merely dips below C4 (e.g.
+            # [E2, B3, D4, G4]) would otherwise land E2+B3 in one hand — a
+            # 19-semitone span that re-violates HAND_SPLIT_SPAN_SEMITONES. When
+            # the middle-C split produces an unplayable hand, fall back to the
+            # largest internal gap (which correctly isolates E2 there).
+            threshold = None
             if pitches[0] < MIDDLE_C <= pitches[-1]:
-                threshold = MIDDLE_C - 1  # lh: midi < MIDDLE_C
-            else:
+                _lh = [p for p in pitches if p < MIDDLE_C]
+                _rh = [p for p in pitches if p >= MIDDLE_C]
+                if (_lh[-1] - _lh[0] <= HAND_SPLIT_SPAN_SEMITONES
+                        and _rh[-1] - _rh[0] <= HAND_SPLIT_SPAN_SEMITONES):
+                    threshold = MIDDLE_C - 1  # lh: midi < MIDDLE_C
+            if threshold is None:
                 gaps = [pitches[i + 1] - pitches[i] for i in range(len(pitches) - 1)]
                 split_after = gaps.index(max(gaps))
                 threshold = pitches[split_after]

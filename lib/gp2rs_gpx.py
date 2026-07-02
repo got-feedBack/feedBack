@@ -229,6 +229,22 @@ def _build_tempo_map(root: ET.Element) -> list[tuple[int, float]]:
     return events
 
 
+def _parse_tuning(el: ET.Element) -> list[int]:
+    """Return the string-tuning MIDI pitches from the first ``Tuning`` Property
+    at or below ``el`` (a Track or a single Staff), high string first. ``[]`` if
+    there is no Tuning property or its Pitches text is unparseable."""
+    for prop in el.findall('.//Property'):
+        if prop.get('name') == 'Tuning':
+            pe = prop.find('Pitches')
+            if pe is not None and pe.text:
+                try:
+                    return [int(p) for p in pe.text.split()]
+                except ValueError:
+                    return []
+            break
+    return []
+
+
 def _gpif_tracks(root: ET.Element) -> list[dict]:
     """Return a list of raw track dicts from the GPIF Tracks element."""
     # Lookups for per-track note counting. MasterBar/Bars lists one bar id per
@@ -332,34 +348,17 @@ def _gpif_tracks(root: ET.Element) -> list[dict]:
         # tuning overwrote the first; for a GP8 piano (treble 6-string +
         # bass 5-string) that caused stave-0 notes with String=5 to be
         # out-of-range against the 5-entry bass tuning and silently dropped.
-        stave_pitches: list[list[int]] = []
-        staves_el = t.find('Staves')
-        if staves_el is not None:
-            for staff_el in staves_el:
-                pitches: list[int] = []
-                for prop in staff_el.findall('.//Property'):
-                    if prop.get('name') == 'Tuning':
-                        pe = prop.find('Pitches')
-                        if pe is not None and pe.text:
-                            try:
-                                pitches = [int(p) for p in pe.text.split()]
-                            except ValueError:
-                                pass
-                        break
-                stave_pitches.append(pitches)
-        if not stave_pitches:
-            # No <Staves> (GP3/4/5 or old GPX): fall back to track-level props
-            _sp: list[int] = []
-            for prop in t.findall('.//Property'):
-                if prop.get('name') == 'Tuning':
-                    pe = prop.find('Pitches')
-                    if pe is not None and pe.text:
-                        try:
-                            _sp = [int(p) for p in pe.text.split()]
-                        except ValueError:
-                            pass
-                    break
-            stave_pitches = [_sp]
+        # A staff with no Tuning of its own falls back to the track-level
+        # property (never to []) — an empty list silently drops every fretted
+        # note on that stave in `_note_midi`.  The list stays parallel to
+        # `stave_columns` so a per-stave column always has a matching tuning.
+        _track_tuning = _parse_tuning(t)
+        _staff_els = list(t.findall('Staves/Staff'))
+        if _staff_els:
+            stave_pitches = [(_parse_tuning(s) or _track_tuning) for s in _staff_els]
+        else:
+            # No <Staves> (GP3/4/5 or old GPX): single track-level tuning.
+            stave_pitches = [_track_tuning]
 
         result.append({
             '_el': t,
@@ -400,6 +399,121 @@ def _beat_dur_secs(beat_el: ET.Element, rhythms_dict: dict, tempo_bpm: float) ->
                 except (TypeError, ValueError):
                     pass
     return dur_qn * (60.0 / tempo_bpm)
+
+
+def _collect_column_notes(
+    col: int,
+    string_pitches: list[int],
+    *,
+    masterbars: list,
+    bars_by_id: dict,
+    voices_dict: dict,
+    beats_dict: dict,
+    notes_dict: dict,
+    rhythms_dict: dict,
+    tempo_map: list,
+    tempo_bpm: float,
+    audio_offset: float,
+) -> list['RsNote']:
+    """Walk one ``MasterBar/Bars`` column (a single stave / hand) and return its
+    notes as keys-encoded ``RsNote`` (``string = midi // 24``, ``fret = midi %
+    24``). Tie destinations extend the matching prior note's sustain (keyed by
+    pitch, so polyphonic parts are handled) rather than emitting a new note —
+    mirroring the main ``convert_file`` builder, including its full-precision
+    timing and the 0.2s sustain threshold.
+
+    Shared by the GPX LH/RH pair merge and the GP8 multi-stave (grand-staff)
+    fold so the two code paths can never drift in tie / timing / dedup handling.
+    """
+    from gp2rs import RsNote  # lazy: gp2rs<->gpx circular import (see convert_file)
+
+    notes: list[RsNote] = []
+    last_per_key: dict[int, RsNote] = {}
+    tempo_iter = iter(tempo_map)
+    next_bar, next_bpm = next(tempo_iter, (999999, tempo_bpm))
+    cur_tempo = tempo_bpm
+    t_cursor = 0.0
+
+    for mb_idx, mb in enumerate(masterbars):
+        while mb_idx >= next_bar:
+            cur_tempo = next_bpm
+            next_bar, next_bpm = next(tempo_iter, (999999, cur_tempo))
+        ts = mb.findtext('Time', '4/4')
+        try:
+            nb, db = [int(x) for x in ts.split('/')]
+        except ValueError:
+            nb, db = 4, 4
+        bar_dur = nb * (4.0 / db) * (60.0 / cur_tempo)
+        bar_ids = mb.findtext('Bars', '').split()
+        bid = bar_ids[col] if col < len(bar_ids) else '-1'
+        if bid != '-1' and bid:
+            bar = bars_by_id.get(bid)
+            if bar is not None:
+                for vid in bar.findtext('Voices', '').split():
+                    if vid == '-1':
+                        continue
+                    voice = voices_dict.get(vid)
+                    if voice is None:
+                        continue
+                    vt = t_cursor
+                    for beat_id in voice.findtext('Beats', '').split():
+                        beat = beats_dict.get(beat_id)
+                        if beat is None:
+                            continue
+                        dur = _beat_dur_secs(beat, rhythms_dict, cur_tempo)
+                        for nid in beat.findtext('Notes', '').strip().split():
+                            note_el = notes_dict.get(nid)
+                            if note_el is None:
+                                continue
+                            if _note_is_tie(note_el):
+                                tie_midi = _note_midi(note_el, string_pitches)
+                                if tie_midi is not None:
+                                    prev = last_per_key.get(tie_midi)
+                                    tie_t = vt + audio_offset
+                                    if prev is not None and prev.time < tie_t:
+                                        prev.sustain = max(
+                                            prev.sustain, (tie_t + dur) - prev.time)
+                                continue
+                            midi = _note_midi(note_el, string_pitches)
+                            if midi is None:
+                                continue
+                            rn = RsNote(
+                                time=vt + audio_offset,
+                                string=midi // 24,
+                                fret=midi % 24,
+                                sustain=dur if dur > 0.2 else 0.0,
+                            )
+                            notes.append(rn)
+                            last_per_key[midi] = rn
+                        vt += dur
+        t_cursor += bar_dur
+    return notes
+
+
+def _merge_lh_notes(rs_notes: list, rs_chords: list, lh_notes: list) -> None:
+    """Fold ``lh_notes`` (a second stave / left hand) into ``rs_notes`` in
+    place, de-duplicating simultaneous same-pitch notes and keeping the LONGER
+    sustain when both hands strike the same key at the same instant. Seeds the
+    dedup set from chord notes too (polyphonic RH beats live in
+    ``rs_chords[*].notes``). No-op for an empty ``lh_notes``."""
+    if not lh_notes:
+        return
+    seen: dict[tuple, RsNote] = {}
+    for n in rs_notes:
+        seen.setdefault((round(n.time, 3), n.string, n.fret), n)
+    for c in rs_chords:
+        for cn in c.notes:
+            seen.setdefault((round(cn.time, 3), cn.string, cn.fret), cn)
+    for rn in lh_notes:
+        k = (round(rn.time, 3), rn.string, rn.fret)
+        existing = seen.get(k)
+        if existing is None:
+            rs_notes.append(rn)
+            seen[k] = rn
+        elif rn.sustain > existing.sustain:
+            # Mutating the RsNote also updates it in place inside any RH chord.
+            existing.sustain = rn.sustain
+    rs_notes.sort(key=lambda n: (n.time, n.string))
 
 
 # ---------------------------------------------------------------------------
@@ -1402,22 +1516,15 @@ def convert_file(
     _bend_divisor = _gpx_bend_scale(root)   # GPIF bend value -> semitones
 
     # Map filtered track index -> bar column (MasterBar/Bars position for
-    # stave 0 of that track).  Each <Staves/Staff> child occupies one column,
-    # so multi-stave tracks advance the column counter by num_staves, not 1.
-    # The old enumerate()-based mapping assumed 1 stave per track and produced
-    # wrong columns for any track following a multi-stave predecessor.
-    raw_tracks = list(root.find('Tracks') or [])
-    filtered_to_raw: dict[int, int] = {}   # kept as name for caller compat
-    filtered_pos = 0
-    _bar_col = 0
-    for t_el in raw_tracks:
-        _ns = max(1, len(list(t_el.findall('Staves/Staff'))))
-        name = (t_el.findtext('Name') or '').strip()
-        if not (name.startswith('@$') and name.endswith('$@')):
-            filtered_to_raw[filtered_pos] = _bar_col
-            filtered_pos += 1
-        _bar_col += _ns
-
+    # stave 0 of that track). `_gpif_tracks` already computed the per-stave
+    # column layout (advancing by num_staves per track, pseudo-tracks skipped),
+    # so reuse its `stave_columns[0]` rather than re-deriving the counting rule
+    # here — divergence in stave counting *is* the bug class this fix closes.
+    # NB: despite the historical name, the value is a bar *column*, not a raw
+    # Track index — do not index `root.find('Tracks')` with it.
+    filtered_to_raw: dict[int, int] = {
+        i: t['stave_columns'][0] for i, t in enumerate(tracks)
+    }
 
     # Detect and merge Piano LH+RH pairs into single full-keyboard arrangements
     track_indices, _piano_merge_map = _find_piano_pairs(track_indices, tracks, names)
@@ -1509,7 +1616,16 @@ def convert_file(
         is_keys = (
             not is_drum and not is_vocal
             and (
-                any(kw in track['name'].lower() for kw in ('piano', 'keys', 'keyboard', 'organ'))
+                # A multi-stave track is a grand staff (treble + bass) — i.e. a
+                # keyboard-family part. Treating it as keys end-to-end keeps the
+                # stave-0 encoding and the folded stave-1+ encoding consistent
+                # (both midi//24, midi%24) and makes the `note_count` preview
+                # (which sums every stave column) match what actually imports,
+                # even for instruments the name/program heuristics miss (harp,
+                # celesta, marimba). GPIF writes guitars as a single Staff, so
+                # this does not sweep in ordinary fretted tracks.
+                track.get('num_staves', 1) > 1
+                or any(kw in track['name'].lower() for kw in ('piano', 'keys', 'keyboard', 'organ'))
                 or arr_name.lower().startswith('keys')
                 or (
                     not track['string_pitches']
@@ -1575,7 +1691,6 @@ def convert_file(
         pending_slides: list = []         # (RsNote, rs_string, gp_slide_flags) — resolved post-loop
 
         current_time = 0.0
-        num_raw_tracks = len(raw_tracks)
 
         # Resolve current tempo per bar from the tempo map
         _tempo_iter = iter(tempo_map)
@@ -1907,112 +2022,20 @@ def convert_file(
             tuning = _gpx_tuning(track)
 
         # Merge Piano LH notes into this (RH) arrangement if a pair was detected
+        _walk_kwargs = dict(
+            masterbars=masterbars, bars_by_id=bars_by_id,
+            voices_dict=voices_dict, beats_dict=beats_dict,
+            notes_dict=notes_dict, rhythms_dict=rhythms_dict,
+            tempo_map=tempo_map, tempo_bpm=tempo_bpm, audio_offset=audio_offset,
+        )
         if is_keys and track_idx in _piano_merge_map:
+            # GPX LH/RH pair: the left hand is a *separate* Track element. Walk
+            # its column and fold it into this (right-hand) arrangement.
             lh_idx = _piano_merge_map[track_idx]
             lh_track = tracks[lh_idx]
             lh_raw_idx = filtered_to_raw.get(lh_idx, lh_idx)
-
-            _lh_notes: list[RsNote] = []
-            _lh_last_per_key: dict[int, RsNote] = {}
-            _lh_tempo_iter = iter(tempo_map)
-            _lh_next_bar, _lh_next_bpm = next(_lh_tempo_iter, (999999, tempo_bpm))
-            _lh_cur_tempo = tempo_bpm
-            _lh_time = 0.0
-
-            for _lh_mb_idx, _lh_mb in enumerate(masterbars):
-                while _lh_mb_idx >= _lh_next_bar:
-                    _lh_cur_tempo = _lh_next_bpm
-                    _lh_next_bar, _lh_next_bpm = next(_lh_tempo_iter, (999999, _lh_cur_tempo))
-                _lh_ts = _lh_mb.findtext('Time', '4/4')
-                try:
-                    _lh_nb, _lh_db = [int(x) for x in _lh_ts.split('/')]
-                except ValueError:
-                    _lh_nb, _lh_db = 4, 4
-                _lh_bar_dur = _lh_nb * (4.0 / _lh_db) * (60.0 / _lh_cur_tempo)
-                _lh_bar_ids = _lh_mb.findtext('Bars', '').split()
-                _lh_bid = _lh_bar_ids[lh_raw_idx] if lh_raw_idx < len(_lh_bar_ids) else '-1'
-                if _lh_bid != '-1' and _lh_bid:
-                    _lh_bar = bars_by_id.get(_lh_bid)
-                    if _lh_bar is not None:
-                        for _lh_vid in _lh_bar.findtext('Voices', '').split():
-                            if _lh_vid == '-1':
-                                continue
-                            _lh_voice = voices_dict.get(_lh_vid)
-                            if _lh_voice is None:
-                                continue
-                            _lh_vt = _lh_time
-                            for _lh_beat_id in _lh_voice.findtext('Beats', '').split():
-                                _lh_beat = beats_dict.get(_lh_beat_id)
-                                if _lh_beat is None:
-                                    continue
-                                _lh_dur = _beat_dur_secs(_lh_beat, rhythms_dict, _lh_cur_tempo)
-                                for _lh_nid in _lh_beat.findtext('Notes', '').strip().split():
-                                    _lh_note_el = notes_dict.get(_lh_nid)
-                                    if _lh_note_el is None:
-                                        continue
-                                    if _note_is_tie(_lh_note_el):
-                                        # Extend the matching prior note (same
-                                        # pitch), mirroring the main builder's
-                                        # last_note_per_key handling — blindly
-                                        # extending the last-emitted note
-                                        # mishandles polyphonic (chord) LH parts.
-                                        _tie_midi = _note_midi(_lh_note_el, lh_track['string_pitches'])
-                                        if _tie_midi is not None:
-                                            _prev = _lh_last_per_key.get(_tie_midi)
-                                            # Full-precision comparison (matching
-                                            # the main builder); rounding only
-                                            # happens at XML serialization. Rounding
-                                            # here could make a short note appear to
-                                            # start at the tie time and skip the
-                                            # sustain extension.
-                                            _tie_t = _lh_vt + audio_offset
-                                            if _prev is not None and _prev.time < _tie_t:
-                                                _prev.sustain = max(
-                                                    _prev.sustain,
-                                                    (_tie_t + _lh_dur) - _prev.time,
-                                                )
-                                        continue
-                                    _lh_midi = _note_midi(_lh_note_el, lh_track['string_pitches'])
-                                    if _lh_midi is None:
-                                        continue
-                                    # Keep full-precision time (like the main
-                                    # convert_file() builder — rounding happens at
-                                    # serialization); same 0.2s sustain threshold.
-                                    _lh_rn = RsNote(
-                                        time=_lh_vt + audio_offset,
-                                        string=_lh_midi // 24,
-                                        fret=_lh_midi % 24,
-                                        sustain=_lh_dur if _lh_dur > 0.2 else 0.0,
-                                    )
-                                    _lh_notes.append(_lh_rn)
-                                    _lh_last_per_key[_lh_midi] = _lh_rn
-                                _lh_vt += _lh_dur
-                _lh_time += _lh_bar_dur
-
-            # Merge: combine and deduplicate simultaneous same-pitch notes, then
-            # sort by time. Map each (time, string, fret) to its existing RsNote
-            # so that when both hands hit the same key at the same instant we
-            # keep the LONGER sustain instead of arbitrarily discarding the LH
-            # one. Seed from both single notes and chord notes — polyphonic RH
-            # beats live in rs_chords[*].notes, so seeding from rs_notes alone
-            # would let an identical LH note slip in as a duplicate.
-            _seen: dict[tuple, RsNote] = {}
-            for _n in rs_notes:
-                _seen.setdefault((round(_n.time, 3), _n.string, _n.fret), _n)
-            for _c in rs_chords:
-                for _cn in _c.notes:
-                    _seen.setdefault((round(_cn.time, 3), _cn.string, _cn.fret), _cn)
-            for _lh_rn in _lh_notes:
-                _k = (round(_lh_rn.time, 3), _lh_rn.string, _lh_rn.fret)
-                _existing = _seen.get(_k)
-                if _existing is None:
-                    rs_notes.append(_lh_rn)
-                    _seen[_k] = _lh_rn
-                elif _lh_rn.sustain > _existing.sustain:
-                    # Same key both hands — preserve the longer sustain (mutating
-                    # the RsNote also updates it in place inside any RH chord).
-                    _existing.sustain = _lh_rn.sustain
-            rs_notes.sort(key=lambda n: (n.time, n.string))
+            _merge_lh_notes(rs_notes, rs_chords, _collect_column_notes(
+                lh_raw_idx, lh_track['string_pitches'], **_walk_kwargs))
 
             # Collapse "Keys 2" -> "Keys": the merged LH+RH is a single
             # keyboard arrangement. Keep the standard "Keys" name (not "Piano")
@@ -2020,93 +2043,17 @@ def convert_file(
             # auto-select (which keys on arr_name.startswith("keys")) still work.
             arr_name = re.sub(r'\s*\d+$', '', arr_name).strip() or 'Keys'
 
-        elif is_keys and track.get('num_staves', 1) > 1:
-            # GP8 two-stave piano: stave 1 (bass clef) is a second column in
-            # MasterBar/Bars for the same Track element.  Walk it exactly like
-            # the GPX LH merge above and fold its notes into the arrangement.
-            _s1_col = track['stave_columns'][1]
-            _s1_sp = (track['stave_pitches'][1]
-                      if len(track.get('stave_pitches', [])) > 1 else [])
-
-            _lh_notes: list[RsNote] = []
-            _lh_last_per_key: dict[int, RsNote] = {}
-            _lh_tempo_iter = iter(tempo_map)
-            _lh_next_bar, _lh_next_bpm = next(_lh_tempo_iter, (999999, tempo_bpm))
-            _lh_cur_tempo = tempo_bpm
-            _lh_time = 0.0
-
-            for _lh_mb_idx, _lh_mb in enumerate(masterbars):
-                while _lh_mb_idx >= _lh_next_bar:
-                    _lh_cur_tempo = _lh_next_bpm
-                    _lh_next_bar, _lh_next_bpm = next(_lh_tempo_iter, (999999, _lh_cur_tempo))
-                _lh_ts = _lh_mb.findtext('Time', '4/4')
-                try:
-                    _lh_nb, _lh_db = [int(x) for x in _lh_ts.split('/')]
-                except ValueError:
-                    _lh_nb, _lh_db = 4, 4
-                _lh_bar_dur = _lh_nb * (4.0 / _lh_db) * (60.0 / _lh_cur_tempo)
-                _lh_bar_ids = _lh_mb.findtext('Bars', '').split()
-                _lh_bid = _lh_bar_ids[_s1_col] if _s1_col < len(_lh_bar_ids) else '-1'
-                if _lh_bid != '-1' and _lh_bid:
-                    _lh_bar = bars_by_id.get(_lh_bid)
-                    if _lh_bar is not None:
-                        for _lh_vid in _lh_bar.findtext('Voices', '').split():
-                            if _lh_vid == '-1':
-                                continue
-                            _lh_voice = voices_dict.get(_lh_vid)
-                            if _lh_voice is None:
-                                continue
-                            _lh_vt = _lh_time
-                            for _lh_beat_id in _lh_voice.findtext('Beats', '').split():
-                                _lh_beat = beats_dict.get(_lh_beat_id)
-                                if _lh_beat is None:
-                                    continue
-                                _lh_dur = _beat_dur_secs(_lh_beat, rhythms_dict, _lh_cur_tempo)
-                                for _lh_nid in _lh_beat.findtext('Notes', '').strip().split():
-                                    _lh_note_el = notes_dict.get(_lh_nid)
-                                    if _lh_note_el is None:
-                                        continue
-                                    if _note_is_tie(_lh_note_el):
-                                        _tie_midi = _note_midi(_lh_note_el, _s1_sp)
-                                        if _tie_midi is not None:
-                                            _prev = _lh_last_per_key.get(_tie_midi)
-                                            _tie_t = _lh_vt + audio_offset
-                                            if _prev is not None and _prev.time < _tie_t:
-                                                _prev.sustain = max(
-                                                    _prev.sustain,
-                                                    (_tie_t + _lh_dur) - _prev.time,
-                                                )
-                                        continue
-                                    _lh_midi = _note_midi(_lh_note_el, _s1_sp)
-                                    if _lh_midi is None:
-                                        continue
-                                    _lh_rn = RsNote(
-                                        time=_lh_vt + audio_offset,
-                                        string=_lh_midi // 24,
-                                        fret=_lh_midi % 24,
-                                        sustain=_lh_dur if _lh_dur > 0.2 else 0.0,
-                                    )
-                                    _lh_notes.append(_lh_rn)
-                                    _lh_last_per_key[_lh_midi] = _lh_rn
-                                _lh_vt += _lh_dur
-                _lh_time += _lh_bar_dur
-
-            # Same dedup-merge as the GPX LH path above.
-            _seen: dict[tuple, RsNote] = {}
-            for _n in rs_notes:
-                _seen.setdefault((round(_n.time, 3), _n.string, _n.fret), _n)
-            for _c in rs_chords:
-                for _cn in _c.notes:
-                    _seen.setdefault((round(_cn.time, 3), _cn.string, _cn.fret), _cn)
-            for _lh_rn in _lh_notes:
-                _k = (round(_lh_rn.time, 3), _lh_rn.string, _lh_rn.fret)
-                _existing = _seen.get(_k)
-                if _existing is None:
-                    rs_notes.append(_lh_rn)
-                    _seen[_k] = _lh_rn
-                elif _lh_rn.sustain > _existing.sustain:
-                    _existing.sustain = _lh_rn.sustain
-            rs_notes.sort(key=lambda n: (n.time, n.string))
+        elif track.get('num_staves', 1) > 1:
+            # GP8 grand-staff keyboard: staves 1+ (bass clef, and any further
+            # staves) are extra MasterBar/Bars columns for the SAME Track
+            # element. Fold each one in, exactly like the GPX LH merge above.
+            # (num_staves > 1 implies is_keys, set above.) Iterating every
+            # extra column — not just stave_columns[1] — keeps the arrangement
+            # consistent with note_count, which sums all columns.
+            for _col, _sp in zip(track['stave_columns'][1:],
+                                 track['stave_pitches'][1:]):
+                _merge_lh_notes(rs_notes, rs_chords, _collect_column_notes(
+                    _col, _sp, **_walk_kwargs))
 
         # Resolve pending slides now that every note on each string is known.
         # GPIF slide flags: 1=shift, 2=legato (both slide to the NEXT note on the
