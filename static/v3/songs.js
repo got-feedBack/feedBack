@@ -866,6 +866,15 @@
             { id: '__playlist', label: 'Add to playlist' },
             { id: '__save', label: 'Save for later' },
             ...items.map((a) => ({ id: a.id, label: a.label, destructive: a.destructive, enabled: a.enabled, plugin: a.pluginId })),
+            // Metadata + file actions (R2) — local library only (they all
+            // address the local DB / filesystem). Both openers (⋮ and
+            // right-click) share this list, so parity is structural.
+            ...(state.provider === 'local' && song.filename ? [
+                { id: '__fixmatch', label: 'Fix match…' },
+                { id: '__refreshmeta', label: 'Refresh metadata' },
+                { id: '__getinfo', label: 'Get info…' },
+                { id: '__remove', label: 'Remove from library', destructive: true },
+            ] : []),
         ];
         menu.innerHTML = rows.map((r) =>
             '<button data-act="' + esc(r.id) + '" class="w-full text-left px-3 py-1.5 hover:bg-fb-card/60 ' +
@@ -904,6 +913,15 @@
             }
             if (id === '__playlist') { await addFilenamesToPlaylist([song.filename]); return; }
             if (id === '__save') { if (window.v3Saved) await window.v3Saved.toggle(song.filename); return; }
+            if (id === '__fixmatch') { if (window.__fbFixMatch) window.__fbFixMatch(song); return; }
+            if (id === '__refreshmeta') {
+                // Silent on success (hearing-safe, like the rest of the match
+                // layer) — the re-match trickles in through the normal pass.
+                await jsend('POST', '/api/enrichment/refresh/' + enc(song.filename));
+                return;
+            }
+            if (id === '__getinfo') { openGetInfo(song); return; }
+            if (id === '__remove') { await removeSongsFlow(song); return; }
             if (reg) await reg.run(id, song, { source: 'v3-songs' });
         }));
         // Tree rows ride the (ungrouped) artists endpoint, so they don't carry
@@ -955,6 +973,169 @@
             _saveLibraryScrollSnapshot();
             if (window.playSong) window.playSong(enc(fn));
         }));
+    }
+
+    // ── Remove from library (R2) ───────────────────────────────────────────--
+    // On a single-chart song: confirm + delete, as the Details drawer does.
+    // On a multi-chart work: "remove the song" is ambiguous — a grouped card
+    // stands for several files — so an interstitial lists EVERY version for
+    // select/multi-select and deletes exactly what the user picked, one file
+    // or the whole set.
+    async function removeSongsFlow(song) {
+        let wk = song.work_key, count = song.chart_count;
+        if (count === undefined && song.filename) {
+            // Flat-mode grid / tree rows don't carry the group annotation.
+            const w = await jget('/api/chart/' + enc(song.filename) + '/work');
+            if (w) { wk = w.work_key; count = w.chart_count; }
+        }
+        if (wk && count >= 2) {
+            const data = await jget('/api/work/' + enc(wk) + '/charts');
+            const charts = (data && data.charts) || [];
+            if (charts.length >= 2) { openVersionRemoveModal(song, charts); return; }
+        }
+        if (!(await _confirmRemove(song.title || song.filename, 1))) return;
+        await _deleteFiles([song.filename]);
+    }
+
+    async function _confirmRemove(label, n) {
+        const what = n === 1 ? '"' + label + '"' : n + ' versions of "' + label + '"';
+        if (typeof window.uiConfirm === 'function') {
+            return window.uiConfirm({
+                title: 'Remove from library?',
+                html: 'Remove ' + esc(what) + ' from your library?' +
+                    '<p class="text-xs text-red-400/90 mt-2">This permanently deletes the file' + (n === 1 ? '' : 's') + ' from disk. This cannot be undone.</p>',
+                confirmText: 'Remove', cancelText: 'Cancel', danger: true,
+            });
+        }
+        return window.confirm('Remove ' + what + ' from your library? This deletes the file' + (n === 1 ? '' : 's') + ' from disk.');
+    }
+
+    async function _deleteFiles(files) {
+        for (const fn of files) {
+            try { await fetch('/api/song/' + enc(fn), { method: 'DELETE' }); } catch (_) { /* keep going */ }
+        }
+        try { _groupChanged(); } catch (_) { try { reload(); } catch (_) { /* */ } }
+    }
+
+    // The multi-version interstitial: a centred modal (the Tidy-up idiom)
+    // listing all charts of the work with checkboxes — the card's own chart
+    // pre-checked — so "delete" does exactly what the user means, whether
+    // that's one file or the batch.
+    function openVersionRemoveModal(song, charts) {
+        const sel = new Set([song.display_chart ? song.display_chart.filename : song.filename]);
+        const overlay = document.createElement('div');
+        overlay.className = 'fixed inset-0 z-[200] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4';
+        const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); done(); } };
+        function done() { overlay.remove(); document.removeEventListener('keydown', onKey); }
+        document.addEventListener('keydown', onKey);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) done(); });
+        document.body.appendChild(overlay);
+
+        function render() {
+            const rows = charts.map((c) => {
+                const tl = (typeof window.displayTuningName === 'function')
+                    ? window.displayTuningName(c.tuning_name || c.tuning) : (c.tuning_name || '');
+                const meta = [tl, (c.arrangements || []).map((a) => a.name).join('/'), c.format]
+                    .filter(Boolean).join(' · ');
+                return '<label class="flex items-start gap-2 px-2 py-1.5 rounded hover:bg-fb-card/50 cursor-pointer">' +
+                    '<input type="checkbox" data-rm="' + esc(c.filename) + '"' + (sel.has(c.filename) ? ' checked' : '') + ' class="w-4 h-4 mt-0.5 accent-fb-primary shrink-0">' +
+                    '<span class="min-w-0"><span class="block text-sm text-fb-text truncate">' + esc(c.title) +
+                    (c.is_representative ? ' <span class="text-fb-primary">●</span>' : '') + '</span>' +
+                    (meta ? '<span class="block text-xs text-fb-textDim truncate">' + esc(meta) + '</span>' : '') +
+                    '<span class="block text-xs text-fb-textDim/70 truncate fb-selectable">' + esc(c.filename) + '</span></span></label>';
+            }).join('');
+            const n = sel.size;
+            overlay.innerHTML =
+                '<div class="bg-fb-sidebar border border-fb-border/60 rounded-2xl w-full max-w-md shadow-2xl max-h-[85vh] flex flex-col">' +
+                '<div class="p-5 pb-3"><h3 class="text-base font-semibold text-fb-text">Remove versions of “' + esc(song.title || '') + '”</h3>' +
+                '<p class="text-xs text-fb-textDim mt-1">This song has ' + charts.length + ' charts. Tick the ones to remove — files are deleted from disk and this cannot be undone.</p></div>' +
+                '<div class="px-3 overflow-y-auto v3-scroll flex-1 min-h-[6rem]">' + rows + '</div>' +
+                '<div class="p-5 pt-3 flex items-center justify-between gap-3">' +
+                '<button data-rm-cancel class="text-sm px-4 py-2 bg-fb-card/60 hover:bg-fb-card border border-fb-border/50 rounded-xl text-fb-text">Cancel</button>' +
+                '<button data-rm-go ' + (n ? '' : 'disabled') + ' class="text-sm px-4 py-2 rounded-xl ' + (n ? 'bg-red-900/60 hover:bg-red-900/80 text-red-100' : 'bg-fb-card/50 text-fb-textDim cursor-not-allowed') + '">Remove selected (' + n + ')</button>' +
+                '</div></div>';
+            overlay.querySelectorAll('[data-rm]').forEach((cb) => cb.addEventListener('change', () => {
+                const fn = cb.getAttribute('data-rm');
+                if (cb.checked) sel.add(fn); else sel.delete(fn);
+                render();
+            }));
+            overlay.querySelector('[data-rm-cancel]')?.addEventListener('click', done);
+            overlay.querySelector('[data-rm-go]')?.addEventListener('click', async () => {
+                if (!sel.size) return;
+                done();
+                await _deleteFiles([...sel]);
+            });
+        }
+        render();
+    }
+
+    // ── Get info (R2) ──────────────────────────────────────────────────────--
+    // File location + pack contents + the match verdict, from
+    // GET /api/chart/{fn}/fileinfo. Paths and identity values are rendered
+    // with .fb-selectable so they stay copyable under the v3 no-select default.
+    function _fmtBytes(n) {
+        if (!Number.isFinite(n)) return '';
+        const u = ['B', 'KB', 'MB', 'GB'];
+        let i = 0;
+        while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+        return (i ? n.toFixed(1) : n) + ' ' + u[i];
+    }
+
+    async function openGetInfo(song) {
+        const info = await jget('/api/chart/' + enc(song.filename) + '/fileinfo');
+        if (!info) return;
+        const overlay = document.createElement('div');
+        overlay.className = 'fixed inset-0 z-[200] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4';
+        const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); done(); } };
+        function done() { overlay.remove(); document.removeEventListener('keydown', onKey); }
+        document.addEventListener('keydown', onKey);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) done(); });
+
+        const row = (label, value, selectable) => value
+            ? '<div class="flex gap-3 py-1"><span class="text-xs text-fb-textDim w-24 shrink-0 pt-0.5">' + label + '</span>' +
+            '<span class="text-sm text-fb-text min-w-0 break-all' + (selectable ? ' fb-selectable' : '') + '">' + esc(value) + '</span></div>'
+            : '';
+        const m = info.manifest || {};
+        const ident = m.identity || {};
+        const identLine = Object.keys(ident).map((k) =>
+            k + ': ' + (Array.isArray(ident[k]) ? ident[k].join(', ') : ident[k])).join(' · ');
+        const match = info.match || {};
+        const matchLine = match.match_state === 'manual' ? 'Pinned by you'
+            : match.match_state === 'matched' ? ('Matched (' + (match.match_source || 'auto') +
+                (match.match_score != null ? ', ' + Math.round(match.match_score * 100) + '%' : '') + ')')
+            : match.match_state === 'review' ? 'Waiting for review'
+            : match.match_state === 'failed' ? 'Not matched'
+            : 'Not scanned yet';
+        const contents = [
+            (m.arrangements || []).length ? (m.arrangements.length + ' arrangement' + (m.arrangements.length === 1 ? '' : 's') + ' (' + m.arrangements.join(', ') + ')') : '',
+            (m.stems || []).length ? ('stems: ' + m.stems.join(', ')) : '',
+            m.has_cover ? 'cover art' : 'no cover art',
+            m.has_lyrics ? 'lyrics' : '',
+        ].filter(Boolean).join(' · ');
+
+        overlay.innerHTML =
+            '<div class="bg-fb-sidebar border border-fb-border/60 rounded-2xl w-full max-w-lg shadow-2xl max-h-[85vh] flex flex-col">' +
+            '<div class="p-5 pb-3 flex items-center justify-between gap-3">' +
+            '<h3 class="text-base font-semibold text-fb-text truncate">' + esc(song.title || info.filename) + '</h3>' +
+            '<button data-gi-x aria-label="Close" class="text-fb-textDim hover:text-fb-text text-xl leading-none shrink-0">✕</button></div>' +
+            '<div class="px-5 pb-5 overflow-y-auto v3-scroll space-y-1">' +
+            row('Location', info.path, true) +
+            row('Folder', info.folder, true) +
+            row('Format', info.format === 'sloppak' ? 'Feedpak' : info.format) +
+            row('Size', _fmtBytes(info.size)) +
+            row('Modified', info.mtime ? new Date(info.mtime * 1000).toLocaleString() : '') +
+            (info.manifest ? (
+                '<div class="pt-2 mt-2 border-t border-fb-border/50"></div>' +
+                row('Contents', contents) +
+                row('Authors', (m.authors || []).filter(Boolean).join(', ')) +
+                row('Identity', identLine || 'no identity keys authored', !!identLine)
+            ) : '') +
+            '<div class="pt-2 mt-2 border-t border-fb-border/50"></div>' +
+            row('Match', matchLine) +
+            (match.canon_artist ? row('Canonical', [match.canon_artist, match.canon_title, match.canon_album, match.canon_year].filter(Boolean).join(' — '), true) : '') +
+            '</div></div>';
+        document.body.appendChild(overlay);
+        overlay.querySelector('[data-gi-x]')?.addEventListener('click', done);
     }
 
     // ── Charts drawer (P5d, design §7.1 UX-2/3) ────────────────────────────────

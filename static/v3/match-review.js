@@ -71,6 +71,7 @@
     let _queue = [];
     let _idx = 0;
     let _lastFocus = null;
+    let _single = false;   // Fix-match mode: one song, no queue navigation
 
     function ensureModal() {
         let m = document.getElementById('v3-match-modal');
@@ -111,6 +112,7 @@
 
     function openModal() {
         _lastFocus = document.activeElement;
+        _single = false;
         const m = ensureModal();
         renderLoading();
         m.classList.remove('hidden');
@@ -118,9 +120,34 @@
         loadQueue();
     }
 
+    // Fix-match (R2): the same modal for ONE song — the escape hatch for a
+    // wrong (or missing) match, reachable from the card's ⋮ / right-click
+    // menu. No stored candidates are required: the search panel opens
+    // pre-filled, and a pick pins the match exactly like the review flow.
+    function fixMatch(song) {
+        if (!song || !song.filename) return;
+        _lastFocus = document.activeElement;
+        _single = true;
+        _queue = [{
+            filename: song.filename, title: song.title || song.filename,
+            artist: song.artist || '', album: song.album || '',
+            year: song.year || '', duration: song.duration,
+            mtime: song.mtime, candidates: [],
+        }];
+        _idx = 0;
+        const m = ensureModal();
+        m.classList.remove('hidden');
+        document.getElementById('v3-match-overlay')?.classList.remove('hidden');
+        renderCurrent();
+        // Straight to the point: the search panel is why this mode exists.
+        document.getElementById('v3-match-panel')
+            ?.querySelector('[data-mr-search-toggle]')?.click();
+    }
+
     function closeModal() {
         document.getElementById('v3-match-modal')?.classList.add('hidden');
         document.getElementById('v3-match-overlay')?.classList.add('hidden');
+        _single = false;
         refreshChip();
         if (_lastFocus && _lastFocus.isConnected) { try { _lastFocus.focus(); } catch (_) { } }
         _lastFocus = null;
@@ -142,14 +169,14 @@
     }
 
     function headerHtml() {
-        const counter = _queue.length
+        const counter = (_queue.length && !_single)
             ? '<span class="flex items-center gap-1 text-xs text-fb-textDim">' +
             '<button data-mr-prev class="px-2 py-1 rounded hover:text-fb-text' + (_idx === 0 ? ' opacity-30' : '') + '" aria-label="Previous">‹</button>' +
             (_idx + 1) + ' of ' + _queue.length +
             '<button data-mr-next class="px-2 py-1 rounded hover:text-fb-text' + (_idx >= _queue.length - 1 ? ' opacity-30' : '') + '" aria-label="Next">›</button></span>'
             : '';
         return '<div class="flex items-center justify-between gap-3 p-5 pb-3 border-b border-fb-border/40 shrink-0">' +
-            '<h3 class="text-lg font-semibold text-fb-text">Match review</h3>' + counter +
+            '<h3 class="text-lg font-semibold text-fb-text">' + (_single ? 'Fix match' : 'Match review') + '</h3>' + counter +
             '<button data-mr-close class="text-fb-textDim hover:text-fb-text" aria-label="Close">✕</button></div>';
     }
 
@@ -238,11 +265,14 @@
             '<div class="text-xs text-fb-textDim/70 truncate" title="' + esc(song.filename) + '">' + esc(song.filename) + '</div>' +
             missingChips(song) +
             '</div></div>' +
-            // Candidates
-            '<div class="space-y-1" role="radiogroup" aria-label="Candidates">' +
-            '<div class="text-xs font-semibold uppercase tracking-wider text-fb-textDim">Candidates (MusicBrainz)</div>' +
-            (song.candidates || []).map((c, i) => candRowHtml(song, c, i, i === song._sel)).join('') +
-            '</div>' +
+            // Candidates (Fix-match mode arrives with none — the search panel
+            // is its whole point, so the empty header is suppressed).
+            ((song.candidates || []).length
+                ? '<div class="space-y-1" role="radiogroup" aria-label="Candidates">' +
+                '<div class="text-xs font-semibold uppercase tracking-wider text-fb-textDim">Candidates (MusicBrainz)</div>' +
+                song.candidates.map((c, i) => candRowHtml(song, c, i, i === song._sel)).join('') +
+                '</div>'
+                : '') +
             // Search-instead panel
             '<div data-mr-search-panel class="hidden space-y-2">' +
             '<div class="flex gap-2">' +
@@ -250,14 +280,16 @@
             '<button data-mr-search-go class="text-sm text-fb-primary hover:text-fb-primaryHi border border-fb-primary/40 rounded-md px-3">Search</button></div>' +
             '<div data-mr-search-results class="space-y-1"></div></div>' +
             '</div>' +
-            // Footer actions
+            // Footer actions. Fix-match mode drops Skip (no queue) and the
+            // accept button when there is nothing to accept — search-result
+            // rows carry their own pick action.
             '<div class="flex items-center justify-between gap-3 p-5 pt-3 border-t border-fb-border/40 shrink-0">' +
             '<div class="flex items-center gap-3">' +
-            '<button data-mr-reject class="text-sm text-fb-textDim hover:text-fb-text">Not a match</button>' +
+            (_single ? '' : '<button data-mr-reject class="text-sm text-fb-textDim hover:text-fb-text">Not a match</button>') +
             '<button data-mr-search-toggle class="text-sm text-fb-textDim hover:text-fb-text">Search instead…</button></div>' +
             '<div class="flex items-center gap-2">' +
-            '<button data-mr-skip class="text-sm text-fb-textDim hover:text-fb-text px-3 py-2">Skip</button>' +
-            '<button data-mr-accept class="bg-fb-primary hover:bg-fb-primaryHi text-white px-4 py-2 rounded-md text-sm">Use selected</button>' +
+            (_single ? '' : '<button data-mr-skip class="text-sm text-fb-textDim hover:text-fb-text px-3 py-2">Skip</button>') +
+            ((song.candidates || []).length ? '<button data-mr-accept class="bg-fb-primary hover:bg-fb-primaryHi text-white px-4 py-2 rounded-md text-sm">Use selected</button>' : '') +
             '</div></div>';
 
         wireCurrent(panel, song);
@@ -308,6 +340,7 @@
     // Silent-on-success: the chart just leaves the queue and the next one
     // renders; the last one renders the done state. No toasts, no sounds.
     function settle(song) {
+        if (_single) { closeModal(); return; }   // Fix-match: done means done
         const i = _queue.indexOf(song);
         if (i >= 0) _queue.splice(i, 1);
         if (_idx >= _queue.length) _idx = Math.max(0, _queue.length - 1);
@@ -411,4 +444,5 @@
 
     window.__fbMatchReviewChip = refreshChip;
     window.__fbOpenMatchReview = openModal;
+    window.__fbFixMatch = fixMatch;
 })();

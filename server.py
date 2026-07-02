@@ -240,6 +240,10 @@ _DEMO_BLOCKED: list[tuple[str, re.Pattern]] = [
     ("POST",   re.compile(r"^/api/enrichment/review/.+$")),
     ("POST",   re.compile(r"^/api/enrichment/kick$")),
     ("GET",    re.compile(r"^/api/enrichment/search$")),
+    # Context menus (R2): the per-song re-match mutates the cache + spends
+    # rate limit; Get-info exposes filesystem paths.
+    ("POST",   re.compile(r"^/api/enrichment/refresh/.+$")),
+    ("GET",    re.compile(r"^/api/chart/.+/fileinfo$")),
 ]
 
 
@@ -2801,7 +2805,10 @@ class MetadataDB:
                 "FROM song_enrichment WHERE filename = ?", (filename,)).fetchone()
             if cur and cur[0] == "manual" and not allow_manual_overwrite:
                 return False
-            attempts = int(cur[1] or 0) if cur else 0
+            # An explicit reset to `unscanned` (Refresh metadata) is a fresh
+            # start — the failure backoff restarts with the identity, same as
+            # the stub upsert's hash-change rule.
+            attempts = 0 if state == "unscanned" else (int(cur[1] or 0) if cur else 0)
             if bump_attempts:
                 attempts += 1
             fetched_at = (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -6352,6 +6359,23 @@ def api_enrichment_kick():
     return {"started": _kick_enrich()}
 
 
+@app.post("/api/enrichment/refresh/{filename:path}")
+def api_enrichment_refresh(filename: str):
+    """The context menu's "Refresh metadata": reset THIS song's match to
+    unscanned (canonical values + candidates cleared, backoff zeroed) and
+    kick a pass so it re-matches immediately. An EXPLICIT user action, so it
+    may discard a manual pin — the automation never does, but the user
+    asking for a re-match is the one party who owns that pin."""
+    song = meta_db.enrichment_song_row(filename)
+    if not song:
+        raise HTTPException(status_code=404, detail="unknown song")
+    h = meta_db.enrichment_content_hash(
+        song["artist"], song["title"], song["album"], song["duration"])
+    meta_db.apply_enrichment_match(filename, h, "unscanned",
+                                   allow_manual_overwrite=True)
+    return {"ok": True, "started": _kick_enrich()}
+
+
 @app.get("/api/enrichment/review")
 def api_enrichment_review(limit: int = 200):
     """The Match-Review queue: songs whose text match landed in the medium-
@@ -7152,6 +7176,71 @@ def api_get_chart_work(filename: str):
     on rows that came from an ungrouped query (the tree view) — grouped grid
     rows already carry both fields inline."""
     return meta_db.chart_work(filename)
+
+
+@app.get("/api/chart/{filename:path}/fileinfo")
+def api_chart_fileinfo(filename: str):
+    """The context menu's "Get info": where the file lives + what the pack
+    contains. Under /api/chart — the GET /api/song/{path} catch-all would
+    swallow a /api/song/…/fileinfo suffix. Read-only; demo-mode blocks it
+    because it exposes filesystem paths."""
+    dlc = _get_dlc_dir()
+    if not dlc:
+        raise HTTPException(status_code=404, detail="not configured")
+    p = _resolve_dlc_path(dlc, filename)
+    if p is None:
+        raise HTTPException(status_code=403, detail="forbidden")
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="not found")
+    st = p.stat()
+    is_pak = sloppak_mod.is_sloppak(p)
+    info = {
+        "filename": filename,
+        "path": str(p),
+        "folder": str(p.parent),
+        "format": "sloppak" if is_pak else (
+            "loose" if loosefolder_mod.is_loose_song(p) else "other"),
+        # Directory-form songs report the tree's total (covers loose folders
+        # and dir-form paks); zip-form paks report the archive size.
+        "size": (st.st_size if p.is_file()
+                 else sum(f.stat().st_size for f in p.rglob("*") if f.is_file())),
+        "mtime": st.st_mtime,
+    }
+    if is_pak:
+        try:
+            m = sloppak_mod.load_manifest(p) or {}
+        except Exception:
+            m = {}
+        arrs = [str(a.get("name", a.get("id", ""))) for a in (m.get("arrangements") or [])
+                if isinstance(a, dict)]
+        stems = [str(s.get("id", "")) for s in (m.get("stems") or []) if isinstance(s, dict)]
+        try:
+            has_cover = sloppak_mod.read_cover_bytes(p, m) is not None
+        except Exception:
+            has_cover = False
+        # The optional identity/catalog keys, listed only when present — the
+        # Get-info panel's "what this pack carries vs what's missing" readout.
+        identity = {k: m.get(k) for k in
+                    ("mbid", "isrc", "genres", "track", "disc", "album_artist",
+                     "feedpak_version", "language")
+                    if m.get(k) not in (None, "", [])}
+        info["manifest"] = {
+            "title": str(m.get("title", "")), "artist": str(m.get("artist", "")),
+            "album": str(m.get("album", "")), "year": str(m.get("year", "") or ""),
+            "arrangements": arrs, "stems": stems,
+            "has_cover": has_cover, "has_lyrics": bool(m.get("lyrics")),
+            "authors": [a.get("name", "") if isinstance(a, dict) else str(a)
+                        for a in (m.get("authors") or [])],
+            "identity": identity,
+        }
+    # The enrichment verdict, so Get info can say "Matched (auto, 96%)" /
+    # "Pinned by you" / "Not matched" alongside the file facts.
+    row = meta_db.get_enrichment(filename)
+    if row:
+        info["match"] = {k: row.get(k) for k in
+                         ("match_state", "match_source", "match_score",
+                          "canon_artist", "canon_title", "canon_album", "canon_year")}
+    return info
 
 
 @app.get("/api/library/albums")
