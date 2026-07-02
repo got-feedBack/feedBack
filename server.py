@@ -1737,7 +1737,7 @@ class MetadataDB:
                 "user_difficulty": d,
                 "growth_score": round(self._growth_edge_score(a["acc"], d), 6),
             })
-        out.sort(key=lambda r: (r["growth_score"], r["last_played_at"] or ""), reverse=True)
+        out.sort(key=lambda r: (r["growth_score"], r["last_played_at"] or "", r["filename"]), reverse=True)
         return out[:limit]
 
     # ── Playlists ─────────────────────────────────────────────────────────--
