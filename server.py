@@ -2846,6 +2846,21 @@ class MetadataDB:
             "charts": charts,
         }
 
+    def chart_work(self, filename: str) -> dict:
+        """The work a chart belongs to (P5d): its EFFECTIVE work_key (a split
+        chart resolves to its own singleton key) + how many charts share it.
+        Lets an opener resolve group membership for rows that didn't come from
+        a grouped query — the tree view's rows ride the ungrouped artists
+        endpoint, so they carry no chart_count/work_key annotation."""
+        key = self._canonical_song_filename(filename)
+        self._ensure_work_display()
+        row = self.conn.execute(
+            "SELECT effective_work_key, group_size FROM work_display WHERE filename = ?",
+            (key,)).fetchone()
+        if not row:
+            return {"filename": key, "work_key": None, "chart_count": 0}
+        return {"filename": key, "work_key": row[0], "chart_count": row[1]}
+
     # Predicate that narrows a query to one representative chart per work — the
     # keyset-safe grouping filter (see query_page / query_stats).
     _GROUP_REP_PREDICATE = " AND filename IN (SELECT filename FROM work_display WHERE is_group_representative = 1)"
@@ -5902,6 +5917,14 @@ def api_unsplit_chart(filename: str):
     key = meta_db._canonical_song_filename(filename)
     meta_db.unsplit_chart(key)
     return {"ok": True, "filename": key}
+
+
+@app.get("/api/chart/{filename:path}/work")
+def api_get_chart_work(filename: str):
+    """Resolve a chart's work membership: {work_key, chart_count}. For openers
+    on rows that came from an ungrouped query (the tree view) — grouped grid
+    rows already carry both fields inline."""
+    return meta_db.chart_work(filename)
 
 
 @app.get("/api/library/artists")
