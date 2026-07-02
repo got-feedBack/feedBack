@@ -2029,7 +2029,10 @@
         const host = document.getElementById('v3-songs-albums');
         if (!host) return;
         host.innerHTML = '<p class="text-fb-textDim text-sm">Loading…</p>';
-        const p = new URLSearchParams({ provider: state.provider, artist: a.artist, album: a.album, size: '300', sort: 'track' });
+        // Honour the active drawer filters (like the album grid) but pin THIS
+        // album's artist/album and force track order — so the track list and
+        // Play-album never include songs the user filtered out.
+        const p = queryParams({ artist: a.artist, album: a.album, size: '300', sort: 'track' }, { catalog: true });
         const data = await jget('/api/library?' + p.toString());
         const songs = (data && data.songs) || [];
         host.innerHTML =

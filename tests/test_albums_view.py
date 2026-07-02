@@ -32,11 +32,12 @@ def client(server):
     return TestClient(server.app)
 
 
-def _put(server, fn, title, track=None, disc=None, album="The Album", artist="Artist"):
+def _put(server, fn, title, track=None, disc=None, album="The Album",
+         artist="Artist", genre=""):
     server.meta_db.put(fn, 0, 0, {
         "title": title, "artist": artist, "album": album, "year": "1990",
         "duration": 100, "arrangements": [{"name": "Lead", "index": 0}],
-        "track_number": track, "disc": disc,
+        "track_number": track, "disc": disc, "genre": genre,
     })
 
 
@@ -77,3 +78,16 @@ def test_track_and_disc_survive_put_roundtrip(server):
     row = server.meta_db.conn.execute(
         "SELECT track_number, disc FROM songs WHERE filename = 'a.sloppak'").fetchone()
     assert row == (3, 1)
+
+
+def test_albums_endpoint_honours_genre_filter(server, client):
+    """The albums grid must respect the Genre drawer filter the client sends —
+    without this the /api/library/albums route silently dropped `genre` and
+    surfaced albums with no matching tracks."""
+    _put(server, "rock.sloppak", "Rocker", album="Rock LP", genre="Rock")
+    _put(server, "jazz.sloppak", "Smooth", album="Jazz LP", genre="Jazz")
+    all_albums = client.get("/api/library/albums", params={"artist": "Artist"}).json()
+    assert {a["album"] for a in all_albums["albums"]} == {"Rock LP", "Jazz LP"}
+    filtered = client.get("/api/library/albums",
+                          params={"artist": "Artist", "genre": "Rock"}).json()
+    assert [a["album"] for a in filtered["albums"]] == ["Rock LP"]

@@ -3830,6 +3830,7 @@ class MetadataDB:
                      arrangements_has=None, arrangements_lacks=None,
                      stems_has=None, stems_lacks=None,
                      has_lyrics=None, tunings=None, mastery=None,
+                     match_states=None, genre=None,
                      naming_mode="legacy", page=0, size=120):
         """Distinct (artist, album) groups with a track count + a representative
         cover song, for the album-condensed browse (paged by album). Rows with no
@@ -3841,6 +3842,7 @@ class MetadataDB:
             arrangements_has=arrangements_has, arrangements_lacks=arrangements_lacks,
             stems_has=stems_has, stems_lacks=stems_lacks,
             has_lyrics=has_lyrics, tunings=tunings, mastery=mastery,
+            match_states=match_states, genre=genre,
             naming_mode=naming_mode,
         )
         awhere = where + " AND album IS NOT NULL AND album != ''"
@@ -7174,6 +7176,7 @@ async def list_library_albums(q: str = "", page: int = 0, size: int = 120,
                               arrangements_has: str = "", arrangements_lacks: str = "",
                               stems_has: str = "", stems_lacks: str = "",
                               has_lyrics: str = "", tunings: str = "", mastery: str = "",
+                              match: str = "", genre: str = "",
                               provider: str = "local"):
     """Album-condensed browse: distinct (artist, album) groups with a track count
     and a representative cover song. Paged by album. Same filters as /api/library."""
@@ -7183,6 +7186,7 @@ async def list_library_albums(q: str = "", page: int = 0, size: int = 120,
     albums, total = await _call_library_provider_async(
         library_provider, "query_albums",
         page=page, size=size, mastery=_split_csv(mastery),
+        match_states=_split_csv(match), genre=_split_csv(genre),
         **_library_filter_args(
             q=q, favorites=favorites, format=format, artist=artist, album=album,
             arrangements_has=arrangements_has, arrangements_lacks=arrangements_lacks,
