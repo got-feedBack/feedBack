@@ -23,11 +23,18 @@
     reg.register({
         id: 'core.edit-metadata',
         pluginId: 'core',
-        label: 'Edit metadata',
+        label: 'Details',
         placement: 'menu',
         order: 10,
         applies: (song) => !!(song && song.filename),
         run: (song) => {
+            // Prefer the v3 Details drawer (identity + personal difficulty / tags
+            // / notes); fall back to the legacy edit-metadata modal where the v3
+            // songs screen hasn't defined the opener (e.g. an older shell).
+            if (typeof window.__fbOpenSongDetails === 'function') {
+                window.__fbOpenSongDetails(song);
+                return;
+            }
             if (typeof window.openEditModal !== 'function') return;
             window.openEditModal({
                 f: song.filename, t: song.title || '', a: song.artist || '',

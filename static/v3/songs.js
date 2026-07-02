@@ -643,6 +643,21 @@
         return '<span class="absolute bottom-0 left-0 ' + c + ' text-[9px] font-bold px-1.5 py-0.5 rounded-tr-md tracking-wide">' + l + '</span>';
     }
 
+    // Personal-layer badges (P2): a difficulty pip + a tag count, painted from the
+    // row payload P1 embeds (song.user_difficulty / song.tags). Sits at top-right
+    // and fades on hover so it yields to the action buttons that share that corner.
+    // Returns '' when the song has neither, so an un-annotated card is byte-for-byte
+    // what it was before P2 (keeps the windowed grid's height math untouched).
+    function personalBadges(song) {
+        const d = song.user_difficulty;
+        const tags = song.tags || [];
+        if (d == null && !tags.length) return '';
+        let out = '<div class="absolute top-2 right-2 flex gap-1 opacity-100 group-hover:opacity-0 transition pointer-events-none">';
+        if (d != null) out += '<span class="bg-black/60 text-white text-[10px] font-bold px-1.5 py-0.5 rounded" title="Your difficulty: ' + esc(DIFF_LABELS[d] || d) + '">◆' + esc(d) + '</span>';
+        if (tags.length) out += '<span class="bg-black/60 text-white text-[10px] font-bold px-1.5 py-0.5 rounded" title="Tags: ' + esc(tags.join(', ')) + '">🏷' + tags.length + '</span>';
+        return out + '</div>';
+    }
+
     // Clickable arrangement chips — one <button data-arr="<index>"> per
     // arrangement. wireCards() binds the click to playCard(song, index), which
     // opens THAT arrangement in the highway via playSong(filename, index).
@@ -760,7 +775,7 @@
         return '<div class="group relative" data-fn="' + esc(key) + '" data-letter="' + esc(songBucket(song)) + '" data-library-song="' + esc(songId(song)) + '" data-library-provider="' + esc(state.provider) + '">' +
             '<div class="relative aspect-square rounded-lg overflow-hidden bg-fb-card cursor-pointer' + selRing + '" data-v3-play>' +
             '<img src="' + esc(artUrl(song)) + '" alt="" loading="lazy" decoding="async" class="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105" onerror="this.style.visibility=\'hidden\'">' +
-            tuning + checkbox + accuracyBadge(key) + fmtBadge(song) + overlay +
+            tuning + checkbox + accuracyBadge(key) + fmtBadge(song) + personalBadges(song) + overlay +
             '<div class="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition">' +
             inlineBtns +
             '<button data-fav title="Favorite" aria-label="Favorite" aria-pressed="' + (fav ? 'true' : 'false') + '" class="w-7 h-7 rounded-full bg-black/50 hover:bg-black/70 flex items-center justify-center text-sm ' + (fav ? 'text-fb-accent' : 'text-white') + '">' + (fav ? '♥' : '♡') + '</button>' +
@@ -890,11 +905,13 @@
         bar.innerHTML =
             '<span class="text-sm text-fb-text">' + state.selected.size + ' selected</span>' +
             '<button data-batch="playlist" class="text-sm bg-fb-primary hover:bg-fb-primaryHi text-white px-3 py-1 rounded-full">Add to playlist</button>' +
+            '<button data-batch="details" class="text-sm bg-fb-card/60 hover:bg-fb-card border border-fb-border/50 text-fb-text px-3 py-1 rounded-full">Edit details</button>' +
             '<button data-batch="saved" class="text-sm bg-fb-card/60 hover:bg-fb-card border border-fb-border/50 text-fb-text px-3 py-1 rounded-full">Save for Later</button>' +
             '<button data-batch="clear" class="text-sm text-fb-textDim hover:text-fb-text px-2">Clear</button>';
         bar.querySelector('[data-batch="clear"]').addEventListener('click', () => { state.selected.clear(); reload(); renderBatchBar(); });
         bar.querySelector('[data-batch="saved"]').addEventListener('click', batchSave);
         bar.querySelector('[data-batch="playlist"]').addEventListener('click', batchAddToPlaylist);
+        bar.querySelector('[data-batch="details"]').addEventListener('click', openBulkEdit);
     }
 
     async function batchSave() {
@@ -1042,6 +1059,88 @@
         state.selected.clear();
         if (window.v3Playlists) { try { window.v3Playlists.refresh(); window.v3Playlists.refreshSaved(); } catch (e) { /* */ } }
         reload(); renderBatchBar();
+    }
+
+    // Bulk personal-meta editor (P2) — apply-to-all over the current selection via
+    // the batch endpoint (one request). Additive + mixed-state safe: difficulty
+    // defaults to "Leave" (each song keeps its own value); tags ADD/REMOVE rather
+    // than replace, so a bulk action never silently wipes per-song data. Notes are
+    // inherently per-song, so they're deliberately not bulk-editable.
+    function openBulkEdit() {
+        const fns = [...state.selected];
+        if (!fns.length) return;
+        // Tags present across the selection (from the embedded row payload) → one-tap
+        // removable chips, no extra fetch.
+        const present = new Set();
+        fns.forEach((fn) => ((state.songsById[fn] && state.songsById[fn].tags) || []).forEach((t) => present.add(t)));
+        const bulk = { diff: 'keep', add: [], remove: new Set() };
+        const norm = (raw) => String(raw || '').trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 60);
+
+        const overlay = document.createElement('div');
+        overlay.className = 'fixed inset-0 z-[200] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4';
+        const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); done(); } };
+        function done() { overlay.remove(); document.removeEventListener('keydown', onKey); }
+        document.addEventListener('keydown', onKey);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) done(); });
+        document.body.appendChild(overlay);
+
+        function render() {
+            const diffBtn = (val, label) =>
+                '<button data-bd="' + val + '" class="px-2 h-8 rounded-md text-sm border ' +
+                (String(bulk.diff) === String(val) ? 'bg-fb-primary text-white border-fb-primary' : 'bg-gray-800/50 text-fb-textDim border-gray-700 hover:text-fb-text') + '">' + label + '</button>';
+            const addChips = bulk.add.map((t) => '<span class="inline-flex items-center gap-1 bg-fb-primary/20 text-fb-text border border-fb-primary/40 text-xs px-2 py-0.5 rounded-full">' + esc(t) +
+                '<button data-badd-rm="' + esc(t) + '" aria-label="Remove ' + esc(t) + '" class="text-fb-textDim hover:text-fb-accent leading-none">×</button></span>').join('');
+            const rmChips = [...present].sort((a, b) => a.localeCompare(b)).map((t) =>
+                '<button data-brm="' + esc(t) + '" class="text-xs px-2 py-0.5 rounded-full border ' +
+                (bulk.remove.has(t) ? 'bg-fb-low/30 text-fb-low border-fb-low/40 line-through' : 'bg-gray-800/50 text-fb-textDim border-gray-700 hover:text-fb-text') + '">' + esc(t) + '</button>').join('');
+            const nothing = bulk.diff === 'keep' && !bulk.add.length && !bulk.remove.size;
+            overlay.innerHTML =
+                '<div class="bg-fb-sidebar border border-fb-border/60 rounded-2xl w-full max-w-sm shadow-2xl max-h-[85vh] overflow-y-auto v3-scroll">' +
+                '<div class="p-5 space-y-4">' +
+                '<div class="flex items-center justify-between"><h3 class="text-base font-semibold text-fb-text">Edit ' + fns.length + ' songs</h3>' +
+                '<button data-bulk-x aria-label="Close" class="text-fb-textDim hover:text-fb-text text-xl leading-none">✕</button></div>' +
+
+                '<div><div class="text-xs text-fb-textDim mb-1">Difficulty (for you)</div>' +
+                '<div class="flex flex-wrap gap-1 items-center">' + diffBtn('keep', 'Leave') + diffBtn(1, '1') + diffBtn(2, '2') + diffBtn(3, '3') + diffBtn(4, '4') + diffBtn(5, '5') + diffBtn('clear', 'Clear') + '</div>' +
+                '<div class="text-[11px] text-fb-textDim mt-1">"Leave" keeps each song&#39;s own value; a number or Clear applies to all ' + fns.length + '.</div></div>' +
+
+                '<div><div class="text-xs text-fb-textDim mb-1">Add tags to all</div>' +
+                '<div class="flex flex-wrap gap-1 mb-2">' + (addChips || '<span class="text-xs text-fb-textDim">None</span>') + '</div>' +
+                '<div class="flex gap-1"><input type="text" data-badd-input placeholder="Add a tag…" class="flex-1 bg-fb-card border border-fb-border/60 rounded-lg px-3 py-1.5 text-sm text-fb-text outline-none focus:border-fb-primary/60">' +
+                '<button data-badd-btn class="text-sm px-3 rounded-lg bg-fb-card/60 border border-fb-border/50 text-fb-text hover:bg-fb-card">Add</button></div></div>' +
+
+                (present.size ? '<div><div class="text-xs text-fb-textDim mb-1">Remove tags (present in the selection)</div><div class="flex flex-wrap gap-1">' + rmChips + '</div></div>' : '') +
+
+                '<div class="flex gap-2 pt-1"><button data-bulk-apply ' + (nothing ? 'disabled' : '') + ' class="flex-1 px-4 py-2 rounded-xl text-sm font-semibold ' +
+                (nothing ? 'bg-fb-card/50 text-fb-textDim cursor-not-allowed' : 'bg-fb-primary hover:bg-fb-primaryHi text-white') + '">Apply</button>' +
+                '<button data-bulk-x class="px-4 py-2 bg-fb-card/60 hover:bg-fb-card border border-fb-border/50 rounded-xl text-sm text-fb-text">Cancel</button></div>' +
+                '</div></div>';
+
+            overlay.querySelectorAll('[data-bulk-x]').forEach((b) => b.addEventListener('click', done));
+            overlay.querySelectorAll('[data-bd]').forEach((b) => b.addEventListener('click', () => { bulk.diff = b.getAttribute('data-bd'); render(); }));
+            overlay.querySelectorAll('[data-badd-rm]').forEach((b) => b.addEventListener('click', () => { const t = b.getAttribute('data-badd-rm'); const i = bulk.add.indexOf(t); if (i >= 0) bulk.add.splice(i, 1); render(); }));
+            overlay.querySelectorAll('[data-brm]').forEach((b) => b.addEventListener('click', () => { const t = b.getAttribute('data-brm'); if (bulk.remove.has(t)) bulk.remove.delete(t); else bulk.remove.add(t); render(); }));
+            const addInput = overlay.querySelector('[data-badd-input]');
+            const addTag = () => { const t = norm(addInput && addInput.value); if (t && !bulk.add.includes(t)) { bulk.add.push(t); render(); overlay.querySelector('[data-badd-input]')?.focus(); } };
+            overlay.querySelector('[data-badd-btn]')?.addEventListener('click', addTag);
+            addInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addTag(); } });
+            overlay.querySelector('[data-bulk-apply]')?.addEventListener('click', applyBulk);
+        }
+
+        async function applyBulk() {
+            const body = { filenames: fns };
+            if (bulk.diff === 'clear') body.set_difficulty = null;
+            else if (bulk.diff !== 'keep') body.set_difficulty = Number(bulk.diff);
+            if (bulk.add.length) body.add_tags = bulk.add;
+            if (bulk.remove.size) body.remove_tags = [...bulk.remove];
+            if (!('set_difficulty' in body) && !body.add_tags && !body.remove_tags) { done(); return; }
+            await jsend('POST', '/api/songs/user-meta/batch', body);
+            done();
+            finishBatch();
+        }
+
+        render();
+        overlay.querySelector('[data-badd-input]')?.focus();
     }
 
     async function jsend(method, url, body) {
@@ -1653,6 +1752,226 @@
     function openDrawer() { renderDrawer(); document.getElementById('v3-songs-drawer')?.classList.remove('translate-x-full'); document.getElementById('v3-songs-overlay')?.classList.remove('hidden'); }
     function closeDrawer() { document.getElementById('v3-songs-drawer')?.classList.add('translate-x-full'); document.getElementById('v3-songs-overlay')?.classList.add('hidden'); updateFilterBadge(); }
     function updateFilterBadge() { const b = document.getElementById('v3-songs-filter-count'); if (b) { const n = activeFilterCount(); b.textContent = n; b.classList.toggle('hidden', n === 0); } }
+
+    // ── Song Details drawer (P2) ───────────────────────────────────────────--
+    // Evolves the legacy edit-metadata modal into a v3 slide-in drawer that
+    // unifies catalog identity (writes back into the feedpak FILE), the personal
+    // practice layer (difficulty / tags / notes — local, never shared), the like
+    // heart, and remove-from-library. Reuses the filter-drawer slide idiom
+    // (fixed-right panel + overlay + translate-x-full) but is built on demand and
+    // body-appended, so it opens from any card context. The Charts drawer (P5d)
+    // reuses this pattern.
+    const DIFF_LABELS = ['', 'Very easy', 'Easy', 'Medium', 'Hard', 'Very hard'];
+    let _detailsEls = null;   // {overlay, drawer, opener, onKey} while open
+
+    function closeDetails() {
+        if (!_detailsEls) return;
+        const { overlay, drawer, opener, onKey } = _detailsEls;
+        _detailsEls = null;
+        document.removeEventListener('keydown', onKey);
+        drawer.classList.add('translate-x-full');
+        overlay.classList.add('opacity-0');
+        setTimeout(() => { drawer.remove(); overlay.remove(); }, 200);
+        if (opener && document.body.contains(opener)) { try { opener.focus({ preventScroll: true }); } catch (_) { /* */ } }
+    }
+
+    async function openDetails(song) {
+        if (!song || !song.filename) return;
+        closeDetails();
+        const fn = song.filename;
+        const opener = document.activeElement;
+        // Notes aren't in the grid row payload; difficulty/tags are, but re-read
+        // for authority (another tab / a bulk edit may have changed them).
+        let meta = { user_difficulty: (song.user_difficulty != null ? song.user_difficulty : null), notes: '', tags: song.tags || [] };
+        try { const r = await fetch('/api/song/' + enc(fn) + '/user-meta'); if (r.ok) meta = await r.json(); } catch (_) { /* offline → row data */ }
+        let vocab = [];
+        try { const r = await fetch('/api/tags'); if (r.ok) vocab = (await r.json()).tags || []; } catch (_) { /* */ }
+        if (_detailsEls) closeDetails();   // a concurrent open resolved first
+
+        const st = {
+            t: song.title || '', a: song.artist || '', al: song.album || '', y: song.year != null ? String(song.year) : '',
+            diff: (meta.user_difficulty != null ? meta.user_difficulty : null),
+            notes: meta.notes || '', tags: (meta.tags || []).slice(),
+            fav: !!song.favorite, artDataUrl: null,
+        };
+
+        const overlay = document.createElement('div');
+        overlay.className = 'fixed inset-0 bg-black/50 z-[60] opacity-0 transition-opacity duration-200';
+        const drawer = document.createElement('aside');
+        drawer.id = 'v3-song-details-drawer';
+        drawer.className = 'fixed top-0 right-0 h-full w-full sm:w-[26rem] bg-fb-sidebar border-l border-fb-border/50 z-[61] transform translate-x-full transition-transform duration-200 overflow-y-auto v3-scroll';
+        drawer.setAttribute('role', 'dialog');
+        drawer.setAttribute('aria-modal', 'true');
+        drawer.setAttribute('aria-label', 'Song details');
+        document.body.appendChild(overlay);
+        document.body.appendChild(drawer);
+
+        const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); closeDetails(); } };
+        document.addEventListener('keydown', onKey);
+        overlay.addEventListener('click', closeDetails);
+        _detailsEls = { overlay, drawer, opener, onKey };
+
+        const render = () => { drawer.innerHTML = detailsHtml(song, st, vocab); wireDetails(drawer, song, st, vocab, render); };
+        render();
+        requestAnimationFrame(() => { drawer.classList.remove('translate-x-full'); overlay.classList.remove('opacity-0'); });
+        if (window._trapFocusInModal) { try { window._trapFocusInModal(drawer); } catch (_) { /* */ } }
+        const first = drawer.querySelector('#det-title');
+        if (first) { try { first.focus({ preventScroll: true }); const n = first.value.length; first.setSelectionRange(n, n); } catch (_) { /* */ } }
+    }
+
+    function detailsHtml(song, st, vocab) {
+        const art = st.artDataUrl || artUrl(song);
+        const diffBtns = [1, 2, 3, 4, 5].map((n) =>
+            '<button data-diff="' + n + '" aria-pressed="' + (st.diff === n ? 'true' : 'false') + '" class="w-8 h-8 rounded-md text-sm font-bold border ' +
+            (st.diff === n ? 'bg-fb-primary text-white border-fb-primary' : 'bg-gray-800/50 text-fb-textDim border-gray-700 hover:text-fb-text') + '">' + n + '</button>').join('');
+        const applied = new Set(st.tags);
+        const tagChips = st.tags.length
+            ? st.tags.map((t) => '<span class="inline-flex items-center gap-1 bg-fb-primary/20 text-fb-text border border-fb-primary/40 text-xs px-2 py-0.5 rounded-full">' + esc(t) +
+                '<button data-tag-rm="' + esc(t) + '" aria-label="Remove tag ' + esc(t) + '" class="text-fb-textDim hover:text-fb-accent leading-none">×</button></span>').join('')
+            : '<span class="text-xs text-fb-textDim">No tags yet</span>';
+        const suggest = (vocab || []).filter((v) => !applied.has(v.tag)).slice(0, 8).map((v) =>
+            '<button data-tag-add="' + esc(v.tag) + '" class="text-[11px] px-2 py-0.5 rounded-full bg-gray-800/60 text-fb-textDim hover:bg-fb-primary hover:text-white transition">' + esc(v.tag) + '</button>').join('');
+        const field = (id, label, val) =>
+            '<div><label for="' + id + '" class="text-xs text-fb-textDim mb-1 block">' + label + '</label>' +
+            '<input type="text" id="' + id + '" value="' + esc(val) + '" class="w-full bg-fb-card border border-fb-border/60 rounded-lg px-3 py-2 text-sm text-fb-text outline-none focus:border-fb-primary/60"></div>';
+        return '<div class="p-5 space-y-5">' +
+            '<div class="flex items-center justify-between"><h3 class="text-lg font-semibold text-fb-text">Song details</h3>' +
+            '<button data-det-close aria-label="Close" class="text-fb-textDim hover:text-fb-text text-xl leading-none">✕</button></div>' +
+
+            '<div class="flex items-center gap-3">' +
+            '<div class="relative group cursor-pointer shrink-0" data-det-art title="Change album art">' +
+            '<img src="' + esc(art) + '" alt="" class="w-16 h-16 rounded-lg object-cover bg-fb-card" id="det-art-preview" onerror="this.style.visibility=\'hidden\'">' +
+            '<div class="absolute inset-0 bg-black/50 rounded-lg flex items-center justify-center opacity-0 group-hover:opacity-100 transition text-[10px] text-white">Change</div>' +
+            '<input type="file" accept="image/*" id="det-art-file" class="hidden"></div>' +
+            '<div class="min-w-0"><div class="text-sm text-fb-text truncate" title="' + esc(song.title || song.filename) + '">' + esc(song.title || song.filename) + '</div>' +
+            '<div class="mt-1"><button data-det-fav class="text-xs ' + (st.fav ? 'text-fb-accent' : 'text-fb-textDim hover:text-fb-text') + '">' + (st.fav ? '♥ Liked' : '♡ Like') + '</button>' +
+            '<span class="text-[10px] text-fb-textDim ml-1">a like, not a rating</span></div></div></div>' +
+
+            // Identity — writes back into the feedpak FILE
+            '<div class="space-y-3"><div class="flex items-center gap-2"><div class="text-xs font-semibold uppercase tracking-wider text-fb-textDim">Identity</div>' +
+            '<span class="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-800/70 text-fb-textDim border border-gray-700" title="These came from the song&#39;s feedpak. Editing them writes back to the file.">From pack</span></div>' +
+            field('det-title', 'Title', st.t) + field('det-artist', 'Artist', st.a) + field('det-album', 'Album', st.al) +
+            '<div><label for="det-year" class="text-xs text-fb-textDim mb-1 block">Year</label><input type="text" inputmode="numeric" id="det-year" value="' + esc(st.y) + '" placeholder="e.g. 2024" class="w-full bg-fb-card border border-fb-border/60 rounded-lg px-3 py-2 text-sm text-fb-text outline-none focus:border-fb-primary/60"></div></div>' +
+
+            // Personal practice layer — local, never shared
+            '<div class="space-y-3 pt-1"><div class="text-xs font-semibold uppercase tracking-wider text-fb-textDim">Your practice <span class="normal-case font-normal text-fb-textDim/70">· stays on this device</span></div>' +
+            '<div><div class="flex items-center justify-between mb-1"><label class="text-xs text-fb-textDim">Difficulty (for you)</label>' +
+            '<button data-diff-clear class="text-[11px] text-fb-textDim hover:text-fb-text ' + (st.diff == null ? 'invisible' : '') + '">Clear</button></div>' +
+            '<div class="flex gap-1 items-center">' + diffBtns + '<span class="text-xs text-fb-textDim ml-2">' + esc(st.diff ? DIFF_LABELS[st.diff] : 'Not set') + '</span></div></div>' +
+            '<div><label for="det-tag-input" class="text-xs text-fb-textDim mb-1 block">Tags</label>' +
+            '<div class="flex flex-wrap gap-1 mb-2" data-det-tags>' + tagChips + '</div>' +
+            '<div class="flex gap-1"><input type="text" id="det-tag-input" placeholder="Add a tag…" class="flex-1 bg-fb-card border border-fb-border/60 rounded-lg px-3 py-1.5 text-sm text-fb-text outline-none focus:border-fb-primary/60">' +
+            '<button data-tag-addbtn class="text-sm px-3 rounded-lg bg-fb-card/60 border border-fb-border/50 text-fb-text hover:bg-fb-card">Add</button></div>' +
+            (suggest ? '<div class="flex flex-wrap gap-1 mt-2">' + suggest + '</div>' : '') + '</div>' +
+            '<div><label for="det-notes" class="text-xs text-fb-textDim mb-1 block">Notes</label>' +
+            '<textarea id="det-notes" rows="3" class="w-full bg-fb-card border border-fb-border/60 rounded-lg px-3 py-2 text-sm text-fb-text outline-none focus:border-fb-primary/60 resize-none" placeholder="Private practice notes…">' + esc(st.notes) + '</textarea></div></div>' +
+
+            '<div class="flex gap-3 pt-1"><button data-det-save class="flex-1 bg-fb-primary hover:bg-fb-primaryHi text-white px-4 py-2 rounded-xl text-sm font-semibold">Save</button>' +
+            '<button data-det-close class="px-4 py-2 bg-fb-card/60 hover:bg-fb-card border border-fb-border/50 rounded-xl text-sm text-fb-text">Cancel</button></div>' +
+            '<div class="pt-3 border-t border-fb-border/50"><button data-det-remove class="w-full px-4 py-2 bg-fb-low/15 hover:bg-fb-low/30 border border-fb-low/40 rounded-xl text-sm text-fb-low">Remove from library</button></div>' +
+            '</div>';
+    }
+
+    function wireDetails(drawer, song, st, vocab, render) {
+        const $ = (s) => drawer.querySelector(s);
+        drawer.querySelectorAll('[data-det-close]').forEach((b) => b.addEventListener('click', closeDetails));
+        // Catalog inputs update state without a re-render (keep caret / focus).
+        const bindInput = (id, key) => { const el = $('#' + id); if (el) el.addEventListener('input', () => { st[key] = el.value; }); };
+        bindInput('det-title', 't'); bindInput('det-artist', 'a'); bindInput('det-album', 'al'); bindInput('det-year', 'y');
+        const notes = $('#det-notes'); if (notes) notes.addEventListener('input', () => { st.notes = notes.value; });
+
+        drawer.querySelectorAll('[data-diff]').forEach((b) => b.addEventListener('click', () => {
+            const n = Number(b.getAttribute('data-diff'));
+            st.diff = (st.diff === n ? null : n);   // click the active one to unset
+            render();
+        }));
+        $('[data-diff-clear]')?.addEventListener('click', () => { st.diff = null; render(); });
+
+        drawer.querySelectorAll('[data-tag-rm]').forEach((b) => b.addEventListener('click', () => {
+            const t = b.getAttribute('data-tag-rm'); const i = st.tags.indexOf(t); if (i >= 0) st.tags.splice(i, 1); render();
+        }));
+        drawer.querySelectorAll('[data-tag-add]').forEach((b) => b.addEventListener('click', () => { if (addDetailTag(st, b.getAttribute('data-tag-add'))) render(); }));
+        const addFromInput = () => { const el = $('#det-tag-input'); if (!el) return; if (addDetailTag(st, el.value)) { render(); drawer.querySelector('#det-tag-input')?.focus(); } };
+        $('[data-tag-addbtn]')?.addEventListener('click', addFromInput);
+        $('#det-tag-input')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addFromInput(); } });
+
+        const artWrap = $('[data-det-art]'); const artFile = $('#det-art-file');
+        if (artWrap && artFile) {
+            artWrap.addEventListener('click', () => artFile.click());
+            artFile.addEventListener('change', () => {
+                const f = artFile.files && artFile.files[0]; if (!f) return;
+                const rd = new FileReader();
+                rd.onload = (e) => { st.artDataUrl = e.target.result; const img = $('#det-art-preview'); if (img) { img.src = st.artDataUrl; img.style.visibility = 'visible'; } };
+                rd.readAsDataURL(f);
+            });
+        }
+
+        $('[data-det-fav]')?.addEventListener('click', async (e) => {
+            try {
+                const r = await fetch('/api/favorites/toggle', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename: song.filename }) });
+                const d = await r.json(); st.fav = !!d.favorite;
+                const btn = e.currentTarget; btn.textContent = st.fav ? '♥ Liked' : '♡ Like';
+                btn.classList.toggle('text-fb-accent', st.fav); btn.classList.toggle('text-fb-textDim', !st.fav);
+                _patchCardFav(song.filename, st.fav);
+            } catch (_) { /* */ }
+        });
+
+        $('[data-det-save]')?.addEventListener('click', () => saveDetails(song, st));
+        $('[data-det-remove]')?.addEventListener('click', () => removeFromLibrary(song));
+    }
+
+    // Normalize + append a tag to the drawer's working set (mirrors the server's
+    // _normalize_tag). Returns whether it was actually added (new + non-blank).
+    function addDetailTag(st, raw) {
+        const t = String(raw || '').trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 60);
+        if (!t || st.tags.includes(t)) return false;
+        st.tags.push(t); st.tags.sort((a, b) => a.localeCompare(b)); return true;
+    }
+
+    // Keep a rendered card's heart in sync when the drawer toggles the like (the
+    // heart is instant, not part of Save — matches the on-card heart).
+    function _patchCardFav(fn, fav) {
+        const sel = (window.CSS && CSS.escape) ? CSS.escape(fn) : fn;
+        document.querySelectorAll('[data-fn="' + sel + '"] [data-fav]').forEach((btn) => {
+            btn.textContent = fav ? '♥' : '♡';
+            btn.setAttribute('aria-pressed', fav ? 'true' : 'false');
+            btn.classList.toggle('text-fb-accent', fav); btn.classList.toggle('text-white', !fav);
+        });
+    }
+
+    async function saveDetails(song, st) {
+        const fn = song.filename;
+        const catChanged = st.t.trim() !== (song.title || '') || st.a.trim() !== (song.artist || '')
+            || st.al.trim() !== (song.album || '') || String(st.y).trim() !== (song.year != null ? String(song.year) : '');
+        const ops = [];
+        if (catChanged) ops.push(fetch('/api/song/' + enc(fn) + '/meta', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: st.t.trim(), artist: st.a.trim(), album: st.al.trim(), year: String(st.y).trim() }) }));
+        ops.push(fetch('/api/song/' + enc(fn) + '/user-meta', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_difficulty: st.diff, notes: st.notes, tags: st.tags }) }));
+        if (st.artDataUrl) ops.push(fetch('/api/song/' + enc(fn) + '/art/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ image: st.artDataUrl }) }));
+        try { await Promise.all(ops); } catch (_) { /* */ }
+        closeDetails();
+        try { reload(); } catch (_) { /* not on the songs grid */ }
+    }
+
+    async function removeFromLibrary(song) {
+        const title = song.title || song.filename;
+        let ok;
+        if (window._confirmDialog) {
+            ok = await window._confirmDialog({
+                title: 'Remove from library?',
+                body: '<p class="text-sm text-gray-300">Remove <span class="font-semibold text-white">' + esc(title) + '</span> from your library?</p>' +
+                    '<p class="text-xs text-red-400/90 mt-2">This permanently deletes the file from disk. This cannot be undone.</p>',
+                confirmText: 'Remove', cancelText: 'Cancel', danger: true,
+            });
+        } else { ok = window.confirm('Remove "' + title + '" from your library? This deletes the file from disk.'); }
+        if (!ok) return;
+        try { const r = await fetch('/api/song/' + enc(song.filename), { method: 'DELETE' }); if (!r.ok) return; } catch (_) { return; }
+        closeDetails();
+        try { reload(); } catch (_) { /* */ }
+    }
+
+    // Expose the opener so the core `edit-metadata` card action opens this drawer
+    // (it falls back to the legacy modal where this isn't defined).
+    window.__fbOpenSongDetails = openDetails;
 
     // The host loads the Folder Library plugin's screen.js at startup (defining
     // window.folderLibrary). If it isn't present yet, inject it once; the
