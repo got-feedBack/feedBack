@@ -551,7 +551,9 @@ class MetadataDB:
                 tuning_name TEXT DEFAULT '',
                 tuning_sort_key INTEGER DEFAULT 0,
                 tuning_offsets TEXT DEFAULT '',
-                genre TEXT DEFAULT ''
+                genre TEXT DEFAULT '',
+                track_number INTEGER,
+                disc INTEGER
             )
         """)
         # Idempotent migrations for installs that predate each column.
@@ -573,6 +575,11 @@ class MetadataDB:
             # Primary genre from the feedpak `genres` list (spec 1.12.0). Cache;
             # repopulated on rescan.
             "ALTER TABLE songs ADD COLUMN genre TEXT DEFAULT ''",
+            # Album track order from the feedpak `track`/`disc` fields (spec
+            # 1.12.0). NULL when the pack doesn't author them; the album view
+            # falls back to title order. Cache; repopulated on rescan.
+            "ALTER TABLE songs ADD COLUMN track_number INTEGER",
+            "ALTER TABLE songs ADD COLUMN disc INTEGER",
         ):
             try:
                 self.conn.execute(ddl)
@@ -2553,8 +2560,8 @@ class MetadataDB:
             self.conn.execute(
                 "INSERT OR REPLACE INTO songs "
                 "(filename, mtime, size, title, artist, album, year, duration, tuning, arrangements, "
-                "has_lyrics, format, stem_count, stem_ids, tuning_name, tuning_sort_key, tuning_offsets, genre) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "has_lyrics, format, stem_count, stem_ids, tuning_name, tuning_sort_key, tuning_offsets, genre, track_number, disc) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (filename, mtime, size, meta.get("title", ""), meta.get("artist", ""),
                  meta.get("album", ""), meta.get("year", ""), meta.get("duration", 0),
                  meta.get("tuning", ""), json.dumps(meta.get("arrangements", [])),
@@ -2565,7 +2572,9 @@ class MetadataDB:
                  meta.get("tuning_name", "") or "",
                  int(meta.get("tuning_sort_key", 0) or 0),
                  meta.get("tuning_offsets", "") or "",
-                 meta.get("genre", "") or ""),
+                 meta.get("genre", "") or "",
+                 meta.get("track_number"),
+                 meta.get("disc")),
             )
             self.conn.commit()
             # A song's identity may have changed → the grouping read-model is stale.
@@ -3538,6 +3547,10 @@ class MetadataDB:
             # '2005' rather than alphabetic.
             "year": "(year = '') ASC, CAST(year AS INTEGER) ASC",
             "year-desc": "(year = '') ASC, CAST(year AS INTEGER) DESC",
+            # Album track order: authored track number (disc, then track); songs
+            # with no number fall to the bottom, ordered by title. Used by the
+            # album detail view. Alpha-by-title is the fallback when unauthored.
+            "track": "(track_number IS NULL) ASC, COALESCE(disc, 1), track_number, title COLLATE NOCASE",
             # Mastery = best accuracy across a song's arrangements, from the
             # separate song_stats table (so via a correlated subquery — this sort
             # drops to OFFSET paging, like tuning/year). Unscored ("not started")

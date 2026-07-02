@@ -921,6 +921,10 @@ def extract_meta(path: Path) -> dict:
         "year": str(manifest.get("year", "") or ""),
         # Primary genre from the feedpak `genres` list (spec 1.12.0); [0] = primary.
         "genre": (lambda g: str(g[0]) if isinstance(g, list) and g else "")(manifest.get("genres")),
+        # Album track order from the feedpak `track`/`disc` fields (spec 1.12.0);
+        # None when unauthored (the album view then falls back to title order).
+        "track_number": (lambda v: int(v) if str(v if v is not None else "").strip().isdigit() else None)(manifest.get("track")),
+        "disc": (lambda v: int(v) if str(v if v is not None else "").strip().isdigit() else None)(manifest.get("disc")),
         "duration": float(manifest.get("duration", 0) or 0),
         "tuning_offsets": tuning_offsets,  # caller maps to a name via tunings.tuning_name
         "arrangements": arrangements,
