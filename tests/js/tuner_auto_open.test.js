@@ -41,13 +41,11 @@ function createTunerSandbox() {
             if (String(url).includes('/config')) {
                 return Promise.resolve({
                     json: () => Promise.resolve({
-                        showFloatingButton: true,
                         visualizationMode: 'default',
                         audioInputMode: 'auto',
                         lastInstrument: 'guitar-6',
                         lastTuning: 'Standard',
                         freeTune: false,
-                        disabledTunings: [],
                         customTunings: {},
                     }),
                 });

@@ -54,15 +54,20 @@ class TestConfigDefaults:
         assert body["lastTuning"] == "Standard"
         assert body["lastInstrument"] == "guitar-6"
         assert body["audioInputMode"] == "auto"
-        assert body["showFloatingButton"] is True
         assert body["visualizationMode"] == "default"
         assert body["customTunings"] == {}
-        assert body["disabledTunings"] == []
 
     def test_get_does_not_include_default_tunings(self, client):
         # defaultTunings moved to GET /api/tunings (core tuning.read capability).
         body = client.get("/api/plugins/tuner/config").json()
         assert "defaultTunings" not in body
+
+    def test_get_does_not_include_retired_keys(self, client):
+        # disabledTunings + showFloatingButton were retired along with their
+        # settings UI; the config must no longer expose them.
+        body = client.get("/api/plugins/tuner/config").json()
+        assert "disabledTunings" not in body
+        assert "showFloatingButton" not in body
 
 
 class TestConfigPersistence:
@@ -95,14 +100,22 @@ class TestConfigPersistence:
         client.post("/api/plugins/tuner/config", json={"audioInputMode": "browser"})
         assert client.get("/api/plugins/tuner/config").json()["audioInputMode"] == "browser"
 
-    def test_disabled_tunings_strips_entries_without_colon(self, client):
-        client.post("/api/plugins/tuner/config", json={
-            "disabledTunings": ["guitar-6:Drop D", "legacy-entry", "bass-4:Standard"]
+    def test_retired_keys_ignored_and_not_persisted(self, client, config_dir):
+        # disabledTunings + showFloatingButton were retired: POSTing them must
+        # not break the request, leak back in the response, or hit the file.
+        r = client.post("/api/plugins/tuner/config", json={
+            "disabledTunings": ["guitar-6:Drop D"],
+            "showFloatingButton": False,
+            "lastTuning": "Drop D",
         })
+        assert r.status_code == 200
         body = client.get("/api/plugins/tuner/config").json()
-        assert "legacy-entry" not in body["disabledTunings"]
-        assert "guitar-6:Drop D" in body["disabledTunings"]
-        assert "bass-4:Standard" in body["disabledTunings"]
+        assert "disabledTunings" not in body
+        assert "showFloatingButton" not in body
+        assert body["lastTuning"] == "Drop D"
+        saved = json.loads((config_dir / "tuner.json").read_text())
+        assert "disabledTunings" not in saved
+        assert "showFloatingButton" not in saved
 
     def test_custom_tuning_old_format_migrated_on_read(self, client, config_dir):
         (config_dir / "tuner.json").write_text(json.dumps({

@@ -33,7 +33,6 @@
         _allTunings: {},
         referencePitch: 440,
         visualizationMode: 'default',
-        showFloatingButton: true,
         currentSongOffsets: null,
         currentSongIsBass: false,
         currentSongStringCount: 0,
@@ -83,10 +82,6 @@
     }
 
     // ── Tuning helpers ────────────────────────────────────────────────
-    function _isTuningEnabled(instrument, name) {
-        return !((_state._serverConfig ? _state._serverConfig.disabledTunings : null) || []).includes(instrument + ':' + name);
-    }
-
     function _instrumentForTuning(name) {
         for (var key in _state._allTunings) {
             if (_state._allTunings[key] && _state._allTunings[key][name]) return key;
@@ -95,11 +90,7 @@
     }
 
     function _buildTuningsForInstrument(instrument) {
-        const all = _state._allTunings[instrument] || {};
-        const disabled = (_state._serverConfig ? _state._serverConfig.disabledTunings : null) || [];
-        return Object.fromEntries(
-            Object.entries(all).filter(([name]) => !disabled.includes(instrument + ':' + name))
-        );
+        return { ...(_state._allTunings[instrument] || {}) };
     }
 
     function _tuningIdentityKey(songInfo) {
@@ -267,7 +258,6 @@
             _state._serverConfig = config;
             _state._allTunings = tuningsData.tunings || {};
             _state.referencePitch = tuningsData.referencePitch || 440;
-            _state.showFloatingButton = config.showFloatingButton !== false;
             _state.visualizationMode = config.visualizationMode || 'default';
             _state.audioInputMode = config.audioInputMode || 'auto';
 

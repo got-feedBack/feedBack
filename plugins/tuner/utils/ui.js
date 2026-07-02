@@ -393,7 +393,7 @@ window._tunerUI = function(state, actions) {
         const btn = document.getElementById('tuner-toggle-btn');
         if (!btn) return;
         const isPlayer = document.querySelector('.screen.active')?.id === 'player';
-        if (!state.showFloatingButton || isPlayer || window.feedBack?.isPlaying) {
+        if (isPlayer || window.feedBack?.isPlaying) {
             btn.classList.add('hidden');
         } else {
             btn.classList.remove('hidden');
@@ -626,6 +626,33 @@ window._tunerUI = function(state, actions) {
 
         document.body.appendChild(state.uiContainer);
         state.uiContainer.addEventListener('click', (e) => e.stopPropagation());
+
+        // Re-anchor while the panel is open: the popover it hugs is
+        // vertically centered, so its rect shifts with viewport height.
+        // initUI() runs once (guarded above), so this binds a single listener.
+        window.addEventListener('resize', () => {
+            if (state.uiContainer && !state.uiContainer.classList.contains('hidden')) positionPanel();
+        });
+    }
+
+    // Resolve the sidebar Plugins popover to anchor the panel beside it.
+    // Prefer the host's stable plugin-control slot API and derive its popover
+    // container; fall back to the known popover id only if that's unavailable.
+    // Returns a visible rect, or null (→ caller uses the fixed fallback slot).
+    function _pluginsPopoverRect() {
+        let pop = null;
+        try {
+            if (window.feedBack?.ui && typeof window.feedBack.ui.playerControlSlot === 'function') {
+                const slot = window.feedBack.ui.playerControlSlot();
+                if (slot instanceof Element) pop = slot.closest('.v3-rail-pop') || slot;
+            }
+        } catch (_e) { /* host slot API failure → fall back to id lookup */ }
+        if (!pop) pop = document.getElementById('v3-rail-pop-plugins');
+        // offsetParent === null covers display:none on the element or any
+        // ancestor (more robust than testing a specific `hidden` class).
+        if (!pop || pop.offsetParent === null) return null;
+        const rect = pop.getBoundingClientRect();
+        return (rect.width || rect.height) ? rect : null;
     }
 
     function positionPanel() {
@@ -645,10 +672,17 @@ window._tunerUI = function(state, actions) {
                 .replace('right-0', '')
                 .replace('top-full', '')
                 .trim();
-            const pluginsPop = document.getElementById('v3-rail-pop-plugins');
-            if (pluginsPop && !pluginsPop.classList.contains('hidden')) {
-                const rect = pluginsPop.getBoundingClientRect();
-                state.uiContainer.style.cssText = `top:${rect.top}px;left:${rect.right + 8}px`;
+            const anchor = _pluginsPopoverRect();
+            if (anchor) {
+                // Anchor to the right of the Plugins popover, clamped to the
+                // viewport so the panel never opens off-screen (right/bottom)
+                // on a narrow or short window.
+                const GAP = 8, MARGIN = 8;
+                const pw = state.uiContainer.offsetWidth || 288;   // w-72
+                const ph = state.uiContainer.offsetHeight || 0;
+                const left = Math.max(MARGIN, Math.min(anchor.right + GAP, window.innerWidth - pw - MARGIN));
+                const top = Math.max(MARGIN, Math.min(anchor.top, window.innerHeight - ph - MARGIN));
+                state.uiContainer.style.cssText = `top:${top}px;left:${left}px`;
             } else {
                 state.uiContainer.style.cssText = 'top:5rem;right:11rem';
             }
