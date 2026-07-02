@@ -817,7 +817,7 @@
             tuning + checkbox + accuracyBadge(key) + fmtBadge(shown) + personalBadges(song) + overlay +
             '<div class="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition">' +
             inlineBtns +
-            '<button data-fav title="Favorite" aria-label="Favorite" aria-pressed="' + (fav ? 'true' : 'false') + '" class="w-7 h-7 rounded-full bg-black/50 hover:bg-black/70 flex items-center justify-center text-sm ' + (fav ? 'text-fb-accent' : 'text-white') + '">' + (fav ? '♥' : '♡') + '</button>' +
+            '<button data-fav data-fav-idle="text-white" title="Favorite" aria-label="Favorite" aria-pressed="' + (fav ? 'true' : 'false') + '" class="w-7 h-7 rounded-full bg-black/50 hover:bg-black/70 flex items-center justify-center text-sm ' + (fav ? 'text-fb-accent' : 'text-white') + '">' + (fav ? '♥' : '♡') + '</button>' +
             '<button data-save title="Save for later" aria-label="Save for later" class="w-7 h-7 rounded-full bg-black/50 hover:bg-black/70 flex items-center justify-center text-white text-sm">🔖</button>' +
             '<button data-menu title="More" aria-label="More actions" class="w-7 h-7 rounded-full bg-black/50 hover:bg-black/70 flex items-center justify-center text-white text-sm leading-none">⋮</button>' +
             '</div></div>' +
@@ -1205,8 +1205,15 @@
                     const d = await r.json();
                     btn.textContent = d.favorite ? '♥' : '♡';
                     btn.setAttribute('aria-pressed', d.favorite ? 'true' : 'false');
+                    // Swap exactly the idle colour this button was rendered with
+                    // (grid = text-white, tree/List view = text-fb-textDim). The old
+                    // hardcoded text-white toggle never removed the list view's
+                    // text-fb-textDim, so the heart changed glyph but stayed dim
+                    // (never turned red) until a re-search re-rendered the row.
+                    const idle = btn.getAttribute('data-fav-idle') || 'text-white';
                     btn.classList.toggle('text-fb-accent', d.favorite);
-                    btn.classList.toggle('text-white', !d.favorite);
+                    btn.classList.toggle(idle, !d.favorite);
+                    song.favorite = d.favorite;   // keep the model in sync for a re-render/recycle
                 } catch (err) { /* */ }
             });
             el.querySelector('[data-save]')?.addEventListener('click', async (e) => {
@@ -2013,7 +2020,7 @@
                     // card. Always shown (like the arrangement chips), not hover-
                     // revealed. wireCards() binds all three for any [data-fn].
                     '<div class="flex items-center gap-0.5 shrink-0">' +
-                    '<button data-fav title="Favorite" aria-label="Favorite" aria-pressed="' + (s.favorite ? 'true' : 'false') + '" class="px-1 ' + (s.favorite ? 'text-fb-accent' : 'text-fb-textDim') + '">' + (s.favorite ? '♥' : '♡') + '</button>' +
+                    '<button data-fav data-fav-idle="text-fb-textDim" title="Favorite" aria-label="Favorite" aria-pressed="' + (s.favorite ? 'true' : 'false') + '" class="px-1 ' + (s.favorite ? 'text-fb-accent' : 'text-fb-textDim') + '">' + (s.favorite ? '♥' : '♡') + '</button>' +
                     '<button data-save title="Save for later" aria-label="Save for later" class="px-1 text-fb-textDim hover:text-fb-text">🔖</button>' +
                     '<button data-menu title="More" aria-label="More actions" class="px-1 text-fb-textDim hover:text-fb-text leading-none">⋮</button>' +
                     '</div>' +
