@@ -1,11 +1,27 @@
 """Unit tests for lib/songmeta.py — metadata file-persistence helpers."""
 from __future__ import annotations
 
+import zipfile
+
+import yaml
+
 # songmeta lives in lib/ which is on PYTHONPATH via conftest / pyproject
 from songmeta import (
     _apply_to_sloppak_manifest,
     _coerce_year,
+    write_song_metadata,
 )
+
+
+def _make_zip_pak(path, manifest: dict) -> None:
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("manifest.yaml", yaml.safe_dump(manifest))
+        z.writestr("arrangements/lead.json", "{}")
+
+
+def _read_zip_manifest(path) -> dict:
+    with zipfile.ZipFile(path) as z:
+        return yaml.safe_load(z.read("manifest.yaml"))
 
 
 class TestCoerceYear:
@@ -62,3 +78,43 @@ class TestApplyToSloppakManifest:
         manifest = {"title": "T"}
         dirty = _apply_to_sloppak_manifest(manifest, {})
         assert not dirty
+
+
+class TestWriteSongMetadata:
+    """Suffix dispatch — zip-form packages are writable under BOTH the current
+    ``.feedpak`` suffix and the legacy ``.sloppak`` one. The ``.feedpak`` gate
+    was missed when the format was renamed, silently downgrading Edit Metadata
+    to a DB-only update that a full rescan reverts."""
+
+    def test_zip_feedpak_persists(self, tmp_path):
+        pak = tmp_path / "song.feedpak"
+        _make_zip_pak(pak, {"title": "Old", "artist": "A"})
+        assert write_song_metadata(pak, {"title": "New"})
+        assert _read_zip_manifest(pak)["title"] == "New"
+
+    def test_zip_sloppak_persists(self, tmp_path):
+        pak = tmp_path / "song.sloppak"
+        _make_zip_pak(pak, {"title": "Old", "artist": "A"})
+        assert write_song_metadata(pak, {"title": "New"})
+        assert _read_zip_manifest(pak)["title"] == "New"
+
+    def test_zip_suffix_case_insensitive(self, tmp_path):
+        pak = tmp_path / "song.FeedPak"
+        _make_zip_pak(pak, {"title": "Old"})
+        assert write_song_metadata(pak, {"title": "New"})
+        assert _read_zip_manifest(pak)["title"] == "New"
+
+    def test_directory_form_persists(self, tmp_path):
+        pak = tmp_path / "song.feedpak"
+        pak.mkdir()
+        (pak / "manifest.yaml").write_text(
+            yaml.safe_dump({"title": "Old"}), encoding="utf-8"
+        )
+        assert write_song_metadata(pak, {"title": "New"})
+        got = yaml.safe_load((pak / "manifest.yaml").read_text(encoding="utf-8"))
+        assert got["title"] == "New"
+
+    def test_unknown_suffix_returns_false(self, tmp_path):
+        f = tmp_path / "song.txt"
+        f.write_text("not a package")
+        assert not write_song_metadata(f, {"title": "New"})

@@ -109,13 +109,14 @@ def _extract_meta_for_file(path: Path, dlc_root=None) -> dict:
     the root it already resolved; in-process callers can pass the resolver
     itself (e.g. `_get_dlc_dir`) to keep the lookup lazy.
 
-    FeedBack reads only its own `.sloppak` format and loose-folder XML
-    songs. Encrypted/proprietary archive formats are not supported and are
-    silently ignored (empty metadata) rather than decrypted.
+    FeedBack reads only its own song-package format (`.feedpak` / legacy
+    `.sloppak`) and loose-folder XML songs. Encrypted/proprietary archive
+    formats are not supported and are silently ignored (empty metadata)
+    rather than decrypted.
     """
-    # Sloppak is detected by `.sloppak` suffix only (cheap), so check it
-    # first — that way a user's loose folder named `foo.sloppak` still wins
-    # the sloppak branch instead of being misclassified.
+    # Packages are detected by suffix only (`.feedpak`/`.sloppak`, cheap), so
+    # check that first — that way a user's loose folder named `foo.feedpak`
+    # still wins the package branch instead of being misclassified.
     if sloppak_mod.is_sloppak(path):
         return _extract_meta_sloppak(path)
     if loosefolder_mod.is_loose_song(path):

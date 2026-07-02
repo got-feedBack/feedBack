@@ -10,9 +10,9 @@ source of truth, so the change survives both incremental and full rescans.
 only the keys present are overwritten, so an edit of just the title can't blank
 out the artist.
 
-Only feedBack's own ``.sloppak`` format (zip- or directory-form) is writable.
-Unknown / unsupported shapes return False and the caller keeps the DB-only
-update.
+Only feedBack's own song-package format (zip- or directory-form, ``.feedpak``
+or the legacy ``.sloppak`` suffix) is writable. Unknown / unsupported shapes
+return False and the caller keeps the DB-only update.
 """
 from __future__ import annotations
 
@@ -110,16 +110,19 @@ def write_sloppak_metadata(path: Path, fields: dict) -> bool:
 def write_song_metadata(path: Path, fields: dict) -> bool:
     """Persist edited title/artist/album/year into the song's file.
 
-    Dispatches by shape: ``.sloppak`` files and sloppak directories
+    Dispatches by shape: zip-form song packages (``.feedpak`` / legacy
+    ``.sloppak``, per ``sloppak.SONG_EXTS``) and package directories
     (manifest.yaml present). Loose-folder and unknown shapes return False
     (caller keeps the DB-only update). Returns True if the file was modified.
     """
+    from sloppak import SONG_EXTS
+
     path = Path(path)
     suffix = path.suffix.lower()
     if path.is_dir():
         if (path / "manifest.yaml").exists() or (path / "manifest.yml").exists():
             return write_sloppak_metadata(path, fields)
         return False
-    if suffix == ".sloppak":
+    if suffix in SONG_EXTS:
         return write_sloppak_metadata(path, fields)
     return False
