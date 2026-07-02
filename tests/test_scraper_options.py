@@ -181,6 +181,55 @@ def test_review_accept_applies_all_fields_despite_toggles(server, mb, client):
     assert row["genres"] == ["hard rock"]
 
 
+# ── per-field: nothing-forfeited (re-enable backfills, no partial seeding) ─────
+
+def test_reenabling_field_backfills_matched_row(server, mb, client):
+    """A field toggled OFF strips the value AND records it in apply_mask, so
+    turning the field back on re-queues the (unchanged-hash) matched row and
+    backfills — the same "nothing forfeited" contract the source/art toggles
+    keep."""
+    client.post("/api/settings", json={"enrich_apply_year": False})
+    _put(server, "a.sloppak")
+    mb.search_response = {"recordings": [mb_doc()]}
+    server._background_enrich()
+    row = server.meta_db.get_enrichment("a.sloppak")
+    assert row["match_state"] == "matched"
+    assert row["canon_year"] is None                    # suppressed
+    assert row["apply_mask"] == "enrich_apply_year"     # …and remembered
+    # Re-enable → next pass re-queues and backfills the year (hash unchanged).
+    client.post("/api/settings", json={"enrich_apply_year": True})
+    server._background_enrich()
+    row = server.meta_db.get_enrichment("a.sloppak")
+    assert row["match_state"] == "matched"
+    assert row["canon_year"] == "1990"                  # backfilled
+    assert row["apply_mask"] in (None, "")              # fully applied now
+    # Converged: a fully-applied row is not re-queued again.
+    assert server.meta_db.enrichment_pending(
+        allowed_keys=frozenset(server._ENRICH_APPLY_FIELDS)) == []
+
+
+def test_partial_match_is_not_a_cache_donor(server):
+    """A row that suppressed a display field must not seed a sibling chart of
+    the same recording with its blank — enrichment_cache_lookup skips it, so
+    the sibling falls through to its own (correctly-filtered) match. A fully-
+    applied row IS a donor."""
+    h = server.meta_db.enrichment_content_hash("ACDC", "Thunderstruck (v2)", "", 292)
+    # Partial donor: matched with the year suppressed (apply_mask set).
+    server.meta_db.apply_enrichment_match(
+        "a.sloppak", h, "matched", source="text", score=1.0,
+        cand={"recording_id": "rec-1", "artist": "AC/DC", "title": "Thunderstruck"},
+        apply_mask="enrich_apply_year")
+    assert server.meta_db.enrichment_cache_lookup(
+        h, exclude_filename="b.sloppak") is None
+    # Fully-applied donor (no apply_mask): offered, with its year intact.
+    server.meta_db.apply_enrichment_match(
+        "c.sloppak", h, "matched", source="text", score=1.0,
+        cand={"recording_id": "rec-1", "artist": "AC/DC",
+              "title": "Thunderstruck", "year": "1990"})
+    donor = server.meta_db.enrichment_cache_lookup(h, exclude_filename="b.sloppak")
+    assert donor is not None and donor["year"] == "1990"
+
+
 # ── per-source / per-field: cover art ─────────────────────────────────────────
 
 def png_bytes(color=(200, 30, 30)):
