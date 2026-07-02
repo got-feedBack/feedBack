@@ -246,6 +246,10 @@ _DEMO_BLOCKED: list[tuple[str, re.Pattern]] = [
     ("GET",    re.compile(r"^/api/chart/.+/fileinfo$")),
     # Gap-fill (R4a) rewrites pack files on disk — never for demo visitors.
     ("POST",   re.compile(r"^/api/song/.+/gap-fill$")),
+    # Art layer (R3): the URL fetch makes the server request arbitrary
+    # images on a visitor's behalf, and the override delete mutates state.
+    ("POST",   re.compile(r"^/api/song/.+/art/url$")),
+    ("DELETE", re.compile(r"^/api/art/.+/override$")),
 ]
 
 
@@ -2901,6 +2905,41 @@ class MetadataDB:
                         "mtime": mtime, "match_score": score,
                         "candidates": candidates, "attempts": attempts or 0})
         return out
+
+    def enrichment_art_pending(self, limit: int = 500) -> list[dict]:
+        """Matched songs whose cover-art situation hasn't been evaluated yet
+        (art_state NULL). The art worker resolves each to 'pack' (song has its
+        own art), 'user' (an override exists), 'caa' (fetched), 'none' (the
+        release has no cover) or 'error' — any of which settles the row, so
+        this never re-offers a song each pass."""
+        rows = self.conn.execute(
+            "SELECT e.filename, e.mb_release_id "
+            "FROM song_enrichment e JOIN songs s ON s.filename = e.filename "
+            "WHERE e.match_state IN ('matched', 'manual') "
+            "AND e.mb_release_id IS NOT NULL AND e.art_state IS NULL "
+            "ORDER BY e.filename LIMIT ?", (max(1, int(limit)),)).fetchall()
+        return [{"filename": r[0], "mb_release_id": r[1]} for r in rows]
+
+    def set_enrichment_art(self, filename: str, path: str | None, state: str | None) -> None:
+        """Stamp a row's art-cache outcome. Targeted UPDATE (not the match
+        writer) so it can never disturb the match lifecycle fields."""
+        with self._lock:
+            self.conn.execute(
+                "UPDATE song_enrichment SET art_cache_path = ?, art_state = ? "
+                "WHERE filename = ?", (path, state, filename))
+            self.conn.commit()
+
+    def clear_enrichment_art_paths(self, paths: list[str]) -> None:
+        """Reset rows whose cached art file was evicted (LRU prune) back to
+        unevaluated, so a later pass may re-fetch if the song still qualifies."""
+        if not paths:
+            return
+        with self._lock:
+            ph = ",".join("?" * len(paths))
+            self.conn.execute(
+                f"UPDATE song_enrichment SET art_cache_path = NULL, art_state = NULL "
+                f"WHERE art_cache_path IN ({ph})", paths)
+            self.conn.commit()
 
     def _estd_set(self) -> set[str]:
         """Get set of filenames that have a retuned variant (_EStd_ or _DropD_) in the DB."""
@@ -5742,6 +5781,131 @@ def _enrich_backoff_elapsed(attempts, last_attempt_at, now: float) -> bool:
 # handful is noise the user has to scroll past.
 _ENRICH_MAX_CANDIDATES = 5
 
+# ── Cover art (R3/P9) ─────────────────────────────────────────────────────────
+# The art cache dir (CONFIG_DIR/art_cache) holds two kinds of file:
+#   {safe_name}.png / .gif  — USER OVERRIDES (upload or URL-fetch; never
+#                             evicted, removed only with the song or by the
+#                             explicit remove-override route)
+#   caa_{release_mbid}.jpg  — COVER ART ARCHIVE fetches, keyed by release so
+#                             every chart of the same release shares one file;
+#                             size-capped LRU (evictions reset the enrichment
+#                             rows so a later pass may re-fetch)
+_CAA_CACHE_CAP_BYTES = 200 * 1024 * 1024
+
+
+def _caa_http_get(release_id: str) -> bytes | None:
+    """Fetch a release's front cover from the Cover Art Archive — the one
+    network seam of the art layer (tests fake exactly this). Same etiquette
+    as the MusicBrainz client: throttled, identified, offline-guarded.
+    Returns the image bytes, None when the release has no cover (404), and
+    raises EnrichTransportError for anything network-shaped."""
+    if not _enrich_network_enabled():
+        raise EnrichTransportError("enrichment network disabled")
+    import requests
+    _enrich_throttle()
+    try:
+        resp = requests.get(
+            f"https://coverartarchive.org/release/{release_id}/front-500",
+            headers={"User-Agent": _enrich_user_agent()},
+            timeout=15, allow_redirects=True,
+        )
+    except requests.RequestException as e:
+        raise EnrichTransportError(str(e)) from e
+    if resp.status_code == 404:
+        return None
+    if resp.status_code != 200:
+        raise EnrichTransportError(f"cover art archive HTTP {resp.status_code}")
+    return resp.content
+
+
+def _art_safe_name(filename: str) -> str:
+    """The flattened cache-file stem the art routes key user overrides on
+    (matches the legacy /art/upload naming, so old uploads keep working)."""
+    return filename.replace("/", "_").replace(" ", "_")
+
+
+def _art_override_paths(filename: str) -> list[Path]:
+    """Existing user-override art files for a song, GIF first (it wins —
+    the animated local-only bonus outranks a stale PNG)."""
+    stem = _art_safe_name(filename)
+    return [p for p in (ART_CACHE_DIR / f"{stem}.gif", ART_CACHE_DIR / f"{stem}.png")
+            if p.is_file()]
+
+
+def _song_pack_art_exists(filename: str) -> bool:
+    """Whether the song carries its own art (sloppak cover / loose-folder
+    image). Pack art always outranks a CAA fetch, so the art worker marks
+    these and never spends a request on them."""
+    try:
+        dlc = _get_dlc_dir()
+        if not dlc:
+            return False
+        p = _resolve_dlc_path(dlc, filename)
+        if p is None or not p.exists():
+            return False
+        if sloppak_mod.is_sloppak(p):
+            return sloppak_mod.read_cover_bytes(p) is not None
+        if loosefolder_mod.is_loose_song(p):
+            return loosefolder_mod.find_art(p) is not None
+    except Exception:
+        pass
+    return False
+
+
+def _prune_caa_cache() -> None:
+    """Keep the CAA side of the art cache under its size cap: evict the
+    oldest caa_* files (mtime LRU) and reset the enrichment rows that pointed
+    at them. User-override files are never touched."""
+    try:
+        files = sorted(ART_CACHE_DIR.glob("caa_*.jpg"), key=lambda p: p.stat().st_mtime)
+        total = sum(p.stat().st_size for p in files)
+        evicted: list[str] = []
+        while files and total > _CAA_CACHE_CAP_BYTES:
+            victim = files.pop(0)
+            try:
+                total -= victim.stat().st_size
+                victim.unlink()
+                evicted.append(str(victim))
+            except OSError:
+                break
+        if evicted:
+            meta_db.clear_enrichment_art_paths(evicted)
+            log.info("art cache: evicted %d cover(s) to stay under the cap", len(evicted))
+    except Exception:
+        log.exception("art cache prune failed")
+
+
+def _enrich_art_one(row: dict) -> bool:
+    """Resolve one matched song's cover-art situation (art worker, phase 3).
+    Returns True when a cover was actually fetched. Every outcome writes an
+    art_state so the row never re-queues:
+      'pack'  — the song ships its own art (it wins; nothing to do)
+      'user'  — an override exists (it wins; nothing to do)
+      'caa'   — front cover cached (possibly deduped from an earlier fetch
+                of the same release — no network on that path)
+      'none'  — the Cover Art Archive has no cover for this release
+    Network errors raise EnrichTransportError → the pass pauses and the row
+    stays unevaluated for the next kick."""
+    fn, release_id = row["filename"], row["mb_release_id"]
+    if _song_pack_art_exists(fn):
+        meta_db.set_enrichment_art(fn, None, "pack")
+        return False
+    if _art_override_paths(fn):
+        meta_db.set_enrichment_art(fn, None, "user")
+        return False
+    cache_file = _enrichment_art_dir() / f"caa_{release_id}.jpg"
+    if cache_file.is_file():
+        meta_db.set_enrichment_art(fn, str(cache_file), "caa")
+        return False
+    data = _caa_http_get(release_id)
+    if data is None:
+        meta_db.set_enrichment_art(fn, None, "none")
+        return False
+    cache_file.write_bytes(data)
+    meta_db.set_enrichment_art(fn, str(cache_file), "caa")
+    _prune_caa_cache()
+    return True
+
 
 def _enrich_one(row: dict, auto_min: float | None = None) -> None:
     """The matcher (P8; replaces P7's no-op). Precedence per design §5:
@@ -5878,6 +6042,32 @@ def _background_enrich():
                 pass
     if pending or retriable:
         log.info("Enrichment pass: %d rows stamped, %d matched", len(pending), matched)
+
+    # Phase 3 — cover art (R3/P9). For freshly-matched songs, resolve the art
+    # situation once: songs with their own pack art (or a user override) are
+    # marked and skipped; the rest fetch the release's front cover from the
+    # Cover Art Archive into the size-capped cache. Same pause-on-transport-
+    # error rule as matching — a dead network never burns a row's evaluation.
+    try:
+        art_rows = meta_db.enrichment_art_pending(limit=100000)
+    except Exception:
+        log.exception("enrichment: art-pending query failed")
+        return
+    fetched = 0
+    for row in art_rows:
+        try:
+            fetched += 1 if _enrich_art_one(row) else 0
+        except EnrichTransportError as e:
+            log.info("enrichment: network unavailable, art pass paused (%s)", e)
+            break
+        except Exception as e:
+            log.warning("enrichment art failed for %s: %s", row.get("filename"), e)
+            try:
+                meta_db.set_enrichment_art(row["filename"], None, "error")
+            except Exception:
+                pass
+    if art_rows:
+        log.info("Enrichment art pass: %d evaluated, %d covers fetched", len(art_rows), fetched)
 
 
 def _kick_enrich() -> bool:
@@ -7012,6 +7202,14 @@ def delete_song(filename: str):
             # on the explicit per-song delete — the never-clobber contract.
             meta_db.conn.execute("DELETE FROM song_enrichment WHERE filename = ?", (cache_key,))
             meta_db.conn.commit()
+
+        # User art overrides go with the song (CAA cache files are keyed by
+        # RELEASE and may be shared with other charts — the LRU owns those).
+        for _p in _art_override_paths(cache_key):
+            try:
+                _p.unlink()
+            except OSError:
+                pass
 
         _invalidate_song_caches(cache_key)
 
@@ -10078,14 +10276,17 @@ def _file_art_response(path: Path, media_type: str, request: Request | None):
 
 @app.get("/api/song/{filename:path}/art")
 async def get_song_art(filename: str, request: Request = None):
-    """Serve album art for a song.
+    """Serve album art for a song, walking the R3 override chain:
 
-    Dispatches by format and returns the appropriate media type:
-      - Sloppak: serves `cover.jpg` (or manifest-declared cover) read directly
-        from the package (the single cover member for zip-form sloppaks — no
-        full unpack) as JPEG/PNG/WebP.
-      - Loose folder: serves the discovered art file directly as
-        JPEG/PNG/WebP.
+      1. USER OVERRIDE (upload / URL-fetch, {safe_name}.gif|.png in the art
+         cache) — art the user explicitly pinned outranks everything, pack
+         art included. GIF is allowed HERE only: an animated cover is a
+         local-only bonus; packs stay jpg/png/webp and nothing ever writes
+         art into a pack file.
+      2. PACK ART — sloppak cover (single member read, no full unpack) or
+         the loose folder's discovered image.
+      3. COVER ART ARCHIVE cache — fetched by the enrichment art worker for
+         matched songs that lack pack art, keyed by release MBID.
     """
     dlc = _get_dlc_dir()
     if not dlc:
@@ -10097,7 +10298,12 @@ async def get_song_art(filename: str, request: Request = None):
     if not song_path.exists():
         return JSONResponse({"error": "not found"}, 404)
 
-    # Sloppak path: read the cover (manifest-declared or default) straight from
+    # 1. User override — GIF first (it wins over a stale PNG override).
+    for cached in _art_override_paths(filename):
+        mt = "image/gif" if cached.suffix == ".gif" else "image/png"
+        return _file_art_response(cached, mt, request)
+
+    # 2a. Sloppak: read the cover (manifest-declared or default) straight from
     # the package. For a zip-form sloppak this opens just the cover member —
     # NOT the whole archive — so the library grid never triggers a full unpack
     # of stems just to paint a thumbnail.
@@ -10112,18 +10318,17 @@ async def get_song_art(filename: str, request: Request = None):
             art = await asyncio.to_thread(sloppak_mod.read_cover_bytes, song_path)
         except Exception:
             art = None
-        if art is None:
-            return JSONResponse({"error": "no art"}, 404)
-        data, mt = art
-        etag = f'"{hashlib.sha1(data).hexdigest()}"'
-        headers, not_modified = _art_conditional(etag, request)
-        if not_modified:
-            return Response(status_code=304, headers=headers)
-        return Response(content=data, media_type=mt, headers=headers)
+        if art is not None:
+            data, mt = art
+            etag = f'"{hashlib.sha1(data).hexdigest()}"'
+            headers, not_modified = _art_conditional(etag, request)
+            if not_modified:
+                return Response(status_code=304, headers=headers)
+            return Response(content=data, media_type=mt, headers=headers)
 
-    # Loose folder path: serve art file directly.
+    # 2b. Loose folder: serve the discovered art file directly.
     # song_path is already validated against DLC_DIR by _resolve_dlc_path.
-    if loosefolder_mod.is_loose_song(song_path):
+    elif loosefolder_mod.is_loose_song(song_path):
         art_path = loosefolder_mod.find_art(song_path)
         if art_path:
             # Re-resolve in case the matched file is a symlink — a crafted
@@ -10140,15 +10345,13 @@ async def get_song_art(filename: str, request: Request = None):
                     ".png": "image/png", ".webp": "image/webp",
                 }.get(art_resolved.suffix.lower(), "image/jpeg")
                 return _file_art_response(art_resolved, mt, request)
-        return JSONResponse({"error": "no art"}, 404)
 
-    # Custom art uploaded via /art/upload is cached as PNG under ART_CACHE_DIR;
-    # serve it if present (works for any song the user pinned art to).
-    art_cache = ART_CACHE_DIR
-    safe_name = filename.replace("/", "_").replace(" ", "_")
-    cached = art_cache / f"{safe_name}.png"
-    if cached.exists():
-        return _file_art_response(cached, "image/png", request)
+    # 3. Cover Art Archive cache (the enrichment art worker's fetch).
+    row = meta_db.get_enrichment(filename)
+    if row and row.get("art_state") == "caa" and row.get("art_cache_path"):
+        caa = Path(row["art_cache_path"])
+        if caa.is_file():
+            return _file_art_response(caa, "image/jpeg", request)
 
     return JSONResponse({"error": "no art"}, 404)
 
@@ -10390,9 +10593,43 @@ def post_song_gap_fill(filename: str, data: dict):
     return {"ok": True, "written": additions, "skipped": skipped}
 
 
+def _save_art_override(filename: str, img_data: bytes) -> dict:
+    """Persist a user art override into the art cache (R3). One override per
+    song: GIF input is validated and kept VERBATIM as .gif (animation intact —
+    the local-only bonus; it is never written into the pack file), everything
+    else is normalized to RGB PNG via PIL. Saving either kind removes the
+    other so the serve chain has exactly one user file to find."""
+    ART_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    stem = _art_safe_name(filename)
+    png_path = ART_CACHE_DIR / f"{stem}.png"
+    gif_path = ART_CACHE_DIR / f"{stem}.gif"
+    from PIL import Image
+    import io as _io
+    if img_data[:6] in (b"GIF87a", b"GIF89a"):
+        try:
+            probe = Image.open(_io.BytesIO(img_data))
+            probe.verify()   # decodes headers/frames without keeping the image
+            if probe.format != "GIF":
+                raise ValueError("not a GIF")
+        except Exception as e:
+            return {"error": f"Invalid image: {e}"}
+        gif_path.write_bytes(img_data)
+        png_path.unlink(missing_ok=True)
+        return {"ok": True, "kind": "gif"}
+    try:
+        img = Image.open(_io.BytesIO(img_data)).convert("RGB")
+        img.save(str(png_path), "PNG")
+    except Exception as e:
+        return {"error": f"Invalid image: {e}"}
+    gif_path.unlink(missing_ok=True)
+    return {"ok": True, "kind": "png"}
+
+
 @app.post("/api/song/{filename:path}/art/upload")
 async def upload_song_art_b64(filename: str, data: dict):
-    """Upload custom album art as base64 PNG/JPG."""
+    """Upload a custom cover as base64 (PNG/JPG/WebP → normalized PNG;
+    GIF → kept animated, local-only). The override outranks pack art in the
+    serve chain; remove it via DELETE …/art/override."""
     import base64
     b64 = data.get("image", "")
     if not b64:
@@ -10404,22 +10641,74 @@ async def upload_song_art_b64(filename: str, data: dict):
         img_data = base64.b64decode(b64)
     except Exception:
         return {"error": "Invalid base64"}
+    return _save_art_override(filename, img_data)
 
-    art_cache = ART_CACHE_DIR
-    art_cache.mkdir(parents=True, exist_ok=True)
-    safe_name = filename.replace("/", "_").replace(" ", "_")
-    cached = art_cache / f"{safe_name}.png"
 
-    # Convert to PNG if needed
+# Art-by-URL fetch cap — a cover, not a wallpaper pack.
+_ART_URL_MAX_BYTES = 10 * 1024 * 1024
+
+
+def _fetch_art_url(url: str) -> bytes:
+    """The one place art-by-URL touches the network (tests fake this seam).
+    User-initiated, so not throttled like the background workers — but the
+    same offline guard applies (pytest can never fetch), and the size cap is
+    enforced while streaming so a huge response never fully downloads."""
+    if not _enrich_network_enabled():
+        raise EnrichTransportError("art fetch disabled (offline)")
+    import requests
     try:
-        from PIL import Image
-        import io
-        img = Image.open(io.BytesIO(img_data)).convert("RGB")
-        img.save(str(cached), "PNG")
-    except Exception as e:
-        return {"error": f"Invalid image: {e}"}
+        resp = requests.get(url, timeout=15, stream=True,
+                            headers={"User-Agent": _enrich_user_agent()})
+    except requests.RequestException as e:
+        raise EnrichTransportError(str(e)) from e
+    if resp.status_code != 200:
+        raise EnrichTransportError(f"HTTP {resp.status_code}")
+    data = b""
+    for chunk in resp.iter_content(65536):
+        data += chunk
+        if len(data) > _ART_URL_MAX_BYTES:
+            raise ValueError("image larger than 10 MB")
+    return data
 
-    return {"ok": True}
+
+@app.post("/api/song/{filename:path}/art/url")
+def set_song_art_from_url(filename: str, data: dict):
+    """Paste-a-link cover art (the media-server idiom): the server fetches the
+    image and stores it as this song's local override — identical result to an
+    upload, including the GIF-stays-local rule. http(s) only."""
+    url = str((data or {}).get("url") or "").strip()
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise HTTPException(status_code=400, detail="url must be http(s)")
+    dlc = _get_dlc_dir()
+    song_path = _resolve_dlc_path(dlc, filename) if dlc else None
+    if song_path is None or not song_path.exists():
+        raise HTTPException(status_code=404, detail="unknown song")
+    try:
+        img_data = _fetch_art_url(url)
+    except EnrichTransportError as e:
+        return JSONResponse({"error": "could not fetch image", "detail": str(e)},
+                            status_code=502)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return _save_art_override(filename, img_data)
+
+
+@app.delete("/api/art/{filename:path}/override")
+def remove_song_art_override(filename: str):
+    """Drop the user art override — the serve chain falls back to pack art,
+    then the Cover Art Archive cache. Lives under /api/art (NOT /api/song) so
+    the greedy DELETE /api/song/{path} catch-all can't shadow it — the same
+    dodge the chart split/unsplit routes use."""
+    removed = False
+    for p in _art_override_paths(filename):
+        try:
+            p.unlink()
+            removed = True
+        except OSError:
+            pass
+    return {"ok": True, "removed": removed}
 
 
 @app.get("/api/song/{filename:path}")

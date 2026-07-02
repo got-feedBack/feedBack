@@ -101,6 +101,9 @@ def test_demo_off_settings_post_not_blocked(tmp_path, monkeypatch):
     # Context menus (R2): per-song re-match + the path-exposing Get info.
     ("POST",   "/api/enrichment/refresh/some-file"),
     ("GET",    "/api/chart/some-file/fileinfo"),
+    # Art layer (R3): the server-side URL fetch + the override delete.
+    ("POST",   "/api/song/some-file/art/url"),
+    ("DELETE", "/api/art/some-file/override"),
 ])
 def test_demo_on_blocked_routes_return_403(tmp_path, monkeypatch, method, path):
     server, client = _make_client(tmp_path, monkeypatch, demo=True)
