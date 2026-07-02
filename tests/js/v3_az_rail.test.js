@@ -44,7 +44,7 @@ test('refreshRail reads present letters from the stats endpoint (sort-aware)', (
     assert.match(src, /\/api\/library\/stats\?'\s*\+\s*queryParams/,
         'refreshRail must query /api/library/stats with the active filter params');
     // Opts into the active-sort breakdown so non-rail callers skip the scan.
-    assert.match(src, /queryParams\(\{\s*sort_letters:\s*1\s*\}\)/,
+    assert.match(src, /railParams\s*=\s*\{\s*sort_letters:\s*1\s*\}/,
         'refreshRail must request the sort_letters breakdown');
     assert.match(src, /letters\s*=\s*stats\s*&&\s*stats\.sort_letters/,
         'refreshRail must prefer the active-sort breakdown (sort_letters)');
