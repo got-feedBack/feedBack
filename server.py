@@ -2858,19 +2858,26 @@ class MetadataDB:
             filename, row["content_hash"], "failed", source="rejected",
             score=None, candidates=row.get("candidates") or None)
 
-    def enrichment_review_queue(self, limit: int = 200) -> list[dict]:
+    def enrichment_review_queue(self, limit: int = 200,
+                                order: str = "missing_first") -> list[dict]:
         """The Match-Review drawer's queue: review-tier rows joined to their
-        (still-existing) songs, with the stored candidate list parsed."""
+        (still-existing) songs, with the stored candidate list parsed.
+        `order` is the user's review-queue preference: 'missing_first'
+        (default — charts missing album/year surface first, they gain the
+        most from a confirm; complete charts only stand to be re-labelled),
+        'artist' (A–Z), or 'recent' (newest files first). Unknown values
+        fall back to missing_first."""
+        order_sql = {
+            "artist": "s.artist COLLATE NOCASE, s.title COLLATE NOCASE, e.filename",
+            "recent": "s.mtime DESC, e.filename",
+        }.get(order, "((COALESCE(s.album, '') = '') + (COALESCE(s.year, '') = '')) DESC, "
+                     "s.artist COLLATE NOCASE, s.title COLLATE NOCASE, e.filename")
         rows = self.conn.execute(
             "SELECT e.filename, s.title, s.artist, s.album, s.year, s.duration, s.mtime, "
             "e.match_score, e.candidates, e.attempts "
             "FROM song_enrichment e JOIN songs s ON s.filename = e.filename "
             "WHERE e.match_state = 'review' "
-            # Charts that are MISSING data (no album / no year) surface first —
-            # confirming those has the most to gain; complete charts only
-            # stand to be re-labelled.
-            "ORDER BY ((COALESCE(s.album, '') = '') + (COALESCE(s.year, '') = '')) DESC, "
-            "s.artist COLLATE NOCASE, s.title COLLATE NOCASE, e.filename "
+            "ORDER BY " + order_sql + " "
             "LIMIT ?", (max(1, int(limit)),)).fetchall()
         out = []
         for fn, title, artist, album, year, duration, mtime, score, cands, attempts in rows:
@@ -5859,7 +5866,32 @@ def _enrich_art_one(row: dict) -> bool:
     return True
 
 
-def _enrich_one(row: dict, auto_min: float | None = None) -> None:
+_ENRICH_APPLY_FIELDS = {
+    # Per-field auto-apply toggle → the candidate fields it governs. The
+    # MusicBrainz ids + isrc are deliberately NOT here: they're identity,
+    # not display — the art fetch and any future re-match need them stamped
+    # even when every display field is toggled off.
+    "enrich_apply_names": ("artist", "title", "album", "artist_sort"),
+    "enrich_apply_year": ("year",),
+    "enrich_apply_genres": ("genres",),
+}
+
+
+def _enrich_field_filter(cfg: dict):
+    """Build the cand filter for AUTOMATIC matches from the per-field
+    auto-apply settings: strips the display fields whose toggle is off
+    before they're stamped as canonical. Returns None when everything is
+    on (the default) so the common path stays zero-copy. Review candidates
+    and user-confirmed picks bypass this — a match the user confirms in
+    the modal applies in full."""
+    blocked = {f for key, fields in _ENRICH_APPLY_FIELDS.items()
+               if cfg.get(key, True) is False for f in fields}
+    if not blocked:
+        return None
+    return lambda cand: {k: v for k, v in cand.items() if k not in blocked}
+
+
+def _enrich_one(row: dict, auto_min: float | None = None, field_filter=None) -> None:
     """The matcher (P8; replaces P7's no-op). Precedence per design §5:
 
     1. local match-cache by content_hash — another chart of the same
@@ -5872,15 +5904,20 @@ def _enrich_one(row: dict, auto_min: float | None = None) -> None:
 
     `auto_min` is the user's auto-apply confidence setting (None → the
     engine default); it moves only the auto/review boundary of step 3 —
-    the per-field floors and exact-key tiers are unaffected. Never touches
-    a `manual` row (the writer enforces it). Network errors raise
-    EnrichTransportError so the pass pauses instead of burning attempts
-    while offline."""
+    the per-field floors and exact-key tiers are unaffected. `field_filter`
+    (from _enrich_field_filter) strips per-field-disabled display values
+    from every AUTOMATIC stamp — all three steps here are automatic, so it
+    applies to each; the review tier stores candidates unfiltered because
+    accepting one is a user action. Never touches a `manual` row (the
+    writer enforces it). Network errors raise EnrichTransportError so the
+    pass pauses instead of burning attempts while offline."""
     fn, chash = row["filename"], row["content_hash"]
 
     cached = meta_db.enrichment_cache_lookup(chash, exclude_filename=fn)
     if cached:
         score = cached.pop("score", None)
+        if field_filter:
+            cached = field_filter(cached)
         meta_db.apply_enrichment_match(fn, chash, "matched", source="cache",
                                        score=score, cand=cached)
         return
@@ -5890,14 +5927,16 @@ def _enrich_one(row: dict, auto_min: float | None = None) -> None:
         cand = _mb_lookup_recording(ids["mbid"])
         if cand:
             meta_db.apply_enrichment_match(fn, chash, "matched", source="mbid",
-                                           score=1.0, cand=cand)
+                                           score=1.0,
+                                           cand=field_filter(cand) if field_filter else cand)
             return
         # A 404'd mbid (typo'd manifest) falls through to the text tiers.
     if ids.get("isrc"):
         cands = mb_match.rank_candidates(row, _mb_lookup_isrc(ids["isrc"]))
         if cands:
             meta_db.apply_enrichment_match(fn, chash, "matched", source="isrc",
-                                           score=1.0, cand=cands[0])
+                                           score=1.0,
+                                           cand=field_filter(cands[0]) if field_filter else cands[0])
             return
 
     ranked = mb_match.rank_candidates(row, _mb_search_recordings(row.get("artist"), row.get("title")))
@@ -5905,7 +5944,8 @@ def _enrich_one(row: dict, auto_min: float | None = None) -> None:
     tier = mb_match.classify(row, best, best["score"], auto_min=auto_min) if best else "none"
     if tier == "auto":
         meta_db.apply_enrichment_match(fn, chash, "matched", source="text",
-                                       score=best["score"], cand=best)
+                                       score=best["score"],
+                                       cand=field_filter(best) if field_filter else best)
     elif tier == "review":
         meta_db.apply_enrichment_match(fn, chash, "review", source="text",
                                        score=best["score"],
@@ -5957,19 +5997,31 @@ def _background_enrich():
             log.info("Enrichment pass: %d rows stamped (network disabled — matching skipped)", len(pending))
         return
 
+    # Scraper options (R1), read from the same per-pass cfg: `mb_on` gates
+    # the matcher (phase 2), `art_on` the cover-art fetch (phase 3 — the
+    # Cover Art Archive is the only automatic art source today, so the
+    # source toggle and the cover-art apply toggle both have to be on).
+    mb_on = cfg.get("enrich_src_musicbrainz", True) is not False
+    art_on = (cfg.get("enrich_src_caa", True) is not False
+              and cfg.get("enrich_apply_art", True) is not False)
+    field_filter = _enrich_field_filter(cfg)
+
     now = time.time()
     retriable = []
-    try:
-        retriable = [r for r in meta_db.enrichment_failed_rows(limit=100000)
-                     if _enrich_backoff_elapsed(r.get("attempts"), r.get("last_attempt_at"), now)]
-    except Exception:
-        log.exception("enrichment: failed-row query failed")
+    if mb_on:
+        try:
+            retriable = [r for r in meta_db.enrichment_failed_rows(limit=100000)
+                         if _enrich_backoff_elapsed(r.get("attempts"), r.get("last_attempt_at"), now)]
+        except Exception:
+            log.exception("enrichment: failed-row query failed")
+    elif pending:
+        log.info("Enrichment pass: %d rows stamped (MusicBrainz source disabled in Settings)", len(pending))
     matched = 0
     # A `failed` row with a changed identity hash can surface in BOTH lists;
     # de-dup by filename so each row consumes the rate budget only once.
     seen_filenames = set()
     queue = []
-    for row in pending + retriable:
+    for row in (pending + retriable) if mb_on else []:
         fn = row.get("filename")
         if fn in seen_filenames:
             continue
@@ -5977,7 +6029,7 @@ def _background_enrich():
         queue.append(row)
     for row in queue:
         try:
-            _enrich_one(row, auto_min=auto_min)
+            _enrich_one(row, auto_min=auto_min, field_filter=field_filter)
             matched += 1
         except EnrichTransportError as e:
             log.info("enrichment: network unavailable, pass paused (%s)", e)
@@ -5992,7 +6044,7 @@ def _background_enrich():
                     source="error", bump_attempts=True)
             except Exception:
                 pass
-    if pending or retriable:
+    if mb_on and (pending or retriable):
         log.info("Enrichment pass: %d rows stamped, %d matched", len(pending), matched)
 
     # Phase 3 — cover art (R3/P9). For freshly-matched songs, resolve the art
@@ -6000,6 +6052,10 @@ def _background_enrich():
     # marked and skipped; the rest fetch the release's front cover from the
     # Cover Art Archive into the size-capped cache. Same pause-on-transport-
     # error rule as matching — a dead network never burns a row's evaluation.
+    # Rows skipped here stay art_state NULL, so re-enabling the toggles picks
+    # them up on the next pass — nothing is permanently forfeited.
+    if not art_on:
+        return
     try:
         art_rows = meta_db.enrichment_art_pending(limit=100000)
     except Exception:
@@ -6546,10 +6602,13 @@ def api_enrichment_kick():
 def api_enrichment_review(limit: int = 200):
     """The Match-Review queue: songs whose text match landed in the medium-
     confidence review tier, each with its stored candidate list — the drawer
-    renders straight from this, no MusicBrainz round-trip."""
+    renders straight from this, no MusicBrainz round-trip. Ordered by the
+    user's enrich_review_order setting."""
     limit = max(1, min(int(limit), 500))
+    cfg = _load_config(CONFIG_DIR / "config.json") or {}
+    order = cfg.get("enrich_review_order", "missing_first")
     return {
-        "songs": meta_db.enrichment_review_queue(limit=limit),
+        "songs": meta_db.enrichment_review_queue(limit=limit, order=order),
         "total_review": meta_db.enrichment_state_counts().get("review", 0),
     }
 
@@ -8773,6 +8832,22 @@ def _default_settings():
         # review" option) sends every text match to review.
         "enrich_enabled": True,
         "enrich_auto_threshold": 0.9,
+        # Scraper options (R1). Two axes, media-server style: sources say WHO
+        # may be contacted (MusicBrainz = the matcher, Cover Art Archive = the
+        # art fetch); the apply toggles say WHICH fields an AUTOMATIC match may
+        # canonicalize. A match the user confirms in the review modal always
+        # applies in full — these gate only what happens without them. All of
+        # it is display-side cache; nothing here ever writes to a pack file.
+        "enrich_src_musicbrainz": True,
+        "enrich_src_caa": True,
+        "enrich_apply_names": True,
+        "enrich_apply_year": True,
+        "enrich_apply_genres": True,
+        "enrich_apply_art": True,
+        # Review-queue ordering: missing_first = charts lacking album/year
+        # surface first (they gain the most), artist = A–Z, recent = newest
+        # files first.
+        "enrich_review_order": "missing_first",
     }
 
 
@@ -8943,6 +9018,21 @@ def save_settings(data: dict):
             if not math.isfinite(t) or not (0.5 <= t <= 1.01):
                 return {"error": "enrich_auto_threshold must be a number between 0.5 and 1.01"}
             updates["enrich_auto_threshold"] = t
+    for _bool_key in ("enrich_src_musicbrainz", "enrich_src_caa",
+                      "enrich_apply_names", "enrich_apply_year",
+                      "enrich_apply_genres", "enrich_apply_art"):
+        if _bool_key in data:
+            raw = data[_bool_key]
+            if raw is not None:
+                if not isinstance(raw, bool):
+                    return {"error": f"{_bool_key} must be a boolean"}
+                updates[_bool_key] = raw
+    if "enrich_review_order" in data:
+        raw = data["enrich_review_order"]
+        if raw is not None:
+            if not isinstance(raw, str) or raw not in ("missing_first", "artist", "recent"):
+                return {"error": "enrich_review_order must be one of missing_first, artist, recent"}
+            updates["enrich_review_order"] = raw
     if "miss_penalty" in data:
         raw = data["miss_penalty"]
         if raw is not None:

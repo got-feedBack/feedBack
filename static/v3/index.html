@@ -742,13 +742,41 @@
                             <div class="fb-srow-desc">Matches your charts against MusicBrainz in the background to tidy names, years and genres — display only, your files are never modified. Matches at or above the confidence level apply automatically; the rest wait in the library's review queue. Turning this off never disables manual match fixes.</div>
                         </div>
                         <div class="grid grid-cols-2 gap-2 mb-1 text-xs text-gray-400 fb-srow-wide">
-                            <label class="flex items-center gap-2"><input type="checkbox" id="enrich-enabled" checked class="rounded border-gray-600 bg-dark-700 text-accent"> Match songs against MusicBrainz</label>
+                            <label class="flex items-center gap-2"><input type="checkbox" id="enrich-enabled" checked class="rounded border-gray-600 bg-dark-700 text-accent"> Match songs automatically</label>
                             <label class="flex items-center gap-2">Auto-apply confidence
                                 <select id="enrich-threshold" class="bg-dark-700 border border-gray-800 rounded-xl px-2 py-1.5 text-xs text-gray-300 outline-none">
                                     <option value="0.85">85% — more auto-matches</option>
                                     <option value="0.9" selected>90% (recommended)</option>
                                     <option value="0.95">95% — cautious</option>
                                     <option value="1.01">Always review</option>
+                                </select>
+                            </label>
+                        </div>
+                        <!-- R1 scraper options: sources (who may be contacted) ×
+                             auto-apply fields (what a confident match fills in). -->
+                        <div class="fb-srow-wide mb-1">
+                            <div class="text-[10px] uppercase tracking-wide text-gray-500 mb-1">Sources</div>
+                            <div class="grid grid-cols-2 gap-2 text-xs text-gray-400">
+                                <label class="flex items-center gap-2"><input type="checkbox" id="enrich-src-musicbrainz" checked class="rounded border-gray-600 bg-dark-700 text-accent"> MusicBrainz — names, years, genres</label>
+                                <label class="flex items-center gap-2"><input type="checkbox" id="enrich-src-caa" checked class="rounded border-gray-600 bg-dark-700 text-accent"> Cover Art Archive — album covers</label>
+                            </div>
+                        </div>
+                        <div class="fb-srow-wide mb-1">
+                            <div class="text-[10px] uppercase tracking-wide text-gray-500 mb-1">Auto-apply</div>
+                            <div class="grid grid-cols-4 gap-2 text-xs text-gray-400">
+                                <label class="flex items-center gap-2"><input type="checkbox" id="enrich-apply-names" checked class="rounded border-gray-600 bg-dark-700 text-accent"> Names</label>
+                                <label class="flex items-center gap-2"><input type="checkbox" id="enrich-apply-year" checked class="rounded border-gray-600 bg-dark-700 text-accent"> Year</label>
+                                <label class="flex items-center gap-2"><input type="checkbox" id="enrich-apply-genres" checked class="rounded border-gray-600 bg-dark-700 text-accent"> Genres</label>
+                                <label class="flex items-center gap-2"><input type="checkbox" id="enrich-apply-art" checked class="rounded border-gray-600 bg-dark-700 text-accent"> Cover art</label>
+                            </div>
+                            <div class="text-[11px] text-gray-600 mt-1">What a confident match may fill in on its own — matches you confirm in the review queue always apply in full.</div>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2 mb-1 text-xs text-gray-400 fb-srow-wide">
+                            <label class="flex items-center gap-2">Review queue order
+                                <select id="enrich-review-order" class="bg-dark-700 border border-gray-800 rounded-xl px-2 py-1.5 text-xs text-gray-300 outline-none">
+                                    <option value="missing_first" selected>Missing info first</option>
+                                    <option value="artist">Artist A–Z</option>
+                                    <option value="recent">Recently added</option>
                                 </select>
                             </label>
                         </div>
