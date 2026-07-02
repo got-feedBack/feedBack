@@ -246,8 +246,10 @@ _DEMO_BLOCKED: list[tuple[str, re.Pattern]] = [
     ("GET",    re.compile(r"^/api/chart/.+/fileinfo$")),
     # Gap-fill (R4a) rewrites pack files on disk — never for demo visitors.
     ("POST",   re.compile(r"^/api/song/.+/gap-fill$")),
-    # Art layer (R3): the URL fetch makes the server request arbitrary
-    # images on a visitor's behalf, and the override delete mutates state.
+    # Art layer (R3): all three mutate server state / touch the network on a
+    # visitor's behalf — the base64 upload writes files, the URL fetch makes the
+    # server request arbitrary images, and the override delete removes files.
+    ("POST",   re.compile(r"^/api/song/.+/art/upload$")),
     ("POST",   re.compile(r"^/api/song/.+/art/url$")),
     ("DELETE", re.compile(r"^/api/art/.+/override$")),
 ]
@@ -5791,6 +5793,16 @@ _ENRICH_MAX_CANDIDATES = 5
 #                             size-capped LRU (evictions reset the enrichment
 #                             rows so a later pass may re-fetch)
 _CAA_CACHE_CAP_BYTES = 200 * 1024 * 1024
+# Per-cover cap on a single CAA fetch. The 500px thumbnail is normally tens of
+# KB; this bounds any one response independently of the aggregate LRU cap so a
+# single oversized (or misbehaving) release can't blow up memory/disk.
+_CAA_MAX_BYTES = 10 * 1024 * 1024
+# A release MBID is a UUID; before interpolating it into a cache-file path we
+# require a conservative token (alphanumerics, hyphen, underscore only) so no
+# separator or '.' can ever appear — blocks path traversal. Defence in depth:
+# cheap even though the DB only ever holds MusicBrainz UUIDs. (Distinct name
+# from the strict recording-MBID _MBID_RE above — this only gates a filename.)
+_CAA_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 
 def _caa_http_get(release_id: str) -> bytes | None:
@@ -5804,18 +5816,26 @@ def _caa_http_get(release_id: str) -> bytes | None:
     import requests
     _enrich_throttle()
     try:
-        resp = requests.get(
+        with requests.get(
             f"https://coverartarchive.org/release/{release_id}/front-500",
             headers={"User-Agent": _enrich_user_agent()},
-            timeout=15, allow_redirects=True,
-        )
+            timeout=15, allow_redirects=True, stream=True,
+        ) as resp:
+            if resp.status_code == 404:
+                return None
+            if resp.status_code != 200:
+                raise EnrichTransportError(f"cover art archive HTTP {resp.status_code}")
+            # Stream with a per-file cap so a huge response never fully downloads.
+            data = b""
+            for chunk in resp.iter_content(65536):
+                data += chunk
+                if len(data) > _CAA_MAX_BYTES:
+                    # Not network-shaped: settle just this row as 'error' (the
+                    # art loop's generic handler) rather than pausing the pass.
+                    raise ValueError("cover art exceeds size cap")
+            return data
     except requests.RequestException as e:
         raise EnrichTransportError(str(e)) from e
-    if resp.status_code == 404:
-        return None
-    if resp.status_code != 200:
-        raise EnrichTransportError(f"cover art archive HTTP {resp.status_code}")
-    return resp.content
 
 
 def _art_safe_name(filename: str) -> str:
@@ -5887,6 +5907,11 @@ def _enrich_art_one(row: dict) -> bool:
     Network errors raise EnrichTransportError → the pass pauses and the row
     stays unevaluated for the next kick."""
     fn, release_id = row["filename"], row["mb_release_id"]
+    if not release_id or not _CAA_ID_RE.match(str(release_id)):
+        # Malformed release id — never build a cache path from it. Settle the
+        # row as 'error' so it isn't re-queued every pass.
+        meta_db.set_enrichment_art(fn, None, "error")
+        return False
     if _song_pack_art_exists(fn):
         meta_db.set_enrichment_art(fn, None, "pack")
         return False
@@ -10631,6 +10656,12 @@ async def upload_song_art_b64(filename: str, data: dict):
     GIF → kept animated, local-only). The override outranks pack art in the
     serve chain; remove it via DELETE …/art/override."""
     import base64
+    # Reject art for a filename that doesn't resolve to a real song (mirrors the
+    # url route's guard) — no writing stray override files for unknown keys.
+    dlc = _get_dlc_dir()
+    song_path = _resolve_dlc_path(dlc, filename) if dlc else None
+    if song_path is None or not song_path.exists():
+        raise HTTPException(status_code=404, detail="unknown song")
     b64 = data.get("image", "")
     if not b64:
         return {"error": "No image data"}
@@ -10641,6 +10672,8 @@ async def upload_song_art_b64(filename: str, data: dict):
         img_data = base64.b64decode(b64)
     except Exception:
         return {"error": "Invalid base64"}
+    if len(img_data) > _ART_URL_MAX_BYTES:
+        raise HTTPException(status_code=400, detail="image larger than 10 MB")
     return _save_art_override(filename, img_data)
 
 
@@ -10648,27 +10681,69 @@ async def upload_song_art_b64(filename: str, data: dict):
 _ART_URL_MAX_BYTES = 10 * 1024 * 1024
 
 
+def _url_host_is_internal(url: str) -> bool:
+    """True when a user-supplied URL's host resolves to a loopback, private,
+    link-local, reserved, multicast or unspecified address — an SSRF target we
+    refuse to fetch on the user's behalf (e.g. 169.254.169.254 metadata, LAN
+    services). Fails CLOSED: an unresolvable or unparseable host is treated as
+    internal. Every resolved address must be public for the URL to pass."""
+    from urllib.parse import urlparse
+    import socket
+    host = urlparse(url).hostname
+    if not host:
+        return True
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError:
+        return True
+    if not infos:
+        return True
+    for info in infos:
+        raw = info[4][0].split("%", 1)[0]  # strip any zone id
+        try:
+            ip = ipaddress.ip_address(raw)
+        except ValueError:
+            return True
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            return True
+    return False
+
+
 def _fetch_art_url(url: str) -> bytes:
     """The one place art-by-URL touches the network (tests fake this seam).
     User-initiated, so not throttled like the background workers — but the
-    same offline guard applies (pytest can never fetch), and the size cap is
-    enforced while streaming so a huge response never fully downloads."""
+    same offline guard applies (pytest can never fetch), the host is checked
+    against internal/reserved ranges (SSRF), redirects are NOT followed (a
+    redirect can't smuggle the request to an internal target), and the size
+    cap is enforced while streaming so a huge response never fully downloads.
+
+    Residual, accepted: the host is resolved here and again by requests, so a
+    rebinding DNS name is a theoretical TOCTOU. Not closed with an IP-pinned
+    connection because (a) this is a single-user, no-auth app (constitution
+    §I) and the route is demo-blocked, so there is no untrusted submission
+    path, and (b) no other in-tree client (MusicBrainz, CAA) pins either — a
+    bespoke pinned+SNI adapter here would be inconsistent and disproportionate.
+    The cheap guards above still stop the realistic vectors (direct internal
+    URL, redirect-to-internal)."""
     if not _enrich_network_enabled():
         raise EnrichTransportError("art fetch disabled (offline)")
+    if _url_host_is_internal(url):
+        raise ValueError("url host is not allowed")
     import requests
     try:
-        resp = requests.get(url, timeout=15, stream=True,
-                            headers={"User-Agent": _enrich_user_agent()})
+        with requests.get(url, timeout=15, stream=True, allow_redirects=False,
+                          headers={"User-Agent": _enrich_user_agent()}) as resp:
+            if resp.status_code != 200:
+                raise EnrichTransportError(f"HTTP {resp.status_code}")
+            data = b""
+            for chunk in resp.iter_content(65536):
+                data += chunk
+                if len(data) > _ART_URL_MAX_BYTES:
+                    raise ValueError("image larger than 10 MB")
+            return data
     except requests.RequestException as e:
         raise EnrichTransportError(str(e)) from e
-    if resp.status_code != 200:
-        raise EnrichTransportError(f"HTTP {resp.status_code}")
-    data = b""
-    for chunk in resp.iter_content(65536):
-        data += chunk
-        if len(data) > _ART_URL_MAX_BYTES:
-            raise ValueError("image larger than 10 MB")
-    return data
 
 
 @app.post("/api/song/{filename:path}/art/url")
@@ -10708,6 +10783,16 @@ def remove_song_art_override(filename: str):
             removed = True
         except OSError:
             pass
+    if removed:
+        # The art worker may have settled this row as 'user' (override present,
+        # no pack art). Reset it so the next enrichment pass re-evaluates and the
+        # CAA fallback resumes — otherwise a removed override strands the row
+        # (enrichment_art_pending only re-queues art_state IS NULL) and the song
+        # is left with no art at all.
+        try:
+            meta_db.set_enrichment_art(filename, None, None)
+        except Exception:
+            log.exception("art override delete: failed to reset enrichment state")
     return {"ok": True, "removed": removed}
 
 

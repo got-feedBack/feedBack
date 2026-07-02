@@ -271,3 +271,48 @@ def test_delete_song_removes_override(server, client):
     r = client.delete("/api/song/a.sloppak")
     assert r.status_code == 200
     assert server._art_override_paths("a.sloppak") == []
+
+
+def test_delete_override_restores_caa_fallback(server, client, caa):
+    """Removing a user override that had settled the row as 'user' must reset
+    the enrichment state so the CAA fallback is fetched and served again —
+    otherwise the song is stranded with no art at all."""
+    make_sloppak(server, "a.sloppak")                 # no pack art
+    _match_row(server, "a.sloppak")
+    # Pin an override BEFORE the art worker runs → the pass stamps art_state='user'.
+    client.post("/api/song/a.sloppak/art/upload", json={"image": b64(png_bytes())})
+    server._background_enrich()
+    assert server.meta_db.get_enrichment("a.sloppak")["art_state"] == "user"
+    # Remove it → the row resets to unevaluated…
+    assert client.delete("/api/art/a.sloppak/override").json()["removed"]
+    assert server.meta_db.get_enrichment("a.sloppak")["art_state"] is None
+    # …and the next pass fetches + serves the release's front cover.
+    server._background_enrich()
+    assert server.meta_db.get_enrichment("a.sloppak")["art_state"] == "caa"
+    r = client.get("/api/song/a.sloppak/art")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/jpeg"
+
+
+def test_upload_rejects_unknown_song_and_oversize(server, client):
+    # Unknown filename → 404 (no stray override file written).
+    assert client.post("/api/song/ghost.sloppak/art/upload",
+                       json={"image": b64(png_bytes())}).status_code == 404
+    assert server._art_override_paths("ghost.sloppak") == []
+    # Oversize decoded payload → 400 (bounds the base64 upload path).
+    make_sloppak(server, "a.sloppak")
+    huge = b64(b"\x00" * (server._ART_URL_MAX_BYTES + 1))
+    assert client.post("/api/song/a.sloppak/art/upload",
+                       json={"image": huge}).status_code == 400
+
+
+def test_fetch_art_url_blocks_internal_hosts(server):
+    """The SSRF guard refuses loopback / link-local / private targets before
+    any request is made (the real seam, not the faked one)."""
+    assert server._url_host_is_internal("http://127.0.0.1/x.png")
+    assert server._url_host_is_internal("http://localhost/x.png")
+    assert server._url_host_is_internal("http://169.254.169.254/latest/meta-data")
+    assert server._url_host_is_internal("http://10.0.0.5/x.png")
+    assert server._url_host_is_internal("http://[::1]/x.png")
+    assert server._url_host_is_internal("http://nonexistent.invalid/x.png")  # unresolvable → closed
+    assert not server._url_host_is_internal("http://93.184.216.34/x.png")    # public literal
