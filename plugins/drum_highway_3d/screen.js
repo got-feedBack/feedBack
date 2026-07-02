@@ -83,10 +83,15 @@
 
     // Note dimensions (world units). All keyed to K so scale changes
     // propagate.
-    const DISC_R_BASE = 3.6 * K;                   // drum disc radius
-    const DISC_H = 1.2 * K;                        // drum disc thickness
-    const CYMBAL_R = 3.0 * K;                      // cymbal gem radius
-    const CYMBAL_H = 1.6 * K;                      // cymbal gem height
+    // Bumped ~20% (3.6/3.0 → 4.3/3.6) after hands-on feedback: the gems
+    // were hard to read at the default camera. Accent scale (1.25×) still
+    // fits the 12*K lane gap: 4.3*2*1.25 = 10.75. Every dependent shape
+    // (halo/ghost/open rings, snare stripe, bell dot, flam grace) keys off
+    // these radii, so the whole family scales together.
+    const DISC_R_BASE = 4.3 * K;                   // drum disc radius
+    const DISC_H = 1.4 * K;                        // drum disc thickness
+    const CYMBAL_R = 3.6 * K;                      // cymbal gem radius
+    const CYMBAL_H = 1.9 * K;                      // cymbal gem height
 
     // ─── Piece vocabulary (mirrors lib/drums.py PIECES) ──────────────
     // Used for kit configuration: user picks which of these pieces they
