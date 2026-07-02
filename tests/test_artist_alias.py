@@ -145,6 +145,63 @@ def test_raw_artists_lists_counts_and_canonical(client, server):
     assert by_name["AC/DC"]["count"] == 1
 
 
+# ── Transitive chains flatten so sequential merges unify (PR #705 P2) ─────────
+
+def test_sequential_merge_flattens_transitive_chain(client, server):
+    """merge ACDC→AC/DC then AC/DC→AC-DC must unify ALL variants onto the terminal
+    canonical ("AC-DC") — not leave a two-hop chain that grouping/filtering split."""
+    _seed(server, "a.archive", "ACDC")
+    _seed(server, "b.archive", "AC/DC")
+    _seed(server, "c.archive", "AC-DC")
+    client.post("/api/artist-aliases/merge",
+                json={"raw_names": ["ACDC"], "canonical_name": "AC/DC"})
+    client.post("/api/artist-aliases/merge",
+                json={"raw_names": ["AC/DC"], "canonical_name": "AC-DC"})
+    # Both original variants resolve (single hop) to the terminal canonical.
+    assert server.meta_db.effective_artist("ACDC") == "AC-DC"
+    assert server.meta_db.effective_artist("AC/DC") == "AC-DC"
+    # The song tagged "ACDC" displays the terminal, not the intermediate.
+    assert _grid_artist(client, "a.archive") == "AC-DC"
+    # Grouping shows ONE canonical, not two split groups.
+    assert _artist_names(client) == ["AC-DC"]
+    # Stored rows are already terminal (forward-flattened), never AC/DC.
+    canon = {a["canonical_name"] for a in client.get("/api/artist-aliases").json()["aliases"]}
+    assert canon == {"AC-DC"}
+    # Filtering by the terminal matches every original variant.
+    got = {s["filename"] for s in
+           client.get("/api/library", params={"artist": "AC-DC"}).json()["songs"]}
+    assert got == {"a.archive", "b.archive", "c.archive"}
+
+
+def test_cycle_is_refused_and_state_intact(client, server):
+    """A→B then B→A would close a cycle: the second set is refused (409) and the
+    existing A→B mapping is left intact — no loop, no corruption."""
+    _seed(server, "a.archive", "A")
+    _seed(server, "b.archive", "B")
+    client.post("/api/artist-aliases/merge", json={"raw_names": ["A"], "canonical_name": "B"})
+    r = _alias(client, "B", "A")           # B → A closes the cycle
+    assert r.status_code == 409
+    # State unchanged: exactly one alias row, A → B.
+    assert client.get("/api/artist-aliases").json()["aliases"] == [
+        {"raw_name": "A", "canonical_name": "B", "mb_artist_id": None}]
+    assert server.meta_db.effective_artist("A") == "B"
+    assert server.meta_db.effective_artist("B") == "B"
+
+
+def test_terminal_resolution_survives_a_stored_cycle(server):
+    """Even if the table somehow holds a direct cycle (P↔Q), the visited-set makes
+    _terminal_canonical terminate instead of looping forever."""
+    db = server.meta_db
+    with db._lock:
+        db.conn.execute("INSERT INTO artist_alias (raw_name, canonical_name, updated_at) "
+                        "VALUES ('P', 'Q', datetime('now'))")
+        db.conn.execute("INSERT INTO artist_alias (raw_name, canonical_name, updated_at) "
+                        "VALUES ('Q', 'P', datetime('now'))")
+        db.conn.commit()
+    assert db._terminal_canonical("P") in ("P", "Q")
+    assert db._terminal_canonical("Q") in ("P", "Q")
+
+
 def test_list_aliases_sorted(client, server):
     _seed(server, "a.archive", "ACDC")
     _seed(server, "b.archive", "guns n roses")

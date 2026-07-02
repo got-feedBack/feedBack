@@ -1595,6 +1595,35 @@ class MetadataDB:
         amap = self.alias_map() if amap is None else amap
         return amap.get(raw.lower(), raw)
 
+    def _single_hop_canonical(self, name: str) -> str | None:
+        """The stored canonical for a raw name (a SINGLE hop), or None if `name`
+        is not itself an alias key. Case-insensitive (the table is COLLATE NOCASE)
+        — the shared primitive the chain-flatteners reuse."""
+        if not name:
+            return None
+        row = self.conn.execute(
+            "SELECT canonical_name FROM artist_alias WHERE raw_name = ? COLLATE NOCASE",
+            (name,)).fetchone()
+        return row[0] if row else None
+
+    def _terminal_canonical(self, name: str) -> str:
+        """Follow the alias chain from `name` to its TERMINAL canonical — the first
+        name that is not itself an alias key — so transitive chains (raw → mid →
+        … → terminal) collapse to one hop. A visited-set breaks cycles: if we come
+        back to a name already seen we return the last name reached rather than
+        looping. Reuses the single-hop primitive."""
+        seen: set = set()
+        cur = name
+        while True:
+            key = (cur or "").lower()
+            if key in seen:
+                return cur           # cycle — stop, return where we are
+            seen.add(key)
+            nxt = self._single_hop_canonical(cur)
+            if nxt is None or (nxt or "").lower() == key:
+                return cur           # not an alias key (or self) → terminal
+            cur = nxt
+
     def _raw_variants_for(self, canonical: str) -> list:
         """Every raw artist string that should match a filter on `canonical`: the
         canonical name itself plus all raw names aliased to it (case-insensitive).
@@ -1619,27 +1648,57 @@ class MetadataDB:
             "ORDER BY canonical_name COLLATE NOCASE, raw_name COLLATE NOCASE").fetchall()
         return [{"raw_name": r[0], "canonical_name": r[1], "mb_artist_id": r[2]} for r in rows]
 
-    def set_artist_alias(self, raw_name: str, canonical_name: str,
-                         mb_artist_id: str | None = None) -> None:
-        """Upsert one raw→canonical override. A self-alias (raw == canonical,
-        case-insensitively) is a no-op override, so we DROP any existing row
-        instead — that's how the UI 'un-merges' a variant back to standing alone."""
+    def _set_artist_alias_locked(self, raw_name: str, canonical_name: str,
+                                 mb_artist_id: str | None = None) -> dict:
+        """Core upsert — assumes self._lock is HELD and does NOT commit (so the
+        single set and the batch merge can share one transaction). Flattens chains
+        and guards cycles:
+
+        * A self-alias (raw == canonical) DROPs any existing row (the UI un-merge).
+        * Otherwise `canonical` is resolved to its TERMINAL canonical, so setting a
+          new hop onto an existing chain collapses to one hop rather than growing a
+          two-hop chain that grouping/filtering would then split.
+        * Cycle guard: if that terminal IS `raw`, storing would loop the chain back
+          on itself — we no-op and report it so the caller can surface a failure.
+        * Forward-flatten: any existing rows whose canonical == `raw` are re-pointed
+          to the new terminal, so previously-merged variants follow `raw` onward.
+
+        Returns a result dict {ok, raw_name, canonical_name, ...}."""
         raw = (raw_name or "").strip()
         canon = (canonical_name or "").strip()
         if not raw or not canon:
             raise ValueError("raw_name and canonical_name are required")
+        if raw.lower() == canon.lower():
+            self.conn.execute("DELETE FROM artist_alias WHERE raw_name = ? COLLATE NOCASE", (raw,))
+            return {"ok": True, "raw_name": raw, "canonical_name": raw, "unmerged": True}
+        terminal = self._terminal_canonical(canon)
+        if (terminal or "").lower() == raw.lower():
+            # raw → … → raw would be a cycle; refuse rather than corrupt the chain.
+            return {"ok": False, "reason": "cycle", "raw_name": raw,
+                    "canonical_name": canon, "terminal": terminal}
+        self.conn.execute(
+            "INSERT INTO artist_alias (raw_name, canonical_name, mb_artist_id, updated_at) "
+            "VALUES (?, ?, ?, datetime('now')) "
+            "ON CONFLICT(raw_name) DO UPDATE SET "
+            "canonical_name = excluded.canonical_name, "
+            "mb_artist_id = excluded.mb_artist_id, updated_at = excluded.updated_at",
+            (raw, terminal, mb_artist_id))
+        # Re-point any variants that were previously merged INTO raw onto the new
+        # terminal (raw itself now aliases onward, so it can't stay a canonical).
+        self.conn.execute(
+            "UPDATE artist_alias SET canonical_name = ?, updated_at = datetime('now') "
+            "WHERE canonical_name = ? COLLATE NOCASE AND raw_name != ? COLLATE NOCASE",
+            (terminal, raw, terminal))
+        return {"ok": True, "raw_name": raw, "canonical_name": terminal}
+
+    def set_artist_alias(self, raw_name: str, canonical_name: str,
+                         mb_artist_id: str | None = None) -> dict:
+        """Upsert one raw→canonical override (chain-flattened, cycle-guarded — see
+        _set_artist_alias_locked). Returns the result dict."""
         with self._lock:
-            if raw.lower() == canon.lower():
-                self.conn.execute("DELETE FROM artist_alias WHERE raw_name = ? COLLATE NOCASE", (raw,))
-            else:
-                self.conn.execute(
-                    "INSERT INTO artist_alias (raw_name, canonical_name, mb_artist_id, updated_at) "
-                    "VALUES (?, ?, ?, datetime('now')) "
-                    "ON CONFLICT(raw_name) DO UPDATE SET "
-                    "canonical_name = excluded.canonical_name, "
-                    "mb_artist_id = excluded.mb_artist_id, updated_at = excluded.updated_at",
-                    (raw, canon, mb_artist_id))
+            result = self._set_artist_alias_locked(raw_name, canonical_name, mb_artist_id)
             self.conn.commit()
+        return result
 
     def remove_artist_alias(self, raw_name: str) -> None:
         with self._lock:
@@ -1648,16 +1707,21 @@ class MetadataDB:
 
     def merge_artists(self, raw_names, canonical_name: str) -> int:
         """Point several raw artist names at one canonical (the Tidy-up merge).
-        Skips the canonical's own self-alias. Returns the count of aliases written."""
+        Skips the canonical's own self-alias. Returns the count of aliases written.
+        ATOMIC: the whole batch runs under one lock and one commit, so a mid-batch
+        cycle rejection can't leave a half-applied merge."""
         canon = (canonical_name or "").strip()
         if not canon:
             raise ValueError("canonical_name is required")
         n = 0
-        for raw in (raw_names or []):
-            r = (raw or "").strip()
-            if r and r.lower() != canon.lower():
-                self.set_artist_alias(r, canon)
-                n += 1
+        with self._lock:
+            for raw in (raw_names or []):
+                r = (raw or "").strip()
+                if r and r.lower() != canon.lower():
+                    result = self._set_artist_alias_locked(r, canon)
+                    if result.get("ok"):
+                        n += 1
+            self.conn.commit()
         return n
 
     def raw_artists(self, limit: int = 2000) -> list:
@@ -5710,8 +5774,13 @@ def set_artist_alias(data: dict):
     canon = (data.get("canonical_name") or "").strip()
     if not raw or not canon:
         return JSONResponse({"error": "raw_name and canonical_name are required"}, 400)
-    meta_db.set_artist_alias(raw, canon, (data.get("mb_artist_id") or None))
-    return {"ok": True, "raw_name": raw, "canonical_name": canon}
+    result = meta_db.set_artist_alias(raw, canon, (data.get("mb_artist_id") or None))
+    if not result.get("ok"):
+        # Would form a cycle (raw → … → raw) — refuse rather than corrupt the chain.
+        return JSONResponse(
+            {"error": "alias would create a cycle", "raw_name": raw, "canonical_name": canon},
+            409)
+    return {"ok": True, "raw_name": raw, "canonical_name": result.get("canonical_name", canon)}
 
 
 @app.post("/api/artist-aliases/merge")
