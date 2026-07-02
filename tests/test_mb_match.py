@@ -120,6 +120,21 @@ def test_unrelated_is_none():
     assert m.classify(SONG, cand, s) == "none"
 
 
+def test_classify_auto_min_override():
+    # The host's "auto-apply confidence" setting: a perfect match autos at
+    # any real threshold, and "Always review" (>1.0) sends even it to review.
+    cand = {"artist": "AC/DC", "title": "Thunderstruck", "year": "1990", "duration": 292}
+    s = m.score_candidate(SONG, cand)
+    assert s == 1.0
+    assert m.classify(SONG, cand, s, auto_min=0.9) == "auto"
+    assert m.classify(SONG, cand, s, auto_min=1.01) == "review"
+    # The per-field floors are independent of the threshold: a wrong-artist
+    # cover stays non-auto even at a permissive auto_min.
+    cover = {"artist": "Some Cover Band", "title": "Thunderstruck"}
+    cs = m.score_candidate(SONG, cover)
+    assert m.classify(SONG, cover, cs, auto_min=0.5) != "auto"
+
+
 def test_rank_candidates_orders_by_our_score():
     cands = [
         {"recording_id": "b", "artist": "Someone Else", "title": "Thunderstruck", "mb_score": 100},

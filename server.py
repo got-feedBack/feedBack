@@ -235,9 +235,10 @@ _DEMO_BLOCKED: list[tuple[str, re.Pattern]] = [
     ("POST",   re.compile(r"^/api/shop/buy$")),
     ("POST",   re.compile(r"^/api/shop/equip$")),
     # Enrichment (P8): review writes mutate the local match cache, and the
-    # search proxy relays to MusicBrainz — neither belongs to anonymous demo
-    # visitors (the proxy would spend the shared rate limit on their behalf).
+    # search proxy / manual kick relay to MusicBrainz — none of it belongs to
+    # anonymous demo visitors (they'd spend the shared rate limit).
     ("POST",   re.compile(r"^/api/enrichment/review/.+$")),
+    ("POST",   re.compile(r"^/api/enrichment/kick$")),
     ("GET",    re.compile(r"^/api/enrichment/search$")),
 ]
 
@@ -2852,7 +2853,11 @@ class MetadataDB:
             "e.match_score, e.candidates, e.attempts "
             "FROM song_enrichment e JOIN songs s ON s.filename = e.filename "
             "WHERE e.match_state = 'review' "
-            "ORDER BY s.artist COLLATE NOCASE, s.title COLLATE NOCASE, e.filename "
+            # Charts that are MISSING data (no album / no year) surface first —
+            # confirming those has the most to gain; complete charts only
+            # stand to be re-labelled.
+            "ORDER BY ((COALESCE(s.album, '') = '') + (COALESCE(s.year, '') = '')) DESC, "
+            "s.artist COLLATE NOCASE, s.title COLLATE NOCASE, e.filename "
             "LIMIT ?", (max(1, int(limit)),)).fetchall()
         out = []
         for fn, title, artist, album, year, duration, mtime, score, cands, attempts in rows:
@@ -5624,7 +5629,7 @@ def _enrich_backoff_elapsed(attempts, last_attempt_at, now: float) -> bool:
 _ENRICH_MAX_CANDIDATES = 5
 
 
-def _enrich_one(row: dict) -> None:
+def _enrich_one(row: dict, auto_min: float | None = None) -> None:
     """The matcher (P8; replaces P7's no-op). Precedence per design §5:
 
     1. local match-cache by content_hash — another chart of the same
@@ -5635,9 +5640,12 @@ def _enrich_one(row: dict) -> None:
        confirms before anything canonicalizes) / failed (low, retried on
        backoff).
 
-    Never touches a `manual` row (the writer enforces it). Network errors
-    raise EnrichTransportError so the pass pauses instead of burning
-    attempts while offline."""
+    `auto_min` is the user's auto-apply confidence setting (None → the
+    engine default); it moves only the auto/review boundary of step 3 —
+    the per-field floors and exact-key tiers are unaffected. Never touches
+    a `manual` row (the writer enforces it). Network errors raise
+    EnrichTransportError so the pass pauses instead of burning attempts
+    while offline."""
     fn, chash = row["filename"], row["content_hash"]
 
     cached = meta_db.enrichment_cache_lookup(chash, exclude_filename=fn)
@@ -5664,7 +5672,7 @@ def _enrich_one(row: dict) -> None:
 
     ranked = mb_match.rank_candidates(row, _mb_search_recordings(row.get("artist"), row.get("title")))
     best = ranked[0] if ranked else None
-    tier = mb_match.classify(row, best, best["score"]) if best else "none"
+    tier = mb_match.classify(row, best, best["score"], auto_min=auto_min) if best else "none"
     if tier == "auto":
         meta_db.apply_enrichment_match(fn, chash, "matched", source="text",
                                        score=best["score"], cand=best)
@@ -5702,6 +5710,18 @@ def _background_enrich():
         _enrich_status["processed"] += 1
     _enrich_status["last_pass_at"] = time.time()
 
+    # User settings gate the BACKGROUND matcher only (the review modal's
+    # manual search/fix stays available when it's off); read once per pass.
+    cfg = _load_config(CONFIG_DIR / "config.json") or {}
+    if cfg.get("enrich_enabled", True) is False:
+        if pending:
+            log.info("Enrichment pass: %d rows stamped (matching disabled in Settings)", len(pending))
+        return
+    try:
+        auto_min = float(cfg.get("enrich_auto_threshold", 0.9))
+    except (TypeError, ValueError):
+        auto_min = 0.9
+
     if not _enrich_network_enabled():
         if pending:
             log.info("Enrichment pass: %d rows stamped (network disabled — matching skipped)", len(pending))
@@ -5717,7 +5737,7 @@ def _background_enrich():
     matched = 0
     for row in pending + retriable:
         try:
-            _enrich_one(row)
+            _enrich_one(row, auto_min=auto_min)
             matched += 1
         except EnrichTransportError as e:
             log.info("enrichment: network unavailable, pass paused (%s)", e)
@@ -6246,6 +6266,14 @@ def enrichment_status():
         "states": meta_db.enrichment_state_counts(),
         "total_songs": meta_db.count(),
     }
+
+
+@app.post("/api/enrichment/kick")
+def api_enrichment_kick():
+    """The Settings "Match now" button: request an enrichment pass without
+    waiting for a scan to complete. Single-flight + coalescing like every
+    other kick — spamming it queues at most one follow-up pass."""
+    return {"started": _kick_enrich()}
 
 
 @app.get("/api/enrichment/review")
@@ -8408,6 +8436,17 @@ def _default_settings():
         # renderer to gate its saved-chain restore. Inert on the pure-web build,
         # which has no native amp sims.
         "use_amp_sims": False,
+        # Metadata matching (P8). `enrich_enabled` gates only the BACKGROUND
+        # matcher — manual Fix-match/search in the review modal keeps working
+        # when it's off (the media-server model: scraper off ≠ no manual fix);
+        # the FEEDBACK_ENRICH_OFFLINE env var is the hard everything-off kill.
+        # `enrich_auto_threshold` is the auto-apply confidence — matches at or
+        # above it canonicalize automatically, below it queue for review. The
+        # per-field floors in lib/mb_match.py always apply on top, so lowering
+        # this can't make a wrong-artist cover auto-match. >1.0 (the "Always
+        # review" option) sends every text match to review.
+        "enrich_enabled": True,
+        "enrich_auto_threshold": 0.9,
     }
 
 
@@ -8556,6 +8595,28 @@ def save_settings(data: dict):
             if not isinstance(raw, bool):
                 return {"error": "use_amp_sims must be a boolean"}
             updates["use_amp_sims"] = raw
+    if "enrich_enabled" in data:
+        raw = data["enrich_enabled"]
+        if raw is not None:
+            if not isinstance(raw, bool):
+                return {"error": "enrich_enabled must be a boolean"}
+            updates["enrich_enabled"] = raw
+    if "enrich_auto_threshold" in data:
+        # Auto-apply confidence for the metadata matcher. 0.5–1.0 are real
+        # thresholds; values just above 1.0 are the "Always review" option (a
+        # capped score can equal exactly 1.0, so "never auto" must sit above
+        # the cap). Same defensive coercion shape as av_offset_ms.
+        raw = data["enrich_auto_threshold"]
+        if raw is not None:
+            if isinstance(raw, bool):
+                return {"error": "enrich_auto_threshold must be a number between 0.5 and 1.01"}
+            try:
+                t = float(raw)
+            except (TypeError, ValueError, OverflowError):
+                return {"error": "enrich_auto_threshold must be a number between 0.5 and 1.01"}
+            if not math.isfinite(t) or not (0.5 <= t <= 1.01):
+                return {"error": "enrich_auto_threshold must be a number between 0.5 and 1.01"}
+            updates["enrich_auto_threshold"] = t
     if "miss_penalty" in data:
         raw = data["miss_penalty"]
         if raw is not None:

@@ -435,3 +435,78 @@ def test_status_counts_by_state(server, mb, client):
     _seed_review(server, mb)
     states = client.get("/api/enrichment/status").json()["states"]
     assert states.get("review") == 1
+
+
+# ── settings: enable toggle + auto-apply confidence ───────────────────────────
+
+def test_auto_threshold_setting_moves_the_auto_review_boundary(server, mb, client):
+    # artist exact (1.0) + title 4/5 token overlap (0.8) and NO year/duration
+    # corroboration → combined exactly 0.90.
+    mb.search_response = {"recordings": [
+        mb_doc(title="Highway Hell", artist="AC/DC", date="", length_ms=None)]}
+    client.post("/api/settings", json={"enrich_auto_threshold": 0.95})
+    _put(server, "a.sloppak", title="Highway to Hell", artist="AC/DC",
+         year="", duration=0)
+    server._background_enrich()
+    assert server.meta_db.get_enrichment("a.sloppak")["match_state"] == "review"
+    # Lower the bar to the default 0.90 → an identity edit re-queues, and the
+    # same 0.90-scored candidate now auto-applies.
+    client.post("/api/settings", json={"enrich_auto_threshold": 0.9})
+    _put(server, "a.sloppak", title="Highway to Hell", artist="AC/DC",
+         year="", duration=0, album="Different Album")
+    server._background_enrich()
+    row = server.meta_db.get_enrichment("a.sloppak")
+    assert row["match_state"] == "matched"
+    assert abs(row["match_score"] - 0.9) < 1e-6
+
+
+def test_enrich_enabled_setting_gates_background_matching(server, mb, client):
+    client.post("/api/settings", json={"enrich_enabled": False})
+    _put(server, "a.sloppak")
+    mb.search_response = {"recordings": [mb_doc()]}
+    server._background_enrich()
+    assert mb.calls == []
+    assert server.meta_db.get_enrichment("a.sloppak")["match_state"] == "unscanned"
+    # Manual search/fix stays available while the background matcher is off.
+    r = client.get("/api/enrichment/search", params={"title": "Thunderstruck"})
+    assert r.status_code == 200
+    # Re-enable → the next pass matches.
+    client.post("/api/settings", json={"enrich_enabled": True})
+    server._background_enrich()
+    assert server.meta_db.get_enrichment("a.sloppak")["match_state"] == "matched"
+
+
+def test_settings_validation(server, client):
+    assert "error" in client.post(
+        "/api/settings", json={"enrich_enabled": "yes"}).json()
+    assert "error" in client.post(
+        "/api/settings", json={"enrich_auto_threshold": "high"}).json()
+    assert "error" in client.post(
+        "/api/settings", json={"enrich_auto_threshold": 2.5}).json()
+    ok = client.post("/api/settings", json={"enrich_auto_threshold": 1.01}).json()
+    assert "error" not in ok
+    assert client.get("/api/settings").json()["enrich_auto_threshold"] == 1.01
+
+
+def test_kick_route(server, mb, client):
+    import time as _t
+    body = client.post("/api/enrichment/kick").json()
+    assert "started" in body
+    # Let the kicked pass settle so its daemon thread can't bleed into the
+    # fixture teardown (the DB connection closes there).
+    for _ in range(200):
+        if not client.get("/api/enrichment/status").json()["running"]:
+            break
+        _t.sleep(0.02)
+
+
+def test_review_queue_orders_missing_data_first(server, mb, client):
+    # Complete chart first alphabetically, incomplete second — the queue must
+    # surface the incomplete (missing album + year) one first anyway.
+    _seed_review(server, mb, fn="aa.sloppak", title="Thunderstruck (v2)")
+    _put(server, "zz.sloppak", title="Thunderstruck (Live)",
+         artist="AC/DC ft Nobody", album="", year="")
+    server._background_enrich()
+    assert server.meta_db.get_enrichment("zz.sloppak")["match_state"] == "review"
+    songs = client.get("/api/enrichment/review").json()["songs"]
+    assert [s["filename"] for s in songs] == ["zz.sloppak", "aa.sloppak"]

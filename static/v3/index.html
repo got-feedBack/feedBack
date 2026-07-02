@@ -681,6 +681,28 @@
                             <span id="rescan-status" class="text-xs text-gray-500"></span>
                         </div>
                     </div>
+                    <!-- Metadata matching (P8 — wired by static/v3/match-review.js) -->
+                    <div class="fb-srow fb-srow-stack">
+                        <div class="fb-srow-main">
+                            <div class="fb-srow-title">Metadata matching</div>
+                            <div class="fb-srow-desc">Matches your charts against MusicBrainz in the background to tidy names, years and genres — display only, your files are never modified. Matches at or above the confidence level apply automatically; the rest wait in the library's review queue. Turning this off never disables manual match fixes.</div>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2 mb-1 text-xs text-gray-400 fb-srow-wide">
+                            <label class="flex items-center gap-2"><input type="checkbox" id="enrich-enabled" checked class="rounded border-gray-600 bg-dark-700 text-accent"> Match songs against MusicBrainz</label>
+                            <label class="flex items-center gap-2">Auto-apply confidence
+                                <select id="enrich-threshold" class="bg-dark-700 border border-gray-800 rounded-xl px-2 py-1.5 text-xs text-gray-300 outline-none">
+                                    <option value="0.85">85% — more auto-matches</option>
+                                    <option value="0.9" selected>90% (recommended)</option>
+                                    <option value="0.95">95% — cautious</option>
+                                    <option value="1.01">Always review</option>
+                                </select>
+                            </label>
+                        </div>
+                        <div class="fb-srow-control">
+                            <button id="enrich-match-now" class="bg-dark-600 hover:bg-dark-500 px-5 py-2.5 rounded-xl text-sm text-gray-300 transition">Match Now</button>
+                            <span id="enrich-status" class="text-xs text-gray-500"></span>
+                        </div>
+                    </div>
                     <!-- Backup -->
                     <div class="fb-srow fb-srow-stack">
                         <div class="fb-srow-main">

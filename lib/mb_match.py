@@ -24,8 +24,11 @@ import unicodedata
 # Combined score = 0.5*artist_sim + 0.5*title_sim + corroboration bonuses
 # (capped at 1.0). Wrong-match is worse than slow (design §5), so `auto`
 # additionally requires BOTH fields to individually agree — a perfect title
-# with a mismatched artist (a cover) must never auto-canonicalize.
-AUTO_MIN = 0.95
+# with a mismatched artist (a cover) must never auto-canonicalize, whatever
+# the combined threshold is set to. AUTO_MIN is only the DEFAULT: the host
+# surfaces it as the user-configurable "auto-apply confidence" setting and
+# passes the chosen value into classify(auto_min=…).
+AUTO_MIN = 0.90
 AUTO_ARTIST_MIN = 0.8
 AUTO_TITLE_MIN = 0.6
 REVIEW_MIN = 0.65
@@ -154,16 +157,20 @@ def score_candidate(song: dict, cand: dict) -> float:
     return min(score, 1.0)
 
 
-def classify(song: dict, cand: dict, score: float) -> str:
+def classify(song: dict, cand: dict, score: float, auto_min: float | None = None) -> str:
     """Tier for a scored candidate: 'auto' | 'review' | 'none'.
 
     `auto` (tier-2) needs the combined score AND per-field agreement AND
     both fields present — a perfect-title/wrong-artist cover, or a chart
     with no artist at all, is at best a review item, never an auto match.
+    `auto_min` overrides the default combined-score threshold (the user's
+    "auto-apply confidence" setting); the per-field floors always apply.
     """
+    if auto_min is None:
+        auto_min = AUTO_MIN
     artist_sim = similarity(song.get("artist"), cand.get("artist"), artist=True)
     title_sim = similarity(song.get("title"), cand.get("title"))
-    if (score >= AUTO_MIN and artist_sim >= AUTO_ARTIST_MIN
+    if (score >= auto_min and artist_sim >= AUTO_ARTIST_MIN
             and title_sim >= AUTO_TITLE_MIN):
         return "auto"
     if score >= REVIEW_MIN:

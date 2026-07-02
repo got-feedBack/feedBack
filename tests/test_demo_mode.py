@@ -96,6 +96,7 @@ def test_demo_off_settings_post_not_blocked(tmp_path, monkeypatch):
     ("POST",   "/api/enrichment/review/some-file/accept"),
     ("POST",   "/api/enrichment/review/some-file/reject"),
     ("POST",   "/api/enrichment/review/some-file/pick"),
+    ("POST",   "/api/enrichment/kick"),
     ("GET",    "/api/enrichment/search"),
 ])
 def test_demo_on_blocked_routes_return_403(tmp_path, monkeypatch, method, path):
