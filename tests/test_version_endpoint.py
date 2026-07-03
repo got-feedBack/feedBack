@@ -44,6 +44,7 @@ def client(tmp_path, monkeypatch):
         finally:
             conn = getattr(getattr(server, "meta_db", None), "conn", None)
             if conn is not None:
+                getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
                 conn.close()
 
 

@@ -30,6 +30,7 @@ def server_mod(monkeypatch, tmp_path):
     yield mod
     conn = getattr(getattr(mod, "meta_db", None), "conn", None)
     if conn is not None:
+        getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
         conn.close()
 
 
@@ -124,6 +125,7 @@ def make_client(tmp_path, monkeypatch):
     server = sys.modules.get("server")
     conn = getattr(getattr(server, "meta_db", None), "conn", None)
     if conn is not None:
+        getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
         conn.close()
 
 

@@ -34,6 +34,7 @@ def client_and_server(tmp_path, monkeypatch):
         meta_db = getattr(server, "meta_db", None)
         conn = getattr(meta_db, "conn", None)
         if conn is not None:
+            getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
             conn.close()
 
 
@@ -60,6 +61,7 @@ def non_loopback_client(tmp_path, monkeypatch):
         meta_db = getattr(server, "meta_db", None)
         conn = getattr(meta_db, "conn", None)
         if conn is not None:
+            getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
             conn.close()
 
 

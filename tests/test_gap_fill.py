@@ -29,6 +29,7 @@ def server(tmp_path, monkeypatch, isolate_logging):
     finally:
         conn = getattr(getattr(srv, "meta_db", None), "conn", None)
         if conn is not None:
+            getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
             conn.close()
         sys.modules.pop("server", None)
 
@@ -255,5 +256,6 @@ def test_demo_mode_blocks_write(tmp_path, monkeypatch, isolate_logging):
     finally:
         conn = getattr(getattr(srv, "meta_db", None), "conn", None)
         if conn is not None:
+            getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
             conn.close()
         sys.modules.pop("server", None)

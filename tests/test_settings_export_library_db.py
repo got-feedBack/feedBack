@@ -31,6 +31,7 @@ def server_mod(tmp_path, monkeypatch):
     yield mod
     conn = getattr(getattr(mod, "meta_db", None), "conn", None)
     if conn is not None:
+        getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
         conn.close()
 
 
@@ -87,6 +88,7 @@ def test_export_includes_consistent_library_db_snapshot(client, server_mod, tmp_
             "SELECT title FROM songs WHERE filename = ?", ("snap.archive",)
         ).fetchall()
     finally:
+        getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
         conn.close()
     assert rows == [("SnapSong",)]
 
@@ -271,6 +273,7 @@ def test_full_db_backup_restore_round_trip(client, server_mod, tmp_path):
             "SELECT title FROM songs WHERE filename = ?", ("keepme.archive",)
         ).fetchall()
     finally:
+        getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
         conn.close()
     assert rows == [("KeepMe",)]
     assert not (tmp_path / "web_library.db.restore").exists()

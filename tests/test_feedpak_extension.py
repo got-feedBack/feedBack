@@ -100,6 +100,7 @@ def scan_server(tmp_path, monkeypatch, isolate_logging):
     yield mod
     conn = getattr(getattr(mod, "meta_db", None), "conn", None)
     if conn is not None:
+        getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
         conn.close()
 
 
@@ -161,6 +162,7 @@ def upload_client(tmp_path, monkeypatch):
         tc.close()
         conn = getattr(getattr(server, "meta_db", None), "conn", None)
         if conn is not None:
+            getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
             conn.close()
 
 
@@ -228,6 +230,7 @@ def settings_server(tmp_path, monkeypatch):
     finally:
         conn = getattr(getattr(server, "meta_db", None), "conn", None)
         if conn is not None:
+            getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
             conn.close()
 
 

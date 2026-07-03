@@ -409,6 +409,7 @@ def test_db_uses_wal_journal_mode(setup_routes):
         row = conn.execute("PRAGMA journal_mode").fetchone()
         assert row[0] == "wal"
     finally:
+        getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
         conn.close()
 
 

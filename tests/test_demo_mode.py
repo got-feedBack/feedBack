@@ -60,6 +60,7 @@ def _cleanup(server, client):
         server._DEMO_JANITOR_HOOKS.clear()
     conn = getattr(getattr(server, "meta_db", None), "conn", None)
     if conn is not None:
+        getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
         conn.close()
 
 
@@ -311,6 +312,7 @@ def test_register_demo_janitor_hook_in_plugin_context(tmp_path, monkeypatch):
 
     conn = getattr(getattr(server, "meta_db", None), "conn", None)
     if conn is not None:
+        getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
         conn.close()
     # Clean up janitor state so it doesn't bleed into other tests.
     server._DEMO_JANITOR_STOP.set()

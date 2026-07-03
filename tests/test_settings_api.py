@@ -75,6 +75,7 @@ def client(tmp_path, monkeypatch):
         meta_db = getattr(server, "meta_db", None)
         conn = getattr(meta_db, "conn", None)
         if conn is not None:
+            getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
             conn.close()
 
 
@@ -296,6 +297,7 @@ def server_module(tmp_path, monkeypatch):
     meta_db = getattr(mod, "meta_db", None)
     conn = getattr(meta_db, "conn", None)
     if conn is not None:
+        getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
         conn.close()
 
 
@@ -324,6 +326,7 @@ def test_get_dlc_dir_uses_config_when_env_empty(tmp_path, monkeypatch):
     finally:
         conn = getattr(getattr(mod, "meta_db", None), "conn", None)
         if conn is not None:
+            getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
             conn.close()
 
 
@@ -345,6 +348,7 @@ def test_get_dlc_dir_env_takes_precedence(tmp_path, monkeypatch):
     finally:
         conn = getattr(getattr(mod, "meta_db", None), "conn", None)
         if conn is not None:
+            getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
             conn.close()
 
 
@@ -362,6 +366,7 @@ def test_get_dlc_dir_env_dot_is_valid(tmp_path, monkeypatch):
     finally:
         conn = getattr(getattr(mod, "meta_db", None), "conn", None)
         if conn is not None:
+            getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
             conn.close()
 
 
@@ -404,6 +409,7 @@ def scan_module(tmp_path, monkeypatch, isolate_logging):
     yield mod
     conn = getattr(getattr(mod, "meta_db", None), "conn", None)
     if conn is not None:
+        getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
         conn.close()
 
 
@@ -525,6 +531,7 @@ def api_client(tmp_path, monkeypatch, isolate_logging):
     finally:
         conn = getattr(getattr(server, "meta_db", None), "conn", None)
         if conn is not None:
+            getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
             conn.close()
         _restore_loaded_plugins(plugins_snapshot)
 
@@ -653,6 +660,7 @@ def test_skip_startup_tasks_does_not_call_load_plugins_or_scan(tmp_path, monkeyp
     finally:
         conn = getattr(getattr(server, "meta_db", None), "conn", None)
         if conn is not None:
+            getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
             conn.close()
         _restore_loaded_plugins(plugins_snapshot)
 
@@ -698,6 +706,7 @@ def test_skip_startup_tasks_clears_stale_plugin_registry(tmp_path, monkeypatch, 
     finally:
         conn = getattr(getattr(server, "meta_db", None), "conn", None) if server else None
         if conn is not None:
+            getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
             conn.close()
         _restore_loaded_plugins(plugins_snapshot)
 

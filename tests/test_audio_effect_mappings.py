@@ -18,6 +18,7 @@ def client(tmp_path, monkeypatch):
             for attr in ("meta_db", "audio_effect_mappings"):
                 conn = getattr(getattr(server, attr, None), "conn", None)
                 if conn is not None:
+                    getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
                     conn.close()
 
 

@@ -5824,6 +5824,27 @@ def _background_scan():
 _scan_kick_lock = threading.Lock()
 _scan_rescan_pending = False
 
+# Handles to the running scan / enrichment worker threads. Both use the shared
+# MetadataDB connection, so teardown/shutdown MUST join them before closing that
+# connection — a daemon thread mid-query on a closed SQLite conn is a native
+# use-after-free that segfaults the process (seen flaky in CI). Set by
+# _kick_scan / _kick_enrich; joined by _join_background_db_threads().
+_scan_thread: threading.Thread | None = None
+_enrich_thread: threading.Thread | None = None
+
+
+def _join_background_db_threads(timeout: float = 30.0) -> None:
+    """Block until the background scan + enrichment workers finish (or timeout).
+
+    A scan kicks enrichment on completion, so join the scan first — by the time
+    it returns, _kick_enrich() has set _enrich_thread — then join enrichment."""
+    st = _scan_thread
+    if st is not None and st.is_alive():
+        st.join(timeout)
+    et = _enrich_thread
+    if et is not None and et.is_alive():
+        et.join(timeout)
+
 
 def _kick_scan() -> bool:
     """Request a library rescan, single-flight + coalescing.
@@ -5835,7 +5856,7 @@ def _kick_scan() -> bool:
     until the next periodic pass. Multiple late-arriving requests coalesce
     into a single follow-up.
     """
-    global _scan_rescan_pending
+    global _scan_rescan_pending, _scan_thread
     with _scan_kick_lock:
         if _scan_status["running"]:
             _scan_rescan_pending = True
@@ -5843,7 +5864,8 @@ def _kick_scan() -> bool:
         # Mark running synchronously so a parallel _kick_scan() observes it
         # before the worker thread has a chance to reassign _scan_status.
         _scan_status["running"] = True
-    threading.Thread(target=_scan_runner, daemon=True).start()
+    _scan_thread = threading.Thread(target=_scan_runner, daemon=True)
+    _scan_thread.start()
     return True
 
 
@@ -6538,13 +6560,14 @@ def _kick_enrich() -> bool:
     """Request an enrichment pass, single-flight + coalescing (the _kick_scan
     contract): True = a worker thread was started, False = one is running and
     a follow-up pass was queued."""
-    global _enrich_pending_pass
+    global _enrich_pending_pass, _enrich_thread
     with _enrich_kick_lock:
         if _enrich_status["running"]:
             _enrich_pending_pass = True
             return False
         _enrich_status["running"] = True
-    threading.Thread(target=_enrich_runner, daemon=True).start()
+    _enrich_thread = threading.Thread(target=_enrich_runner, daemon=True)
+    _enrich_thread.start()
     return True
 
 

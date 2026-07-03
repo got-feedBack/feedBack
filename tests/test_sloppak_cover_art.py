@@ -116,6 +116,7 @@ def dlc_client(tmp_path, monkeypatch):
         meta_db = getattr(server, "meta_db", None)
         conn = getattr(meta_db, "conn", None)
         if conn is not None:
+            getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
             conn.close()
 
 

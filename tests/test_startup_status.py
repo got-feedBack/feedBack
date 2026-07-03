@@ -85,6 +85,7 @@ def client(tmp_path, monkeypatch, isolate_logging):
         finally:
             conn = getattr(getattr(server, "meta_db", None), "conn", None)
             if conn is not None:
+                getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
                 conn.close()
 
 
@@ -127,6 +128,7 @@ def startup_harness(tmp_path, monkeypatch, isolate_logging):
     server._DEMO_JANITOR_THREAD = None
     conn = getattr(getattr(server, "meta_db", None), "conn", None)
     if conn is not None:
+        getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
         conn.close()
 
 
@@ -692,6 +694,7 @@ def test_startup_status_e2e_real_plugin_loader(tmp_path, monkeypatch, isolate_lo
         server._DEMO_JANITOR_THREAD = None
         conn = getattr(getattr(server, "meta_db", None), "conn", None)
         if conn is not None:
+            getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
             conn.close()
         with plugins_mod.PLUGINS_LOCK:
             plugins_mod.LOADED_PLUGINS.clear()
@@ -782,6 +785,7 @@ def test_startup_status_endpoint_background_thread_path(tmp_path, monkeypatch, i
         server._DEMO_JANITOR_THREAD = None
         conn = getattr(getattr(server, "meta_db", None), "conn", None)
         if conn is not None:
+            getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
             conn.close()
 
 
@@ -830,6 +834,7 @@ def test_startup_status_endpoint_background_thread_failure(tmp_path, monkeypatch
         server._DEMO_JANITOR_THREAD = None
         conn = getattr(getattr(server, "meta_db", None), "conn", None)
         if conn is not None:
+            getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
             conn.close()
 
 

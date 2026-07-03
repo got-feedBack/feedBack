@@ -36,6 +36,7 @@ def client(tmp_path, monkeypatch):
         finally:
             conn = getattr(getattr(server, "meta_db", None), "conn", None)
             if conn is not None:
+                getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
                 conn.close()
 
 
@@ -169,6 +170,7 @@ def test_server_app_request_id_propagated_to_logs(monkeypatch, tmp_path):
         ]
         conn = getattr(getattr(server_mod, "meta_db", None), "conn", None)
         if conn is not None:
+            getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
             conn.close()
 
     lines = [ln for ln in buf.getvalue().splitlines() if "server_probe_event" in ln]

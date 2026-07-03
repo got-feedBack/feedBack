@@ -15,6 +15,7 @@ def server_mod(tmp_path, monkeypatch):
     yield mod
     conn = getattr(getattr(mod, "meta_db", None), "conn", None)
     if conn is not None:
+        getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
         conn.close()
 
 
@@ -298,4 +299,5 @@ def test_library_provider_registration_is_available_to_plugins(tmp_path, monkeyp
             assert captured["unregister_library_provider"] is server.unregister_library_provider
     finally:
         if conn is not None:
+            getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
             conn.close()
