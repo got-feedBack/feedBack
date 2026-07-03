@@ -591,16 +591,34 @@
         const shelf = Array.isArray(suggestions) ? suggestions : [];
 
         const { mastered, learning } = _repertoireCounts();
-        const pct = Math.max(0, Math.min(100, Math.round((mastered / total) * 100)));
-        const meter =
-            '<div class="v3-rep-meter">' +
-              '<div class="flex items-baseline justify-between gap-3 mb-1">' +
-                '<span class="text-sm font-semibold text-fb-text">Repertoire</span>' +
-                '<span class="text-xs text-fb-textDim">' + mastered + ' of ' + total + ' song' + (total === 1 ? '' : 's') +
-                  (learning ? ' &middot; ' + learning + ' in progress' : '') + '</span>' +
-              '</div>' +
-              '<div class="v3-rep-track"><div class="v3-rep-fill" style="width:' + pct + '%"></div></div>' +
-            '</div>';
+        // Day-one zero-state (launch polish): no practice data and no real
+        // growth-edge rows → an invitational meter, never "0 of N". Starter
+        // rows are the server's no-attempts fallback, so they count as "no
+        // practice yet" too.
+        const starterShelf = shelf.length > 0 && !!shelf[0].starter;
+        const invitational = (mastered + learning) === 0 && (!shelf.length || starterShelf);
+        let meter;
+        if (invitational) {
+            meter =
+                '<div class="v3-rep-meter">' +
+                  '<div class="flex items-baseline justify-between gap-3 mb-1">' +
+                    '<span class="text-sm font-semibold text-fb-text">Repertoire</span>' +
+                    '<span class="text-xs text-fb-textDim">grows as you master songs</span>' +
+                  '</div>' +
+                  '<div class="v3-rep-track"><div class="v3-rep-fill" style="width:0%"></div></div>' +
+                '</div>';
+        } else {
+            const pct = Math.max(0, Math.min(100, Math.round((mastered / total) * 100)));
+            meter =
+                '<div class="v3-rep-meter">' +
+                  '<div class="flex items-baseline justify-between gap-3 mb-1">' +
+                    '<span class="text-sm font-semibold text-fb-text">Repertoire</span>' +
+                    '<span class="text-xs text-fb-textDim">' + mastered + ' of ' + total + ' song' + (total === 1 ? '' : 's') +
+                      (learning ? ' &middot; ' + learning + ' in progress' : '') + '</span>' +
+                  '</div>' +
+                  '<div class="v3-rep-track"><div class="v3-rep-fill" style="width:' + pct + '%"></div></div>' +
+                '</div>';
+        }
 
         let shelfHtml = '';
         if (shelf.length) {
@@ -613,9 +631,14 @@
                 '<div class="mt-1 text-sm text-fb-text truncate">' + esc(r.title) + '</div>' +
                 '<div class="text-xs text-fb-textDim truncate">' + esc(r.artist) + '</div>' +
                 '</button>').join('');
+            // Starter rows → the invitational "Start here" framing; real
+            // growth-edge rows → the usual "Keep practicing". Same cards.
+            const header = starterShelf
+                ? '<h3 class="text-sm font-semibold text-fb-text">Start here</h3>' +
+                  '<div class="text-xs text-fb-textDim mb-2">a few approachable songs to kick things off</div>'
+                : '<h3 class="text-sm font-semibold text-fb-text mb-2">Keep practicing</h3>';
             shelfHtml =
-                '<section class="v3-kp-shelf mt-4">' +
-                '<h3 class="text-sm font-semibold text-fb-text mb-2">Keep practicing</h3>' +
+                '<section class="v3-kp-shelf mt-4">' + header +
                 '<div class="v3-kp-row">' + cards + '</div>' +
                 '</section>';
         }
@@ -1816,6 +1839,20 @@
         }
     }
 
+    // Empty-library dead-end card (launch polish): only for a genuinely empty
+    // LOCAL library — a search / filter / format narrowing that merely matched
+    // nothing keeps the plain blank grid (saying "empty" there would lie), and
+    // remote providers own their own emptiness. The inline grid-column style
+    // spans the card across the grid without a new Tailwind class.
+    function _emptyLibraryHtml() {
+        if (state.q || state.format || activeFilterCount() !== 0 || state.provider !== 'local') return '';
+        return '<div class="flex flex-col items-center justify-center text-center py-8 gap-2" style="grid-column:1/-1">' +
+            '<div class="text-lg font-semibold text-fb-text">Your library is empty</div>' +
+            '<div class="text-sm text-fb-textDim max-w-md">Drop .sloppak files into your library folder, or use Upload above.</div>' +
+            '<button data-lib-empty-settings class="mt-3 bg-fb-primary hover:bg-fb-primaryHi text-white px-4 py-2 rounded-xl text-sm font-semibold">Open Settings</button>' +
+            '</div>';
+    }
+
     let _winRAF = 0;
     function requestWindowRender() {
         if (_winRAF) return;
@@ -1837,8 +1874,16 @@
         const rows = Math.ceil(total / Math.max(1, cols));
         sizer.style.height = (rows * rowH) + 'px';
         if (total === 0) {
-            grid.innerHTML = ''; grid.style.top = '0px';
+            grid.innerHTML = _emptyLibraryHtml(); grid.style.top = '0px';
             state.winRange = { start: 0, end: 0 };
+            if (grid.innerHTML) {
+                // The grid is absolutely positioned inside the sizer — give the
+                // sizer the card's height so it participates in layout.
+                sizer.style.height = grid.offsetHeight + 'px';
+                grid.querySelector('[data-lib-empty-settings]')?.addEventListener('click', () => {
+                    if (window.showScreen) window.showScreen('settings');
+                });
+            }
             return;
         }
         const sizerTop = _sizerTopInScroller(main, sizer);
@@ -2454,6 +2499,11 @@
         try { const r = await fetch('/api/song/' + enc(fn) + '/user-meta'); if (r.ok) meta = await r.json(); } catch (_) { /* offline → row data */ }
         let vocab = [];
         try { const r = await fetch('/api/tags'); if (r.ok) vocab = (await r.json()).tags || []; } catch (_) { /* */ }
+        // Match provenance (launch polish): the drawer names what this chart
+        // matched, so a silently-wrong first match is visible where the
+        // metadata lives. 404 (no row yet) / offline → no line.
+        let enrich = null;
+        try { const r = await fetch('/api/enrichment/song/' + enc(fn)); if (r.ok) enrich = await r.json(); } catch (_) { /* offline → no provenance line */ }
         if (_detailsEls) closeDetails();   // a concurrent open resolved first
 
         const st = {
@@ -2462,6 +2512,7 @@
             notes: meta.notes || '', tags: (meta.tags || []).slice(),
             fav: !!song.favorite, artDataUrl: null,
             gap: null, gapSel: null,   // gap-fill (R4a): preview state + selected keys
+            enrich: enrich,            // match provenance for the Identity section
         };
 
         const overlay = document.createElement('div');
@@ -2523,6 +2574,22 @@
             '<button data-gapfill-cancel class="px-3 py-1.5 bg-fb-card/60 hover:bg-fb-card border border-fb-border/50 rounded-lg text-xs text-fb-text">Cancel</button></div></div>';
     }
 
+    // Match-provenance line under the Identity fields (launch polish): names
+    // the canonical identity this chart matched — the invisible-first-wrong-
+    // match fix — with the same Fix-match escape hatch the card menu offers.
+    // Only for settled matches; pending/review/failed rows stay silent here
+    // (the review chip / match facet own those states).
+    function provenanceHtml(st) {
+        const e = st.enrich;
+        if (!e || (e.match_state !== 'matched' && e.match_state !== 'manual')) return '';
+        const who = [e.canon_artist, e.canon_title].filter(Boolean).join(' — ');
+        if (!who) return '';
+        const src = e.match_state === 'manual' ? 'your pick' : 'MusicBrainz';
+        return '<div class="flex items-baseline gap-2 text-xs text-fb-textDim">' +
+            '<span class="truncate">Matched: ' + esc(who) + ' (' + esc(src) + ')</span>' +
+            '<button data-det-fixmatch class="shrink-0 text-fb-primary hover:text-fb-primaryHi">Fix match</button></div>';
+    }
+
     function detailsHtml(song, st, vocab) {
         const art = st.artDataUrl || artUrl(song);
         const diffBtns = [1, 2, 3, 4, 5].map((n) =>
@@ -2556,6 +2623,7 @@
             '<span class="text-[0.625rem] px-1.5 py-0.5 rounded-full bg-gray-800/70 text-fb-textDim border border-gray-700" title="These came from the song&#39;s feedpak. Editing them writes back to the file.">From pack</span></div>' +
             field('det-title', 'Title', st.t) + field('det-artist', 'Artist', st.a) + field('det-album', 'Album', st.al) +
             '<div><label for="det-year" class="text-xs text-fb-textDim mb-1 block">Year</label><input type="text" inputmode="numeric" id="det-year" value="' + esc(st.y) + '" placeholder="e.g. 2024" class="w-full bg-fb-card border border-fb-border/60 rounded-lg px-3 py-2 text-sm text-fb-text outline-none focus:border-fb-primary/60"></div>' +
+            provenanceHtml(st) +
             '<div data-det-gapfill>' + gapFillHtml(st) + '</div></div>' +
 
             // Personal practice layer — local, never shared
@@ -2623,6 +2691,13 @@
 
         $('[data-det-save]')?.addEventListener('click', () => saveDetails(song, st));
         $('[data-det-remove]')?.addEventListener('click', () => removeFromLibrary(song));
+        // Fix match → the exact flow the card ⋮ menu uses (match-review.js).
+        // The drawer closes first: the match modal sits below the drawer's
+        // z-index, and the fix supersedes the edit anyway.
+        $('[data-det-fixmatch]')?.addEventListener('click', () => {
+            closeDetails();
+            if (window.__fbFixMatch) window.__fbFixMatch(song);
+        });
 
         // Gap-fill (R4a): user-initiated write of CONFIRMED missing info into
         // the pack file. The server recomputes proposals under its io lock, so

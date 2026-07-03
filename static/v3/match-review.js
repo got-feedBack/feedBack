@@ -35,9 +35,52 @@
     // ── Ambient chip + the Settings card's status line ───────────────────────
     // songs.js renders `#v3-songs-match-review` (hidden) in its toolbar and
     // calls window.__fbMatchReviewChip() after each toolbar build; review
-    // actions here re-call it. The same fetch feeds the Settings status line.
+    // actions here re-call it. The same fetch feeds the Settings status line
+    // and, while a pass is running, a quiet toolbar progress line (below).
     // Silent on failure — surfaces just stay as they are.
     let _chipBusy = false;
+    let _pollTimer = null;   // 5s status poll, alive ONLY while a pass runs
+
+    // Quiet library-visible progress (launch polish): a plain text line next
+    // to the review chip while the background pass is working through the
+    // queue — "Matching your library — X of Y". No toast, no sound; it simply
+    // disappears when the pass finishes (hearing-safe, design §11).
+    function _setProgressLine(running, states, total) {
+        let el = document.getElementById('v3-songs-match-progress');
+        const unscanned = states.unscanned || 0;
+        if (!running || unscanned <= 0 || total <= 0) {
+            if (el) el.remove();
+            return;
+        }
+        if (!el) {
+            const chip = document.getElementById('v3-songs-match-review');
+            if (!chip || !chip.parentElement) return;   // songs toolbar not on screen
+            el = document.createElement('span');
+            el.id = 'v3-songs-match-progress';
+            el.className = 'text-xs text-fb-textDim';
+            chip.insertAdjacentElement('afterend', el);
+        }
+        el.textContent = 'Matching your library — ' + Math.max(0, total - unscanned) + ' of ' + total;
+    }
+
+    // One-time transparency toast (launch polish): the first time this
+    // install is observed actually matching a real library, say plainly what
+    // is contacted, where results live, and where the switch is. Wrapped like
+    // app.js's fbNotify calls so a blocked localStorage / absent notifier can
+    // never break the chip.
+    function _announceOnce(running, total) {
+        try {
+            if (!running || total <= 0) return;
+            if (localStorage.getItem('fb_enrich_announce_v1')) return;
+            localStorage.setItem('fb_enrich_announce_v1', '1');
+            window.fbNotify?.show({
+                title: 'Library matching is on',
+                message: 'Song info and covers come from MusicBrainz and Cover Art Archive, stored locally. Your files are never changed unless you choose to write to them. Adjust in Settings → Library.',
+                icon: '📚',
+            });
+        } catch (_) { /* storage/notifier unavailable — skip quietly */ }
+    }
+
     async function refreshChip() {
         if (_chipBusy) return;
         _chipBusy = true;
@@ -62,7 +105,24 @@
                 if (st.unscanned) parts.push(st.unscanned + ' queued');
                 line.textContent = (body.running ? 'Matching… · ' : '') + parts.join(' · ');
             }
-        } catch (_) { /* offline — leave as-is */ } finally {
+            const running = !!body.running;
+            const total = body.total_songs || 0;
+            _setProgressLine(running, st, total);
+            _announceOnce(running, total);
+            // Poll only while a pass is actually running; a single guarded
+            // interval, cleared the moment the pass stops (no leaks).
+            if (running && !_pollTimer) {
+                _pollTimer = setInterval(refreshChip, 5000);
+            } else if (!running && _pollTimer) {
+                clearInterval(_pollTimer);
+                _pollTimer = null;
+            }
+        } catch (_) {
+            // Offline — leave surfaces as they are, but stop any poll so a
+            // dead server isn't pinged every 5s forever (the next toolbar
+            // build / settings open restarts it if a pass is still running).
+            if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+        } finally {
             _chipBusy = false;
         }
     }

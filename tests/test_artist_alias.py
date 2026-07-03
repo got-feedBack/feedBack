@@ -209,3 +209,47 @@ def test_list_aliases_sorted(client, server):
     _alias(client, "guns n roses", "Guns N' Roses")
     aliases = client.get("/api/artist-aliases").json()["aliases"]
     assert {a["raw_name"] for a in aliases} == {"ACDC", "guns n roses"}
+
+
+# ── Search (q) matches merged aliases (launch polish) ─────────────────────────
+
+def _search(client, q):
+    return {s["filename"] for s in
+            client.get("/api/library", params={"q": q}).json()["songs"]}
+
+
+def test_search_canonical_finds_raw_variants(client, server):
+    """Searching the canonical name must also find songs whose raw tag is a
+    merged variant — after ACDC→AC/DC, q="AC/DC" returns both."""
+    _seed(server, "a.archive", "ACDC")
+    _seed(server, "b.archive", "AC/DC")
+    _seed(server, "c.archive", "Other")
+    _alias(client, "ACDC", "AC/DC")
+    assert _search(client, "AC/DC") == {"a.archive", "b.archive"}
+
+
+def test_search_partial_canonical_finds_raw_variants(client, server):
+    """The alias term is a LIKE, matching the substring semantics of the
+    plain artist term."""
+    _seed(server, "a.archive", "ACDC")
+    _seed(server, "b.archive", "Other")
+    _alias(client, "ACDC", "AC/DC")
+    assert _search(client, "c/d") == {"a.archive"}
+
+
+def test_search_without_aliases_unchanged(client, server):
+    """No aliases → the fast path keeps the original 3-term search."""
+    _seed(server, "a.archive", "ACDC")
+    _seed(server, "b.archive", "AC/DC")
+    assert _search(client, "ACDC") == {"a.archive"}
+
+
+def test_search_title_album_unaffected_by_alias_term(client, server):
+    """With aliases present (extra placeholder appended), title/album search
+    still works — guards the parameter order."""
+    _seed(server, "a.archive", "ACDC")                       # title "a"
+    _alias(client, "ACDC", "AC/DC")
+    server.meta_db.put("t.archive", 0, 0,
+                       {"title": "Thunder Road", "artist": "Boss", "album": "Born"})
+    assert _search(client, "Thunder") == {"t.archive"}
+    assert _search(client, "Born") == {"t.archive"}

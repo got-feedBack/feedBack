@@ -2079,7 +2079,13 @@ class MetadataDB:
         cands = [(fn, a) for fn, a in agg.items()
                  if a["plays"] > 0 and a["acc"] is not None and a["acc"] < MASTERY_ACCURACY]
         if not cands:
-            return []
+            # Two different empties (launch polish): attempts exist but
+            # everything attempted is mastered → an empty shelf is honest;
+            # NOTHING attempted yet (day one) → "starter" picks instead, so
+            # the library home invites a first play rather than dead-ending.
+            if any(a["plays"] > 0 and a["acc"] is not None for a in agg.values()):
+                return []
+            return self.starter_suggestions(limit)
         diffs = self.user_meta_map([fn for fn, _ in cands])   # {filename: 1..5}
         out = []
         for fn, a in cands:
@@ -2094,6 +2100,28 @@ class MetadataDB:
             })
         out.sort(key=lambda r: (r["growth_score"], r["last_played_at"] or "", r["filename"]), reverse=True)
         return out[:limit]
+
+    def starter_suggestions(self, limit: int = 8) -> list[dict]:
+        """Day-one 'Start here' picks for a library with no practice attempts
+        yet: up to 8 approachable songs — sensible length (90s–480s, so intros/
+        jingles and 10-minute epics don't lead), shortest first, filename as a
+        stable tiebreak. Same row shape as the growth-edge rows plus a
+        `starter: true` marker so the client renders the invitational 'Start
+        here' shelf instead of 'Keep practicing'. Read-only."""
+        limit = max(1, min(8, int(limit)))
+        rows = self.conn.execute(
+            "SELECT filename FROM songs WHERE title != '' "
+            "AND duration >= 90 AND duration <= 480 "
+            "ORDER BY duration ASC, filename ASC LIMIT ?", (limit,)).fetchall()
+        return [{
+            "filename": r[0],
+            "best_accuracy": None,
+            "arrangement": None,
+            "last_played_at": None,
+            "user_difficulty": None,
+            "growth_score": 0.0,
+            "starter": True,
+        } for r in rows]
 
     # ── Playlists ─────────────────────────────────────────────────────────--
     SAVED_KEY = "saved_for_later"
@@ -3129,8 +3157,21 @@ class MetadataDB:
             if _msel:
                 where += " AND (" + " OR ".join(_msel) + ")"
         if q:
-            where += " AND (title LIKE ? COLLATE NOCASE OR artist LIKE ? COLLATE NOCASE OR album LIKE ? COLLATE NOCASE)"
-            params += [f"%{q}%"] * 3
+            _qlike = f"%{q}%"
+            _qterms = ("title LIKE ? COLLATE NOCASE OR artist LIKE ? COLLATE NOCASE "
+                       "OR album LIKE ? COLLATE NOCASE")
+            _qparams = [_qlike] * 3
+            # Alias-aware artist term (launch polish): searching the CANONICAL
+            # name ("AC/DC") must also find songs whose raw tag is a merged
+            # variant ("ACDC") — expand via the artist_alias table. Pure
+            # predicate (keyset-safe); probe-guarded so the common no-aliases
+            # library keeps the exact original 3-term query.
+            if self.conn.execute("SELECT 1 FROM artist_alias LIMIT 1").fetchone() is not None:
+                _qterms += (" OR artist COLLATE NOCASE IN (SELECT raw_name FROM artist_alias "
+                            "WHERE canonical_name LIKE ? COLLATE NOCASE)")
+                _qparams.append(_qlike)
+            where += f" AND ({_qterms})"
+            params += _qparams
         if include_intrinsic:
             ifrag, iparams = self._build_intrinsic_where(
                 "songs", format_filter=format_filter,
@@ -6721,6 +6762,19 @@ def enrichment_status():
         "states": meta_db.enrichment_state_counts(),
         "total_songs": meta_db.count(),
     }
+
+
+@app.get("/api/enrichment/song/{filename:path}")
+def api_enrichment_song(filename: str):
+    """Read-only per-song match provenance for the Details drawer (launch
+    polish): which canonical identity this chart matched and how. A tiny
+    projection of the cache row — no candidates, no cache paths."""
+    row = meta_db.get_enrichment(filename)
+    if not row:
+        raise HTTPException(status_code=404, detail="no enrichment row")
+    return {k: row.get(k) for k in
+            ("match_state", "canon_artist", "canon_title",
+             "match_source", "match_score")}
 
 
 @app.post("/api/enrichment/kick")
