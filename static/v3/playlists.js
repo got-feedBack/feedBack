@@ -241,7 +241,7 @@
             if (!shuffleBtn) return;
             const on = shuffleOn();
             shuffleBtn.className = on
-                ? 'px-2 py-2 rounded-md bg-fb-primary hover:bg-fb-primaryHi text-white'
+                ? 'px-2 py-2 rounded-md border border-fb-primary bg-fb-primary hover:bg-fb-primaryHi text-white'
                 : 'px-2 py-2 rounded-md border border-fb-border text-fb-textDim hover:text-fb-text';
             shuffleBtn.title = on ? 'Shuffle: on' : 'Shuffle: off';
             shuffleBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
