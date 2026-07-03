@@ -1479,6 +1479,26 @@
         renderBatchBar();
     }
 
+    // Bulletproof multi-select: in select mode a capture-phase click anywhere
+    // inside a [data-fn] row toggles the card and STOPS the event, so nothing (a
+    // per-card handler, a stray/legacy listener, an arrangement chip) can start
+    // playback. Attached ONCE to each persistent host (grid / tree / artist page)
+    // — their innerHTML is replaced on re-render but the host element survives,
+    // so a single bind never double-fires. Group headers / non-song chrome sit
+    // outside any [data-fn], so closest() is null and their native clicks pass
+    // through untouched.
+    function bindSelectGuard(hostEl) {
+        if (!hostEl) return;
+        hostEl.addEventListener('click', (e) => {
+            if (!state.selectMode) return;
+            const card = e.target.closest('[data-fn]');
+            if (!card || !hostEl.contains(card)) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            toggleSelect(card.getAttribute('data-fn'), card);
+        }, true);
+    }
+
     function setSelectMode(on) {
         state.selectMode = on;
         if (!on) state.selected.clear();
@@ -2288,18 +2308,24 @@
         }));
     }
     // `opts` (PR-B): the artist page reuses this album detail inside its own
-    // host with its own back label/target — { host, backLabel, onBack }.
-    // Call sites without opts are byte-for-byte the original albums-view flow.
+    // host with its own back label/target — { host, backLabel, onBack,
+    // ignoreFilters }. Call sites without opts are byte-for-byte the original
+    // albums-view flow.
     async function openAlbum(a, opts) {
         const host = (opts && opts.host) || document.getElementById('v3-songs-albums');
         if (!host) return;
         const backLabel = (opts && opts.backLabel) || '← Albums';
         const onBack = (opts && opts.onBack) || (() => loadAlbums());
         host.innerHTML = '<p class="text-fb-textDim text-sm">Loading…</p>';
-        // Honour the active drawer filters (like the album grid) but pin THIS
-        // album's artist/album and force track order — so the track list and
-        // Play-album never include songs the user filtered out.
-        const p = queryParams({ artist: a.artist, album: a.album, size: '300', sort: 'track' }, { catalog: true });
+        // Normally honour the active drawer filters (like the album grid) but pin
+        // THIS album's artist/album and force track order — so the track list and
+        // Play-album never include songs the user filtered out. When opened FROM
+        // an artist page (ignoreFilters), drop the global filters entirely: the
+        // artist page is the artist's whole shelf, so its album view must show
+        // every track to match the page's counts — scoped only to artist+album.
+        const p = (opts && opts.ignoreFilters)
+            ? new URLSearchParams({ provider: state.provider, artist: a.artist, album: a.album, size: '300', sort: 'track' })
+            : queryParams({ artist: a.artist, album: a.album, size: '300', sort: 'track' }, { catalog: true });
         const data = await jget('/api/library?' + p.toString());
         const songs = (data && data.songs) || [];
         host.innerHTML =
@@ -2588,7 +2614,7 @@
             const al = (page.albums || [])[Number(b.getAttribute('data-ap-album'))];
             if (!al) return;
             openAlbum({ artist: name, album: al.name },
-                { host: host, backLabel: '← ' + name, onBack: () => openArtistPage(name) });
+                { host: host, backLabel: '← ' + name, onBack: () => openArtistPage(name), ignoreFilters: true });
         }));
         // Similar chips → that artist's page (the return point stays the
         // original browse position — see openArtistPage).
@@ -3463,34 +3489,16 @@
             } catch (e) { /* */ }
         })();
 
-        // Bulletproof multi-select: in select mode, a capture-phase click on the
-        // grid toggles the card and STOPS the event, so nothing (a per-card
-        // handler, a stray/legacy listener, an arrangement chip) can start
-        // playback. Fixes "checkbox click opens the song / access-denied".
-        const gridEl = byId('v3-songs-grid');
-        if (gridEl) gridEl.addEventListener('click', (e) => {
-            if (!state.selectMode) return;
-            const card = e.target.closest('[data-fn]');
-            if (!card || !gridEl.contains(card)) return;
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            toggleSelect(card.getAttribute('data-fn'), card);
-        }, true);
-
-        // Same bulletproof guard for the list/tree view. Without it, clicking a
-        // song row (or its arrangement chip) in select mode falls through to the
-        // per-card play handler and starts playback instead of selecting. The
-        // <summary> group headers sit OUTSIDE any [data-fn], so closest() is null
-        // for them and their native expand/collapse is left untouched.
-        const treeEl = byId('v3-songs-tree');
-        if (treeEl) treeEl.addEventListener('click', (e) => {
-            if (!state.selectMode) return;
-            const card = e.target.closest('[data-fn]');
-            if (!card || !treeEl.contains(card)) return;
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            toggleSelect(card.getAttribute('data-fn'), card);
-        }, true);
+        // Capture-phase select-mode guard on each persistent list host. Without
+        // it, clicking a card/row (or its arrangement chip) in select mode falls
+        // through to the per-card play handler and starts playback instead of
+        // selecting ("checkbox click opens the song / access-denied"). The artist
+        // page renders the same [data-fn] song rows into its own host, so it
+        // needs the guard too — otherwise a row click there plays instead of
+        // toggling when select mode is already on.
+        bindSelectGuard(byId('v3-songs-grid'));
+        bindSelectGuard(byId('v3-songs-tree'));
+        bindSelectGuard(byId('v3-songs-artistpage'));
         const setView = async (v) => {
             state.view = v;
             byId('v3-songs-grid-btn').className = 'px-3 py-2 text-sm ' + (v === 'grid' ? 'bg-fb-primary text-white' : 'text-fb-textDim');
