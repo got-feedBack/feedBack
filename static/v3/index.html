@@ -785,6 +785,19 @@
                             <span id="enrich-status" class="text-xs text-gray-500"></span>
                         </div>
                     </div>
+                    <!-- Artist pages (PR-B — wired by static/v3/match-review.js). Sits
+                         beside the Metadata matching card; the Settings→Library tab
+                         regroup is a separate PR. -->
+                    <div class="fb-srow fb-srow-stack">
+                        <div class="fb-srow-main">
+                            <div class="fb-srow-title">Artist pages</div>
+                            <div class="fb-srow-desc">A page for every artist in your library — their songs, albums and your practice progress, built entirely from your local collection. External links (official site, tour dates, videos, social) come from one MusicBrainz lookup per matched artist and always open in your browser — nothing plays in-app, and they stay off until you opt in.</div>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2 mb-1 text-xs text-gray-400 fb-srow-wide">
+                            <label class="flex items-center gap-2"><input type="checkbox" id="artist-pages-enabled" checked class="rounded border-gray-600 bg-dark-700 text-accent"> Artist pages</label>
+                            <label class="flex items-center gap-2"><input type="checkbox" id="artist-external-links" class="rounded border-gray-600 bg-dark-700 text-accent"> Show external links (opens your browser)</label>
+                        </div>
+                    </div>
                     <!-- Backup -->
                     <div class="fb-srow fb-srow-stack">
                         <div class="fb-srow-main">

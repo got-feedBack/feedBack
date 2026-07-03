@@ -475,14 +475,23 @@
             ['enrich-apply-year', 'enrich_apply_year'],
             ['enrich-apply-genres', 'enrich_apply_genres'],
             ['enrich-apply-art', 'enrich_apply_art'],
+            // Artist pages (PR-B): the page itself — local-only, default ON.
+            ['artist-pages-enabled', 'artist_pages_enabled'],
         ].map(([id, key]) => [document.getElementById(id), key]).filter(([el]) => el);
-        if (!toggles.length && !sel && !btn) return;
+        // Default-OFF toggles load with the opposite absent-key semantic
+        // (checked only when explicitly true): the external-links row is
+        // opt-IN per the dev-chat thread.
+        const optInToggles = [
+            ['artist-external-links', 'artist_external_links'],
+        ].map(([id, key]) => [document.getElementById(id), key]).filter(([el]) => el);
+        if (!toggles.length && !optInToggles.length && !sel && !btn) return;
         (async () => {
             try {
                 const r = await fetch('/api/settings');
                 if (r.ok) {
                     const cfg = await r.json();
                     for (const [el, key] of toggles) el.checked = cfg[key] !== false;
+                    for (const [el, key] of optInToggles) el.checked = cfg[key] === true;
                     if (sel) {
                         const t = Number(cfg.enrich_auto_threshold);
                         const want = Number.isFinite(t) ? t : 0.9;
@@ -502,7 +511,7 @@
             refreshChip();   // also fills #enrich-status
         })();
         const save = (key, value) => post('/api/settings', { [key]: value });
-        for (const [el, key] of toggles) {
+        for (const [el, key] of toggles.concat(optInToggles)) {
             el.addEventListener('change', () => save(key, !!el.checked));
         }
         sel?.addEventListener('change', () => save('enrich_auto_threshold', Number(sel.value)));

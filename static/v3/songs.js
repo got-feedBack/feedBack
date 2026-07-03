@@ -65,6 +65,14 @@
         scrollBound: false,
         songsById: {}, selectMode: false, selected: new Set(),
         railLetters: null, railLettersAreSongCounts: false, railJumping: false,
+        // ── Artist page (PR-B) ──
+        // Non-null while the artist sub-page is showing (the artist's canonical
+        // or raw name). The gates mirror the two Settings toggles: pages are
+        // local-only and default ON; the external-links row is opt-in.
+        artistPage: null,
+        artistReturnScroll: null,   // scrollTop to restore on ← Song Library
+        artistPagesEnabled: true,
+        artistLinksEnabled: false,
         // ── Windowed (virtualized) grid, stage 2 of #636 item 3 ──
         // state.songs is a SPARSE array indexed by absolute library position
         // (0..total-1); only the fetched pages are populated and only the visible
@@ -845,7 +853,15 @@
             '<button data-menu title="More" aria-label="More actions" class="w-7 h-7 rounded-full bg-black/50 hover:bg-black/70 flex items-center justify-center text-white text-sm leading-none">⋮</button>' +
             '</div></div>' +
             '<div class="mt-1 text-sm text-fb-text truncate" title="' + esc(shown.title) + '">' + esc(shown.title) + '</div>' +
-            '<div class="text-xs text-fb-textDim truncate">' + esc(song.artist) + '</div>' +
+            // Artist line → the artist page (PR-B, entry point 2). The text
+            // block sits OUTSIDE the data-v3-play hitbox, so making it a
+            // button steals no play clicks. Same classes/line-height as the
+            // plain div (uniform card height is what makes the windowed
+            // grid's absolute-position math exact); non-local providers and
+            // the pages-off setting keep the original inert div.
+            ((state.provider === 'local' && song.artist && state.artistPagesEnabled !== false)
+                ? '<button data-v3-artist class="block w-full text-left text-xs text-fb-textDim truncate hover:text-fb-primary transition" title="Go to ' + esc(song.artist) + '">' + esc(song.artist) + '</button>'
+                : '<div class="text-xs text-fb-textDim truncate">' + esc(song.artist) + '</div>') +
             // Always emit the chip row (even when empty) at a FIXED single-line
             // height — uniform card height is what makes the windowed grid's
             // absolute-position math exact (.v3-card-chips in v3.css).
@@ -888,6 +904,10 @@
                 ? [{ id: '__unsplit', label: 'Rejoin other versions' }] : []),
             { id: '__playlist', label: 'Add to playlist' },
             { id: '__save', label: 'Save for later' },
+            // Artist page (PR-B, entry point 1) — local library only (the
+            // page reads the local DB) and gated on the Settings toggle.
+            ...(state.provider === 'local' && song.artist && state.artistPagesEnabled !== false
+                ? [{ id: '__artist', label: 'Go to artist' }] : []),
             ...items.map((a) => ({ id: a.id, label: a.label, destructive: a.destructive, enabled: a.enabled, plugin: a.pluginId })),
             // Metadata + file actions (R2) — local library only (they all
             // address the local DB / filesystem). Both openers (⋮ and
@@ -937,6 +957,7 @@
             }
             if (id === '__playlist') { await addFilenamesToPlaylist([song.filename]); return; }
             if (id === '__save') { if (window.v3Saved) await window.v3Saved.toggle(song.filename); return; }
+            if (id === '__artist') { openArtistPage(song.artist); return; }
             // Per-chart metadata actions follow the DISPLAYED chart (playTarget),
             // like Play — under an intrinsic filter that's the matching member,
             // not the group representative. (__remove stays on `song`: it needs
@@ -1410,6 +1431,12 @@
                 e.stopPropagation();
                 openChartsDrawer(e.currentTarget.getAttribute('data-charts'), song);
             });
+            // Artist line → the artist page (PR-B). In select mode the grid's
+            // capture-phase toggle intercepts first, so selection still wins.
+            el.querySelector('[data-v3-artist]')?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openArtistPage(song.artist);
+            });
             el.querySelector('[data-fav]')?.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 const btn = e.currentTarget;
@@ -1450,6 +1477,26 @@
         el.querySelector('[data-v3-play]')?.classList.toggle('ring-2', on);
         el.querySelector('[data-v3-play]')?.classList.toggle('ring-fb-primary', on);
         renderBatchBar();
+    }
+
+    // Bulletproof multi-select: in select mode a capture-phase click anywhere
+    // inside a [data-fn] row toggles the card and STOPS the event, so nothing (a
+    // per-card handler, a stray/legacy listener, an arrangement chip) can start
+    // playback. Attached ONCE to each persistent host (grid / tree / artist page)
+    // — their innerHTML is replaced on re-render but the host element survives,
+    // so a single bind never double-fires. Group headers / non-song chrome sit
+    // outside any [data-fn], so closest() is null and their native clicks pass
+    // through untouched.
+    function bindSelectGuard(hostEl) {
+        if (!hostEl) return;
+        hostEl.addEventListener('click', (e) => {
+            if (!state.selectMode) return;
+            const card = e.target.closest('[data-fn]');
+            if (!card || !hostEl.contains(card)) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            toggleSelect(card.getAttribute('data-fn'), card);
+        }, true);
     }
 
     function setSelectMode(on) {
@@ -2260,18 +2307,29 @@
             if (a) openAlbum(a);
         }));
     }
-    async function openAlbum(a) {
-        const host = document.getElementById('v3-songs-albums');
+    // `opts` (PR-B): the artist page reuses this album detail inside its own
+    // host with its own back label/target — { host, backLabel, onBack,
+    // ignoreFilters }. Call sites without opts are byte-for-byte the original
+    // albums-view flow.
+    async function openAlbum(a, opts) {
+        const host = (opts && opts.host) || document.getElementById('v3-songs-albums');
         if (!host) return;
+        const backLabel = (opts && opts.backLabel) || '← Albums';
+        const onBack = (opts && opts.onBack) || (() => loadAlbums());
         host.innerHTML = '<p class="text-fb-textDim text-sm">Loading…</p>';
-        // Honour the active drawer filters (like the album grid) but pin THIS
-        // album's artist/album and force track order — so the track list and
-        // Play-album never include songs the user filtered out.
-        const p = queryParams({ artist: a.artist, album: a.album, size: '300', sort: 'track' }, { catalog: true });
+        // Normally honour the active drawer filters (like the album grid) but pin
+        // THIS album's artist/album and force track order — so the track list and
+        // Play-album never include songs the user filtered out. When opened FROM
+        // an artist page (ignoreFilters), drop the global filters entirely: the
+        // artist page is the artist's whole shelf, so its album view must show
+        // every track to match the page's counts — scoped only to artist+album.
+        const p = (opts && opts.ignoreFilters)
+            ? new URLSearchParams({ provider: state.provider, artist: a.artist, album: a.album, size: '300', sort: 'track' })
+            : queryParams({ artist: a.artist, album: a.album, size: '300', sort: 'track' }, { catalog: true });
         const data = await jget('/api/library?' + p.toString());
         const songs = (data && data.songs) || [];
         host.innerHTML =
-            '<button data-albums-back class="text-sm text-fb-textDim hover:text-fb-text mb-4">← Albums</button>' +
+            '<button data-albums-back class="text-sm text-fb-textDim hover:text-fb-text mb-4">' + esc(backLabel) + '</button>' +
             '<div class="flex items-center justify-between gap-3 mb-4">' +
             '<div class="min-w-0"><h2 class="text-2xl font-bold text-fb-text truncate">' + esc(a.album) + '</h2>' +
             '<p class="text-sm text-fb-textDim truncate">' + esc(a.artist) + ' · ' + songs.length + ' track' + (songs.length === 1 ? '' : 's') + '</p></div>' +
@@ -2281,7 +2339,7 @@
                 '<li><button data-album-track="' + i + '" class="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-white/5 text-left">' +
                 '<span class="text-xs text-fb-textDim w-6 text-right">' + (i + 1) + '</span>' +
                 '<span class="flex-1 truncate text-sm text-fb-text">' + esc(s.title || s.filename) + '</span></button></li>').join('') + '</ul>';
-        host.querySelector('[data-albums-back]')?.addEventListener('click', () => loadAlbums());
+        host.querySelector('[data-albums-back]')?.addEventListener('click', () => onBack());
         host.querySelector('[data-album-playall]')?.addEventListener('click', () => {
             const files = songs.map((s) => s.filename).filter(Boolean);
             if (!files.length) return;
@@ -2293,6 +2351,315 @@
             if (s && window.playSong) window.playSong(enc(s.filename));
         }));
     }
+
+    // One list-row of a song — shared by the tree view and the artist page's
+    // song list, so wireCards() gives both the same play/chips/fav/save/⋮
+    // behaviour from one markup source.
+    function treeSongRowHtml(s) {
+        const k = cardKey(s); const fl = fmtLabel(s); const chips = arrChipsHtml(s); const sel = state.selected.has(k);
+        // Display-only checkbox (pointer-events-none); the row's
+        // capture-phase select handler (render()) owns the toggle.
+        const checkbox = state.selectMode
+            ? '<input type="checkbox" data-select class="shrink-0 w-5 h-5 accent-fb-primary pointer-events-none"' + (sel ? ' checked' : '') + '>'
+            : '';
+        return (
+        '<div class="relative flex items-center gap-2 py-1 group" data-fn="' + esc(k) + '" data-library-song="' + esc(songId(s)) + '" data-library-provider="' + esc(state.provider) + '">' +
+        checkbox +
+        '<img src="' + esc(artUrl(s)) + '" alt="" loading="lazy" decoding="async" class="w-8 h-8 rounded object-cover bg-fb-card cursor-pointer' + (sel ? ' ring-2 ring-fb-primary' : '') + '" data-v3-play onerror="this.style.visibility=\'hidden\'">' +
+        '<span class="flex-1 min-w-0 cursor-pointer" data-v3-play><span class="block text-sm text-fb-text truncate">' + esc(s.title) + '</span></span>' +
+        (chips ? '<span class="hidden sm:flex items-center gap-1 shrink-0">' + chips + '</span>' : '') +
+        (fl ? '<span class="text-[0.5625rem] font-bold px-1 py-0.5 rounded shrink-0 ' + (fl === 'FEEDPAK' ? 'bg-fb-primary/20 text-fb-primary' : 'bg-fb-card text-fb-textDim') + '">' + fl + '</span>' : '') +
+        accuracyBadge(k, 'tree') +
+        // Same fav / save-for-later / overflow-menu cluster as the grid
+        // card. Always shown (like the arrangement chips), not hover-
+        // revealed. wireCards() binds all three for any [data-fn].
+        '<div class="flex items-center gap-0.5 shrink-0">' +
+        '<button data-fav data-fav-idle="text-fb-textDim" title="Favorite" aria-label="Favorite" aria-pressed="' + (s.favorite ? 'true' : 'false') + '" class="px-1 ' + (s.favorite ? 'text-fb-accent' : 'text-fb-textDim') + '">' + (s.favorite ? '♥' : '♡') + '</button>' +
+        '<button data-save title="Save for later" aria-label="Save for later" class="px-1 text-fb-textDim hover:text-fb-text">🔖</button>' +
+        '<button data-menu title="More" aria-label="More actions" class="px-1 text-fb-textDim hover:text-fb-text leading-none">⋮</button>' +
+        '</div>' +
+        '</div>');
+    }
+
+    // ── Artist page (PR-B, artist-pages launch charrette) ──────────────────────
+    // An in-place sub-render like openAlbum(): the artist "in your library" — a
+    // shelf plus your relationship to it, never a discography browser (locked
+    // position 1). Renders 100% from the local /page payload; the external
+    // links row is the one decorated extra, gated on the opt-in Settings toggle
+    // AND a MusicBrainz match, fetched lazily and cached server-side. Every
+    // count obeys the DENOMINATOR LAW (locked position 2): songs YOU OWN.
+
+    function _artistHostEl() { return document.getElementById('v3-songs-artistpage'); }
+
+    // Sync the two Settings gates into module state (fire-and-forget — the
+    // cached flags gate entry-point rendering; openArtistPage re-checks).
+    function refreshArtistPageGates() {
+        return jget('/api/settings').then((cfg) => {
+            if (!cfg) return;
+            state.artistPagesEnabled = cfg.artist_pages_enabled !== false;
+            state.artistLinksEnabled = cfg.artist_external_links === true;
+        });
+    }
+
+    // 2×2 mosaic of the artist's OWN album art — the playlist-cover grammar
+    // (#626 playlistCoverHtml) adapted to the page payload's art_urls. Never a
+    // broken-image tile: no art → a quiet glyph.
+    function artistMosaicHtml(arts) {
+        const box = 'w-32 h-32 sm:w-40 sm:h-40 shrink-0 rounded-xl overflow-hidden bg-fb-card';
+        const img = (u) => '<img src="' + esc(u) + '" alt="" loading="lazy" decoding="async" class="w-full h-full object-cover" onerror="this.style.visibility=\'hidden\'">';
+        if (!arts || !arts.length) return '<div class="' + box + ' flex items-center justify-center text-5xl text-fb-textDim">🎤</div>';
+        if (arts.length < 4) return '<div class="' + box + '">' + img(arts[0]) + '</div>';
+        return '<div class="' + box + ' grid grid-cols-2 grid-rows-2 gap-px">' + arts.slice(0, 4).map(img).join('') + '</div>';
+    }
+
+    function _linkDomain(u) {
+        try { return new URL(u).hostname.replace(/^www\./, ''); } catch (_) { return ''; }
+    }
+
+    // Toggle the browse hosts (grid/tree/albums/folder + home + rail) so the
+    // artist page can own the scroller, and back again on close.
+    function _setBrowseHostsHidden(hidden) {
+        if (hidden) {
+            ['v3-songs-gridsizer', 'v3-songs-tree', 'v3-songs-albums', 'lib-folder-tree',
+             'v3-lib-home', 'v3-songs-azrail', 'v3-songs-azbubble']
+                .forEach((id) => document.getElementById(id)?.classList.add('hidden'));
+            const fc = document.getElementById('lib-folder-controls');
+            if (fc) fc.style.display = 'none';
+        } else {
+            document.getElementById('v3-songs-gridsizer')?.classList.toggle('hidden', state.view !== 'grid');
+            document.getElementById('v3-songs-tree')?.classList.toggle('hidden', state.view !== 'tree');
+            document.getElementById('v3-songs-albums')?.classList.toggle('hidden', state.view !== 'albums');
+            document.getElementById('lib-folder-tree')?.classList.toggle('hidden', state.view !== 'folder');
+            const fc = document.getElementById('lib-folder-controls');
+            if (fc) fc.style.display = state.view === 'folder' ? 'flex' : 'none';
+            refreshRail();
+            updateLibraryHome();
+        }
+    }
+
+    // The one exported opener — every entry point (card ⋮ / right-click "Go to
+    // artist", the grid card's artist line, the Details drawer link, a
+    // similar-artist chip) funnels through here.
+    async function openArtistPage(artistName) {
+        const host = _artistHostEl();
+        if (!host || !artistName) return;
+        if (state.provider !== 'local' || state.artistPagesEnabled === false) return;
+        const main = _getV3MainScroller();
+        // Remember where browsing left off ONCE — chip-hopping between artist
+        // pages keeps the original return point.
+        if (!state.artistPage) state.artistReturnScroll = main ? main.scrollTop : 0;
+        state.artistPage = artistName;
+        _setBrowseHostsHidden(true);
+        host.classList.remove('hidden');
+        host.innerHTML = '<p class="text-fb-textDim text-sm">Loading…</p>';
+        _applyMainScrollTop(0);
+        const page = await jget('/api/artist/' + enc(artistName) + '/page');
+        if (state.artistPage !== artistName) return;             // superseded
+        if (!page) { closeArtistPage(); return; }
+        await renderArtistPage(page);
+    }
+
+    function closeArtistPage() {
+        const host = _artistHostEl();
+        if (host) { host.classList.add('hidden'); host.innerHTML = ''; }
+        if (!state.artistPage) return;
+        state.artistPage = null;
+        _setBrowseHostsHidden(false);
+        const top = state.artistReturnScroll;
+        state.artistReturnScroll = null;
+        _applyMainScrollTop(top || 0);
+        if (state.view === 'grid') requestWindowRender();
+    }
+
+    // reload() (any toolbar-driven change) leaves the sub-page without the
+    // scroll restore — the new state describes a fresh browse from the top.
+    function _dropArtistPageSilently() {
+        if (!state.artistPage) return;
+        state.artistPage = null;
+        state.artistReturnScroll = null;
+        const host = _artistHostEl();
+        if (host) { host.classList.add('hidden'); host.innerHTML = ''; }
+    }
+
+    async function renderArtistPage(page) {
+        const host = _artistHostEl();
+        if (!host) return;
+        const me = state.artistPage;
+        const name = page.artist || me || '';
+        // Songs list: page through /api/library with the artist filter (locked
+        // position 6 — query_page, keyset-safe; never the DISTINCT+OFFSET
+        // query_artists path). Unfiltered on purpose: the page is the artist's
+        // whole shelf, not the grid's current filter view.
+        const songs = [];
+        let p = 0, total = Infinity;
+        while (songs.length < total) {
+            const q = new URLSearchParams({
+                provider: 'local', artist: name, sort: 'artist',
+                size: '100', page: String(p),
+            });
+            const data = await jget('/api/library?' + q.toString());
+            if (!data || !Array.isArray(data.songs)) break;
+            songs.push(...data.songs);
+            total = (data.total != null) ? data.total : songs.length;
+            if (!data.songs.length || p > 50) break;   // safety: no progress / runaway
+            p++;
+        }
+        if (state.artistPage !== me || !host.isConnected) return;  // superseded mid-fetch
+        songs.forEach((s) => { state.songsById[cardKey(s)] = s; });
+
+        const aliasLine = (page.variants || []).length
+            ? '<div class="text-xs text-fb-textDim mt-1">also shown as: ' +
+              page.variants.map((v) => esc(v.name) + ' ×' + v.count).join(' · ') + '</div>'
+            : '';
+        // Provenance pill — only when the artist is actually matched (drawer/
+        // Get-info grammar: say where the tidy names come from, ≤2 taps away).
+        const pill = page.mb_artist_id
+            ? '<div class="mt-2"><span class="inline-flex items-center text-[0.625rem] px-2 py-0.5 rounded-full bg-fb-primary/15 text-fb-primary border border-fb-primary/40" title="This artist is matched to MusicBrainz — the match lives in your local cache; your files are never modified">Matched · MusicBrainz</span></div>'
+            : '';
+        // Stats strip. DENOMINATOR LAW: every number is songs in YOUR library;
+        // the mastered segment is omitted entirely until one exists —
+        // invitational, never "0 mastered" (launch blind-spot #3).
+        const bits = [
+            page.song_count + ' song' + (page.song_count === 1 ? '' : 's'),
+            page.album_count + ' album' + (page.album_count === 1 ? '' : 's'),
+        ];
+        if (page.mastered_count > 0) bits.push(page.mastered_count + ' mastered');
+
+        const albumsHtml = (page.albums || []).length
+            ? '<section class="mt-6"><h3 class="text-sm font-semibold text-fb-text mb-2">Albums</h3>' +
+              '<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">' +
+              page.albums.map((al, i) =>
+                  '<button data-ap-album="' + i + '" class="group text-left">' +
+                  '<div class="aspect-square rounded-lg overflow-hidden bg-fb-card mb-2">' +
+                  (al.cover ? '<img src="' + esc(artUrl({ filename: al.cover })) + '" alt="" loading="lazy" decoding="async" class="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105" onerror="this.style.visibility=\'hidden\'">' : '') +
+                  '</div>' +
+                  '<div class="text-sm text-fb-text truncate">' + esc(al.name) + '</div>' +
+                  '<div class="text-xs text-fb-textDim truncate">' + (al.year ? esc(al.year) + ' · ' : '') + (al.count || 0) + ' track' + (al.count === 1 ? '' : 's') + '</div>' +
+                  '</button>').join('') +
+              '</div></section>'
+            : '';
+
+        const songsHtml = songs.length
+            ? '<section class="mt-6"><h3 class="text-sm font-semibold text-fb-text mb-2">Songs</h3>' +
+              '<div class="space-y-0.5">' + songs.map(treeSongRowHtml).join('') + '</div></section>'
+            : '<p class="text-sm text-fb-textDim mt-6">No songs by this artist are in your library.</p>';
+
+        // Similar in your library (locked position 3): genre co-occurrence over
+        // artists you already OWN — never an acquisition funnel. Empty → the
+        // whole module hides (never "Similar: none").
+        const similarHtml = (page.similar || []).length
+            ? '<section class="mt-6"><h3 class="text-sm font-semibold text-fb-text mb-2">Similar in your library</h3>' +
+              '<div class="flex flex-wrap gap-2">' +
+              page.similar.map((s) =>
+                  '<button data-ap-similar="' + esc(s.artist) + '" class="text-xs px-3 py-1.5 rounded-full bg-fb-card/60 border border-fb-border/50 text-fb-text hover:border-fb-primary/60 hover:text-fb-primary transition">' + esc(s.artist) + '</button>').join('') +
+              '</div></section>'
+            : '';
+
+        host.innerHTML =
+            '<button data-ap-back class="text-sm text-fb-textDim hover:text-fb-text mb-4">← Song Library</button>' +
+            '<div class="flex items-start gap-4">' +
+            artistMosaicHtml(page.art_urls) +
+            '<div class="min-w-0 flex-1">' +
+            '<h2 class="text-2xl font-bold text-fb-text truncate" title="' + esc(name) + '">' + esc(name) + '</h2>' +
+            aliasLine + pill +
+            '<p class="text-sm text-fb-textDim mt-2">' + bits.join(' · ') + '</p>' +
+            '<div class="flex flex-wrap gap-2 mt-3">' +
+            (songs.length
+                ? '<button data-ap-playall class="bg-fb-primary hover:bg-fb-primaryHi text-white text-sm font-medium px-4 py-2 rounded-md">▶ Play all</button>' +
+                  '<button data-ap-shuffle class="bg-fb-card/60 hover:bg-fb-card border border-fb-border/50 text-fb-text text-sm px-4 py-2 rounded-md">⇄ Shuffle</button>'
+                : '') +
+            '<button data-ap-smart class="bg-fb-card/60 hover:bg-fb-card border border-fb-border/50 text-fb-text text-sm px-4 py-2 rounded-md" title="A live playlist of everything by this artist — new songs join it automatically">Save as smart playlist</button>' +
+            '</div>' +
+            '</div></div>' +
+            albumsHtml +
+            songsHtml +
+            similarHtml +
+            // External links land here (lazy fetch) — hidden until they exist.
+            '<div data-ap-links></div>';
+
+        host.querySelector('[data-ap-back]')?.addEventListener('click', closeArtistPage);
+        // Play all / Shuffle → the shared playQueue (same path as Play-album).
+        const startQueue = (shuffle) => {
+            let files = songs.map((s) => s.filename).filter(Boolean);
+            if (!files.length) return;
+            if (shuffle) {
+                files = files.slice();
+                for (let i = files.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    const t = files[i]; files[i] = files[j]; files[j] = t;
+                }
+            }
+            _saveLibraryScrollSnapshot();
+            if (window.feedBack && window.feedBack.playQueue) window.feedBack.playQueue.start(files, { source: name });
+            else if (typeof window.playSong === 'function') window.playSong(enc(files[0]));
+        };
+        host.querySelector('[data-ap-playall]')?.addEventListener('click', () => startQueue(false));
+        host.querySelector('[data-ap-shuffle]')?.addEventListener('click', () => startQueue(true));
+        // Save as smart playlist (locked position 12): a rules-based
+        // collection over the existing machinery — a LIVING query that
+        // regenerates, never a completable checklist.
+        host.querySelector('[data-ap-smart]')?.addEventListener('click', async (e) => {
+            const btn = e.currentTarget;
+            const res = await jsend('POST', '/api/collections', { name: name, rules: { artist: name } });
+            if (res && res.ok) {
+                btn.textContent = '✓ Saved';
+                btn.disabled = true;
+                if (window.fbNotify) {
+                    try { window.fbNotify.show({ title: 'Smart playlist saved', message: '“' + name + '” is now a source in the library picker', icon: '🎵' }); } catch (_) { /* */ }
+                }
+            }
+        });
+        // Album cells reuse the album detail in place; back returns HERE.
+        host.querySelectorAll('[data-ap-album]').forEach((b) => b.addEventListener('click', () => {
+            const al = (page.albums || [])[Number(b.getAttribute('data-ap-album'))];
+            if (!al) return;
+            openAlbum({ artist: name, album: al.name },
+                { host: host, backLabel: '← ' + name, onBack: () => openArtistPage(name), ignoreFilters: true });
+        }));
+        // Similar chips → that artist's page (the return point stays the
+        // original browse position — see openArtistPage).
+        host.querySelectorAll('[data-ap-similar]').forEach((b) => b.addEventListener('click', () => {
+            openArtistPage(b.getAttribute('data-ap-similar'));
+        }));
+        wireCards(host);
+        decorateTuningChips(host);   // feature-detected; no-op without the capability
+        _fillArtistLinks(host, name, page);
+    }
+
+    // External links row (locked position 4): whitelisted MB url-rels, opt-in
+    // via Settings, always the external browser, domain visible. Renders ONLY
+    // when the toggle is on AND the fetch yields links — otherwise the section
+    // simply never appears (empty modules hide).
+    async function _fillArtistLinks(host, name, page) {
+        if (!state.artistLinksEnabled || !page.mb_artist_id) return;
+        const slot = host.querySelector('[data-ap-links]');
+        if (!slot) return;
+        const data = await jget('/api/artist/' + enc(name) + '/links');
+        // slot.isConnected covers every superseded case — navigating away, a
+        // reload, or hopping to another artist all replace this DOM.
+        if (!data || !slot.isConnected) return;
+        const links = data.links || {};
+        const items = [];
+        const push = (label, url) => { if (url) items.push({ label: label, url: url }); };
+        push('Official site', links.official);
+        push('Tour dates', links.tour);
+        push('Videos', links.video);
+        (Array.isArray(links.social) ? links.social : []).forEach((u) => push('Social', u));
+        push('Wikipedia', links.wikipedia);
+        if (!items.length) return;
+        slot.innerHTML =
+            '<div class="mt-6 pt-4 border-t border-fb-border/40">' +
+            '<div class="text-xs text-fb-textDim mb-2">On the web · opens your browser</div>' +
+            '<div class="flex flex-wrap gap-2">' +
+            items.map((it) =>
+                '<a href="' + esc(it.url) + '" target="_blank" rel="noopener noreferrer" class="text-xs px-3 py-1.5 rounded-full bg-fb-card/60 border border-fb-border/50 text-fb-text hover:border-fb-primary/60 transition">' +
+                esc(it.label) + ' ↗ <span class="text-fb-textDim">' + esc(_linkDomain(it.url)) + '</span></a>').join('') +
+            '</div></div>';
+    }
+
+    // Global opener — the drawer link, plugins, and other views reach the page
+    // without touching this module's internals.
+    window.__fbOpenArtistPage = openArtistPage;
 
     async function loadTree() {
         const host = document.getElementById('v3-songs-tree');
@@ -2326,30 +2693,7 @@
             '<span>' + esc(a.name) + '</span><span class="text-xs text-fb-textDim">' + esc(a.song_count) + '</span></summary>' +
             '<div class="pl-3 pb-2 space-y-2">' + (a.albums || []).map((al) =>
                 '<div><div class="text-xs uppercase tracking-wider text-fb-textDim/70 mt-2 mb-1">' + esc(al.name || 'Unknown') + '</div>' +
-                (al.songs || []).map((s) => {
-                    const k = cardKey(s); const fl = fmtLabel(s); const chips = arrChipsHtml(s); const sel = state.selected.has(k);
-                    // Display-only checkbox (pointer-events-none); the row's
-                    // capture-phase select handler (render()) owns the toggle.
-                    const checkbox = state.selectMode
-                        ? '<input type="checkbox" data-select class="shrink-0 w-5 h-5 accent-fb-primary pointer-events-none"' + (sel ? ' checked' : '') + '>'
-                        : '';
-                    return (
-                    '<div class="relative flex items-center gap-2 py-1 group" data-fn="' + esc(k) + '" data-library-song="' + esc(songId(s)) + '" data-library-provider="' + esc(state.provider) + '">' +
-                    checkbox +
-                    '<img src="' + esc(artUrl(s)) + '" alt="" loading="lazy" decoding="async" class="w-8 h-8 rounded object-cover bg-fb-card cursor-pointer' + (sel ? ' ring-2 ring-fb-primary' : '') + '" data-v3-play onerror="this.style.visibility=\'hidden\'">' +
-                    '<span class="flex-1 min-w-0 cursor-pointer" data-v3-play><span class="block text-sm text-fb-text truncate">' + esc(s.title) + '</span></span>' +
-                    (chips ? '<span class="hidden sm:flex items-center gap-1 shrink-0">' + chips + '</span>' : '') +
-                    (fl ? '<span class="text-[0.5625rem] font-bold px-1 py-0.5 rounded shrink-0 ' + (fl === 'FEEDPAK' ? 'bg-fb-primary/20 text-fb-primary' : 'bg-fb-card text-fb-textDim') + '">' + fl + '</span>' : '') +
-                    accuracyBadge(k, 'tree') +
-                    // Same fav / save-for-later / overflow-menu cluster as the grid
-                    // card. Always shown (like the arrangement chips), not hover-
-                    // revealed. wireCards() binds all three for any [data-fn].
-                    '<div class="flex items-center gap-0.5 shrink-0">' +
-                    '<button data-fav data-fav-idle="text-fb-textDim" title="Favorite" aria-label="Favorite" aria-pressed="' + (s.favorite ? 'true' : 'false') + '" class="px-1 ' + (s.favorite ? 'text-fb-accent' : 'text-fb-textDim') + '">' + (s.favorite ? '♥' : '♡') + '</button>' +
-                    '<button data-save title="Save for later" aria-label="Save for later" class="px-1 text-fb-textDim hover:text-fb-text">🔖</button>' +
-                    '<button data-menu title="More" aria-label="More actions" class="px-1 text-fb-textDim hover:text-fb-text leading-none">⋮</button>' +
-                    '</div>' +
-                    '</div>'); }).join('') + '</div>').join('') + '</div></details>').join('');
+                (al.songs || []).map(treeSongRowHtml).join('') + '</div>').join('') + '</div></details>').join('');
         wireCards(host);
     }
 
@@ -2626,7 +2970,13 @@
             // Identity — writes back into the feedpak FILE
             '<div class="space-y-3"><div class="flex items-center gap-2"><div class="text-xs font-semibold uppercase tracking-wider text-fb-textDim">Identity</div>' +
             '<span class="text-[0.625rem] px-1.5 py-0.5 rounded-full bg-gray-800/70 text-fb-textDim border border-gray-700" title="These came from the song&#39;s feedpak. Editing them writes back to the file.">From pack</span></div>' +
-            field('det-title', 'Title', st.t) + field('det-artist', 'Artist', st.a) + field('det-album', 'Album', st.al) +
+            field('det-title', 'Title', st.t) + field('det-artist', 'Artist', st.a) +
+            // Artist page (PR-B, entry point 3) — a small jump-off next to the
+            // Artist field; local library + pages-toggle gated like the others.
+            ((state.provider === 'local' && (st.a || song.artist) && state.artistPagesEnabled !== false)
+                ? '<button data-det-artist-page class="text-xs text-fb-primary hover:text-fb-primaryHi text-left">View artist page →</button>'
+                : '') +
+            field('det-album', 'Album', st.al) +
             '<div><label for="det-year" class="text-xs text-fb-textDim mb-1 block">Year</label><input type="text" inputmode="numeric" id="det-year" value="' + esc(st.y) + '" placeholder="e.g. 2024" class="w-full bg-fb-card border border-fb-border/60 rounded-lg px-3 py-2 text-sm text-fb-text outline-none focus:border-fb-primary/60"></div>' +
             provenanceHtml(st) +
             '<div data-det-gapfill>' + gapFillHtml(st) + '</div></div>' +
@@ -2713,6 +3063,15 @@
         $('[data-det-fixmatch]')?.addEventListener('click', () => {
             closeDetails();
             if (window.__fbFixMatch) window.__fbFixMatch(song);
+        });
+        // "View artist page →" — uses the field's CURRENT text (an in-progress
+        // rename still lands on the right page once saved; unsaved text simply
+        // canonicalizes server-side), falling back to the row's artist.
+        $('[data-det-artist-page]')?.addEventListener('click', () => {
+            const a = (st.a || '').trim() || song.artist || '';
+            if (!a) return;
+            closeDetails();
+            openArtistPage(a);
         });
 
         // Gap-fill (R4a): user-initiated write of CONFIRMED missing info into
@@ -2950,6 +3309,10 @@
 
     function reload() {
         _clearLibraryScrollSnapshot();
+        // Any toolbar-driven change backs out of the artist sub-page — the new
+        // state describes a fresh browse, and the host toggles below re-show
+        // the picked view (mirrors how openAlbum's detail yields to a reload).
+        _dropArtistPageSilently();
         // Record the state this fetch reflects so a later sidebar return can
         // tell whether the grid is stale (e.g. an off-screen search changed
         // state.q) and needs a refresh rather than a scroll-preserving no-op.
@@ -3019,6 +3382,9 @@
             (async () => { state.accuracy = (await jget('/api/stats/best')) || {}; })(),
             jget('/api/library/tuning-names?provider=' + enc(state.provider)),
             loadArtistCatalog(),
+            // Artist-page gates (PR-B) ride the initial fetch batch so the
+            // first card paint already knows whether artist lines are links.
+            refreshArtistPageGates(),
         ]);
         state.tuningNames = (tn && tn.tunings) || [];
         try { const _g = await jget('/api/library/genres?provider=' + enc(state.provider)); state.genres = (_g && _g.genres) || []; } catch (e) { state.genres = []; }
@@ -3062,6 +3428,9 @@
             '</div>' +
             '<div id="v3-songs-tree" class="hidden"></div>' +
             '<div id="v3-songs-albums" class="hidden"></div>' +
+            // Artist page host (PR-B) — an openAlbum-style in-place sub-render;
+            // populated + shown by openArtistPage, cleared on close/reload.
+            '<div id="v3-songs-artistpage" class="hidden"></div>' +
             '<div id="lib-folder-controls" style="display:none"></div>' +
             '<div id="lib-folder-tree" class="space-y-1 hidden"></div>' +
             '<div id="v3-songs-sentinel" class="h-8"></div>' +
@@ -3120,34 +3489,16 @@
             } catch (e) { /* */ }
         })();
 
-        // Bulletproof multi-select: in select mode, a capture-phase click on the
-        // grid toggles the card and STOPS the event, so nothing (a per-card
-        // handler, a stray/legacy listener, an arrangement chip) can start
-        // playback. Fixes "checkbox click opens the song / access-denied".
-        const gridEl = byId('v3-songs-grid');
-        if (gridEl) gridEl.addEventListener('click', (e) => {
-            if (!state.selectMode) return;
-            const card = e.target.closest('[data-fn]');
-            if (!card || !gridEl.contains(card)) return;
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            toggleSelect(card.getAttribute('data-fn'), card);
-        }, true);
-
-        // Same bulletproof guard for the list/tree view. Without it, clicking a
-        // song row (or its arrangement chip) in select mode falls through to the
-        // per-card play handler and starts playback instead of selecting. The
-        // <summary> group headers sit OUTSIDE any [data-fn], so closest() is null
-        // for them and their native expand/collapse is left untouched.
-        const treeEl = byId('v3-songs-tree');
-        if (treeEl) treeEl.addEventListener('click', (e) => {
-            if (!state.selectMode) return;
-            const card = e.target.closest('[data-fn]');
-            if (!card || !treeEl.contains(card)) return;
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            toggleSelect(card.getAttribute('data-fn'), card);
-        }, true);
+        // Capture-phase select-mode guard on each persistent list host. Without
+        // it, clicking a card/row (or its arrangement chip) in select mode falls
+        // through to the per-card play handler and starts playback instead of
+        // selecting ("checkbox click opens the song / access-denied"). The artist
+        // page renders the same [data-fn] song rows into its own host, so it
+        // needs the guard too — otherwise a row click there plays instead of
+        // toggling when select mode is already on.
+        bindSelectGuard(byId('v3-songs-grid'));
+        bindSelectGuard(byId('v3-songs-tree'));
+        bindSelectGuard(byId('v3-songs-artistpage'));
         const setView = async (v) => {
             state.view = v;
             byId('v3-songs-grid-btn').className = 'px-3 py-2 text-sm ' + (v === 'grid' ? 'bg-fb-primary text-white' : 'text-fb-textDim');
@@ -3178,6 +3529,18 @@
         // from scratch instead of restoring a cached (possibly empty, pre-DLC)
         // snapshot. Must win over every fast-path below.
         if (_libraryDirty) { _libraryDirty = false; await reload(); return; }
+        // Keep the entry-point gates current (a Settings visit may have
+        // toggled artist pages / external links). Fire-and-forget.
+        refreshArtistPageGates();
+        // An open artist sub-page survives a screen bounce as-is — its DOM is
+        // self-contained. A torn-down/hidden host means the state is stale;
+        // clear it and fall through to the normal restore paths.
+        if (state.artistPage) {
+            const ah = document.getElementById('v3-songs-artistpage');
+            if (ah && !ah.classList.contains('hidden') && ah.childElementCount) return;
+            state.artistPage = null;
+            state.artistReturnScroll = null;
+        }
         // Pull in any scores recorded while the library was off-screen (the usual
         // play→return flow) before the fast-paths below restore the cached DOM,
         // so the just-played song's badge is current. The full render() path
