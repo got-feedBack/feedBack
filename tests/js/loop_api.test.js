@@ -107,6 +107,7 @@ function loadFunctions(sandbox, src) {
             sectionPracticeModeCalls.push({ on, opts: opts || {} });
         }
         function _updateSectionPracticeHighlight(ct) {}
+        function _updateEditRegionBtn() {}
         ${extractFunction(src, 'function clearLoop(')}
         ${extractFunction(src, 'function _syncSavedLoopSelection()')}
         ${extractFunction(src, 'async function setLoop(')}

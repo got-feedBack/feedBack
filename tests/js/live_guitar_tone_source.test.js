@@ -40,7 +40,9 @@ test('settings UI exposes tone source select with all options', () => {
     assert.match(html, /value="external_hardware"/);
     assert.match(html, /value="spark_control_x"/);
     assert.match(html, /Live guitar tone source/);
-    assert.match(html, /won&rsquo;t warn that no internal amp tone is loaded/);
+    // Apostrophe form drifted from the &rsquo; entity to the literal ’ in a
+    // copy pass — accept entity, typographic, or plain apostrophe.
+    assert.match(html, /won(?:&rsquo;|’|')t warn that no internal amp tone is loaded/);
 });
 
 test('player audio rail exposes tone source select', () => {

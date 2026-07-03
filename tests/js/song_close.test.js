@@ -42,7 +42,10 @@ function loadClose(sandbox, src) {
         globalThis.__seekCalls = 0;
         globalThis.__playSongCalls = 0;
         globalThis.__clearLoopCalls = 0;
+        globalThis.__queueClearCalls = 0;
         globalThis.__audioCurrentTimeSets = [];
+        // closeCurrentSong abandons any play-queue before leaving the player.
+        var window = { feedBack: { playQueue: { clear() { globalThis.__queueClearCalls++; } } } };
         var audio = {
             _t: 42,
             get currentTime() { return this._t; },
@@ -75,6 +78,7 @@ test('closeCurrentSong uses _playerOriginScreen when set', async () => {
     await sandbox.__closeCurrentSong();
     assert.equal(sandbox.__showScreenCalls.length, 1);
     assert.equal(sandbox.__showScreenCalls[0], 'favorites');
+    assert.equal(sandbox.__queueClearCalls, 1, 'a real close abandons the play-queue');
     assert.equal(sandbox.__restartCalls, 0);
     assert.equal(sandbox.__seekCalls, 0);
     assert.equal(sandbox.__playSongCalls, 0);

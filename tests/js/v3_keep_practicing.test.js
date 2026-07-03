@@ -31,21 +31,23 @@ test('the home is the unfiltered grid front door, local provider only', () => {
     );
 });
 
-test('the shelf is recently-played, not-yet-mastered songs (per-song, deduped)', () => {
-    assert.match(src, /\/api\/stats\/recent\?limit=/);
-    // Mastery is gated on the per-SONG best (state.accuracy, what the badge
-    // shows), not the per-arrangement recents row, and each filename appears
-    // once — so no green-badged "keep practicing" card and no duplicates.
+test('the shelf is the server-side practice-suggestions recommender', () => {
+    // The old client-side pipeline (fetch /api/stats/recent, dedupe by
+    // filename, gate on state.accuracy) moved server-side: the growth-edge
+    // recommender gates (not-mastered) + aggregates per song and picks the
+    // arrangement closest to mastery. The client renders its rows as-is.
+    assert.match(src, /\/api\/library\/practice-suggestions\?limit=/);
+    // A shelf card click opens the row's recommended arrangement, not the
+    // song's default.
     assert.match(
         src,
-        /const\s+best\s*=\s*acc\[r\.filename\][\s\S]*?best\s*>=\s*MASTERY_ACCURACY/,
-        'the shelf must gate on the per-song best (state.accuracy) at MASTERY_ACCURACY',
+        /data-arr="[\s\S]*?getAttribute\('data-arr'\)[\s\S]*?playSong\(enc\(fn\), arr === '' \? undefined : Number\(arr\)\)/,
+        'shelf cards must pass the recommended arrangement to playSong',
     );
-    assert.match(src, /seen\.has\(r\.filename\)/, 'the shelf must dedupe recents by filename');
 });
 
 test('the meter + shelf fetch together and a stale render is discarded', () => {
-    assert.match(src, /Promise\.all\(\[[\s\S]*?library\/stats[\s\S]*?stats\/recent/,
+    assert.match(src, /Promise\.all\(\[[\s\S]*?library\/stats[\s\S]*?practice-suggestions/,
         'the two reads must be issued together (Promise.all), not sequentially');
     assert.match(src, /_homeToken[\s\S]*?_homeToken !== myToken/,
         'a stale render must be superseded by a newer one via a token');

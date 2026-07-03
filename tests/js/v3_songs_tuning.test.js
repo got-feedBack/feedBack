@@ -64,7 +64,9 @@ const helpers = loadTuningHelpers();
 
 test('v3 songs.js uses display helpers for album-art tuning badge', () => {
     const src = fs.readFileSync(SONGS_JS, 'utf8');
-    assert.match(src, /displayTuningName\(song\.tuning_name \|\| song\.tuning\)/);
+    // The card renderer's row variable was renamed song → shown when grouped
+    // cards landed (the badge reads the representative chart); accept either.
+    assert.match(src, /displayTuningName\((?:song|shown)\.tuning_name \|\| (?:song|shown)\.tuning\)/);
     assert.match(src, /displayTuningTargets/);
     assert.match(src, /parseRawTuningOffsets/);
 });

@@ -6195,7 +6195,7 @@ window.feedBack.on('song:ready', () => {
             setSpeed(pend.speed);
         }
     } catch (_) { /* speed restore is best-effort */ }
-    Promise.resolve(_audioSeek(Math.max(0, Number(pend.position) || 0), 'resume'))
+    Promise.resolve(_audioSeek(Math.max(0, Number(pend.position) || 0), 'session-resume'))
         .then(() => { if (_autoplayExitEnabled() && !isPlaying) return togglePlay(); })
         .catch((err) => console.warn('[app] resume failed:', err));
 });

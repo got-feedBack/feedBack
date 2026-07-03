@@ -35,10 +35,11 @@ function buildFacade() {
         'return _hwcInstallFacade;',
     ].join('\n');
     const params = [
-        'window', 'HWC_SLOTS', 'console',
+        'window', 'HWC_SLOTS', 'HWC_PRESETS', 'console',
         'getHighwayStringColors', 'getHighwayDefaultSlotColors', '_hwcMergedSlotColors',
         '_hwcSlotKeysForChart', '_hwcEffectiveIndexColors', '_hwcChartShape',
-        'applyHighwayStringColors', 'encodeHighwayColorShare', 'decodeHighwayColorShare',
+        'applyHighwayStringColors', 'applyHighwayStringPreset',
+        'encodeHighwayColorShare', 'decodeHighwayColorShare',
     ];
 
     const listeners = {};
@@ -64,14 +65,19 @@ function buildFacade() {
         _hwcEffectiveIndexColors: (map, sc, isBass) => ['eff', sc, isBass],
         _hwcChartShape: () => ({ sc: 6, isBass: false }),
         applyHighwayStringColors: (m) => { calls.push(['apply', m]); },
+        applyHighwayStringPreset: (id) => { calls.push(['preset', id]); return true; },
         encodeHighwayColorShare: (n, m) => 'SLOPHWY2.CODE',
         decodeHighwayColorShare: (c) => ({ name: 'x', colors: {} }),
     };
+    const HWC_PRESETS = [
+        { id: 'stock', label: 'Stock', colors: { lowE: '#cc0000' } },
+    ];
     const installer = new Function(...params, body)(
-        win, HWC_SLOTS, console,
+        win, HWC_SLOTS, HWC_PRESETS, console,
         stubs.getHighwayStringColors, stubs.getHighwayDefaultSlotColors, stubs._hwcMergedSlotColors,
         stubs._hwcSlotKeysForChart, stubs._hwcEffectiveIndexColors, stubs._hwcChartShape,
-        stubs.applyHighwayStringColors, stubs.encodeHighwayColorShare, stubs.decodeHighwayColorShare,
+        stubs.applyHighwayStringColors, stubs.applyHighwayStringPreset,
+        stubs.encodeHighwayColorShare, stubs.decodeHighwayColorShare,
     );
     installer();
     return { api: win.feedBack.highwayColors, win, bus, calls, installer, stubs };
@@ -87,11 +93,13 @@ test('facade exposes the documented surface', () => {
     const { api } = buildFacade();
     assert.equal(api.version, 1);
     for (const m of ['get', 'getDefaults', 'getResolved', 'keysForChart', 'toEffective',
-        'getCurrent', 'apply', 'encodeShare', 'decodeShare', 'onChange', 'offChange']) {
+        'getCurrent', 'apply', 'applyPreset', 'encodeShare', 'decodeShare', 'onChange', 'offChange']) {
         assert.equal(typeof api[m], 'function', `highwayColors.${m} must be a function`);
     }
     assert.deepEqual(api.slots.map((s) => s.key),
         ['highE', 'B', 'G', 'D', 'A', 'lowE', 'low7', 'low8'], 'slots in display order');
+    // One-click presets: exposed as detached [{ id, label, colors }] copies.
+    assert.deepEqual(api.presets, [{ id: 'stock', label: 'Stock', colors: { lowE: '#cc0000' } }]);
 });
 
 test('facade read methods delegate to the manager', () => {

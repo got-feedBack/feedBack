@@ -74,7 +74,10 @@ const APP_JS = path.join(ROOT, 'static', 'app.js');
 const LIBRARY_JS = path.join(ROOT, 'static', 'capabilities', 'library.js');
 
 function source(file) {
-    return fs.readFileSync(file, 'utf8');
+    // Normalize CRLF: region() slices fixed CHARACTER windows, so on a
+    // Windows checkout (autocrlf) every line costs one extra char and the
+    // assertion target can fall outside the window.
+    return fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
 }
 
 function region(src, needle, length = 1200) {
