@@ -10968,20 +10968,19 @@ async function loadPlugins() {
             const nameDelta = String(a.name || a.id || '').localeCompare(String(b.name || b.id || ''));
             return nameDelta || String(a.id || '').localeCompare(String(b.id || ''));
         });
-        const livePluginIds = new Set(plugins.map((plugin) => plugin.id));
-        for (const [pluginId, contributions] of _pluginUiContributions) {
-            if (livePluginIds.has(pluginId)) continue;
-            const stalePlugin = { id: pluginId };
-            for (const contribution of contributions) {
-                await _commandUiDomain(contribution.domain, 'unmount', stalePlugin, contribution);
-            }
-            try {
-                window.feedBack?.capabilities?.unregisterParticipant?.(pluginId);
-            } catch (e) {
-                console.warn(`capability participant unregister failed for ${pluginId}:`, e);
-            }
-            _pluginUiContributions.delete(pluginId);
-        }
+        // NOTE deliberately NO stale-contribution sweep for plugins absent
+        // from this response. Absent ≠ uninstalled: the backend clears its
+        // plugin registry at the start of load_plugins() and repopulates it
+        // incrementally while HTTP stays up, so every backend restart serves a
+        // window of partial (even empty) responses. The old sweep unmounted UI
+        // contributions and unregistered capability participants on mere
+        // absence, permanently breaking still-loaded plugins — their scripts
+        // don't re-run (loadedScripts guard below), so nothing ever
+        // re-registered. A genuine mid-session uninstall now leaves the
+        // (already-evaluated, un-unloadable) script's contributions in place
+        // until reload; its nav entry still disappears because nav is rebuilt
+        // from the response each round. Same invariant as the settings/screen
+        // DOM wipe and _reconcilePluginStyles below.
         console.log('[feedBack] loadPlugins: got', plugins.length, 'plugins');
 
         try {
@@ -11123,17 +11122,23 @@ async function loadPlugins() {
             loadedStyles.set(plugin.id, wantedVersion);
         };
         const _reconcilePluginStyles = (currentPlugins) => {
-            // Drop stylesheets for plugins that vanished from /api/plugins or are
-            // no longer ready+styled this round. _injectPluginStyles below only
-            // visits plugins still returned by the API, so an uninstalled or
-            // newly-not-ready plugin would otherwise keep its <link> applying.
+            // Drop stylesheets for plugins the response KNOWS about but that
+            // are no longer ready+styled this round. _injectPluginStyles below
+            // only visits plugins still returned by the API, so a newly-not-
+            // ready or unstyled plugin would otherwise keep its <link>
+            // applying. Plugins merely ABSENT from the response keep their
+            // stylesheet — a transient partial response during a backend
+            // restart is not an uninstall (same invariant as the screen/
+            // settings wipe below), and stripping the <link> would leave a
+            // still-loaded plugin visible but unstyled.
+            const responded = new Set(currentPlugins.map((p) => p.id));
             const styled = new Set(
                 currentPlugins
                     .filter((p) => (p.status || 'ready') === 'ready' && p.has_styles && p.styles)
                     .map((p) => p.id),
             );
             for (const id of Array.from(loadedStyles.keys())) {
-                if (!styled.has(id)) {
+                if (responded.has(id) && !styled.has(id)) {
                     _removePluginStyleTags(id);
                     loadedStyles.delete(id);
                 }
@@ -11146,6 +11151,18 @@ async function loadPlugins() {
                 if (pid) existingSettingsByPluginId.set(pid, child);
             }
         }
+        // Plugins named in THIS response. A plugin can be transiently absent
+        // from /api/plugins — the backend clears its registry at the start of
+        // load_plugins() and repopulates it incrementally while HTTP stays up,
+        // so every backend restart serves a window of partial (even empty)
+        // responses. The wipe loops below must never treat that absence as an
+        // uninstall: stripping a still-loaded plugin's DOM while keeping its
+        // loadedScripts entry made the NEXT refetch fail the DOM check and
+        // re-evaluate its screen.js mid-session — which duplicated the desktop
+        // audio_engine's native signal chain (its init re-ran against the
+        // surviving engine chain). Absent plugins keep their DOM and script;
+        // they're re-reconciled when they reappear in a later response.
+        const respondedIds = new Set(plugins.map((p) => p.id));
         const alreadyHydrated = new Set();
         for (const p of plugins) {
             if (!p.has_script) continue;
@@ -11173,7 +11190,10 @@ async function loadPlugins() {
         for (const container of _pluginSettingsContainers()) {
             [...container.children].forEach((el) => {
                 const pid = el.dataset ? el.dataset.pluginId : null;
-                if (!pid || !alreadyHydrated.has(pid)) el.remove();
+                // Remove junk (no plugin id) and plugins the response KNOWS
+                // about but that failed hydration; leave plugins absent from
+                // the response untouched (see respondedIds above).
+                if (!pid || (respondedIds.has(pid) && !alreadyHydrated.has(pid))) el.remove();
             });
         }
         document.querySelectorAll('.screen[id^="plugin-"]').forEach((el) => {
@@ -11182,7 +11202,7 @@ async function loadPlugins() {
             // change shipped — both forms strip a single leading "plugin-".
             const pid = (el.dataset && el.dataset.pluginId)
                 || el.id.replace(/^plugin-/, '');
-            if (!alreadyHydrated.has(pid)) el.remove();
+            if (!pid || (respondedIds.has(pid) && !alreadyHydrated.has(pid))) el.remove();
         });
 
         // Plugin settings area hosts both "Plugin Updates" and per-plugin

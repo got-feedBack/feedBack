@@ -204,15 +204,20 @@ test('does not collide tags across two different plugins', () => {
     assert.deepEqual(headLinks.map((l) => l.dataset.pluginId).sort(), ['a', 'b']);
 });
 
-test('reconcile removes the <link> of a plugin that vanished from /api/plugins', () => {
+test('reconcile keeps the <link> of a plugin absent from a partial response', () => {
     const { inject, reconcile, headLinks } = setupSandbox();
     inject(plug({ id: 'a' }));
     inject(plug({ id: 'b' }));
     assert.equal(headLinks.length, 2);
-    // `a` is no longer returned (uninstalled) — its stylesheet must be dropped.
+    // `a` is missing from this response. That happens transiently during a
+    // backend restart (the plugin registry repopulates while HTTP stays up),
+    // so absence is NOT an uninstall signal — the still-loaded plugin must
+    // keep its stylesheet or it renders visible-but-unstyled until it
+    // reappears. Explicit removal still happens via the not-ready/unstyled
+    // paths (tests below).
     reconcile([plug({ id: 'b' })]);
-    assert.equal(headLinks.length, 1);
-    assert.equal(headLinks[0].dataset.pluginId, 'b');
+    assert.equal(headLinks.length, 2);
+    assert.deepEqual(headLinks.map((l) => l.dataset.pluginId).sort(), ['a', 'b']);
 });
 
 test('reconcile removes the <link> of a plugin that is no longer ready', () => {
