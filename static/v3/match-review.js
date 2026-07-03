@@ -515,10 +515,34 @@
         });
     }
 
+    // Stop the 5s poll when the library screen is left — the progress line and
+    // chip only live in the songs toolbar, so polling off-screen is pure waste
+    // (benign but tidy). Re-entering v3-songs re-arms it: songs.js re-calls
+    // window.__fbMatchReviewChip() on screen enter, and we also refresh here so
+    // this stays self-contained. Same single-guarded-interval invariant as
+    // refreshChip — no double-interval, cleared to null.
+    function wireScreenTeardown() {
+        const sm = window.feedBack;
+        if (!sm || typeof sm.on !== 'function') return;
+        sm.on('screen:changed', (e) => {
+            const id = e && e.detail && e.detail.id;
+            if (id === 'v3-songs') {
+                refreshChip();   // returning while a pass runs re-arms the poll
+            } else if (_pollTimer) {
+                clearInterval(_pollTimer);
+                _pollTimer = null;
+            }
+        });
+    }
+
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', wireSettingsCard, { once: true });
+        document.addEventListener('DOMContentLoaded', () => {
+            wireSettingsCard();
+            wireScreenTeardown();
+        }, { once: true });
     } else {
         wireSettingsCard();
+        wireScreenTeardown();
     }
 
     window.__fbMatchReviewChip = refreshChip;
