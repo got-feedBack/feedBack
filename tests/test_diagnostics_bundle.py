@@ -204,7 +204,7 @@ def test_client_audio_session_contribution_redacts_paths(tmp_path):
     kw["client_contributions"] = {
         "note_detect": {
             "schema": "feedBack.audio_session.diagnostics.v1",
-            "session": {"sessionId": str(home_path / "DLC" / "private-song.archive")},
+            "session": {"sessionId": str(home_path / "DLC" / "private-song.feedpak")},
             "domains": {"audio-input": {"sources": [{"label": str(home_path / "devices" / "raw-id")}]}},
         }
     }
@@ -1541,7 +1541,7 @@ def test_console_error_object_args_are_redacted(tmp_path):
     kw = _basic_kwargs(tmp_path)
     kw["include"]["console"] = True
     kw["redact"] = True
-    secret_path = "/home/alice/Music/DLC/my_song.archive"
+    secret_path = "/home/alice/Music/DLC/my_song.feedpak"
     kw["client_console"] = [
         {
             "level": "error",
@@ -1567,13 +1567,13 @@ def test_console_string_args_still_redacted(tmp_path):
     kw["include"]["console"] = True
     kw["redact"] = True
     kw["client_console"] = [
-        {"level": "log", "msg": "ok", "args": ["loaded /home/alice/Music/DLC/my_song.archive ok"]},
+        {"level": "log", "msg": "ok", "args": ["loaded /home/alice/Music/DLC/my_song.feedpak ok"]},
     ]
     zip_bytes, _name, _m = db.build_bundle(**kw)
     with _open_zip(zip_bytes) as zf:
         console = json.loads(zf.read("client/console.json"))
     # The song filename should be replaced with a hash token, not appear verbatim.
-    assert "my_song.archive" not in console["entries"][0]["args"][0]
+    assert "my_song.feedpak" not in console["entries"][0]["args"][0]
 
 
 def test_console_non_string_non_dict_args_pass_through(tmp_path):

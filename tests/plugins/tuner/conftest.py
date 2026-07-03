@@ -5,6 +5,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / 'plugins' / 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+# Drop a sibling 'routes' cached by another plugin's tests (bare-name collision).
+sys.modules.pop('routes', None)
 import routes as tuner_routes
 
 
@@ -22,3 +24,19 @@ def client(config_dir):
         "unregister_tuning_provider": lambda pid: None,
     })
     return TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _bind_tuner_routes():
+    """Keep sys.modules['routes'] pointing at THIS plugin's routes for these
+    tests, so a runtime `import routes` in a test body resolves correctly
+    regardless of which other plugin's bare-named routes ran first."""
+    prev = sys.modules.get('routes')
+    sys.modules['routes'] = tuner_routes
+    try:
+        yield
+    finally:
+        if prev is not None:
+            sys.modules['routes'] = prev
+        else:
+            sys.modules.pop('routes', None)

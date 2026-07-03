@@ -7,6 +7,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+# Drop a sibling 'routes' cached by another plugin's tests (bare-name collision).
+sys.modules.pop('routes', None)
 import routes as ach_routes
 
 
@@ -26,3 +28,17 @@ def client(tmp_path):
     app = FastAPI()
     ach_routes.setup(app, {"config_dir": str(tmp_path)})
     return TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _bind_ach_routes():
+    """Keep sys.modules['routes'] pointing at THIS plugin's routes for these tests."""
+    prev = sys.modules.get('routes')
+    sys.modules['routes'] = ach_routes
+    try:
+        yield
+    finally:
+        if prev is not None:
+            sys.modules['routes'] = prev
+        else:
+            sys.modules.pop('routes', None)

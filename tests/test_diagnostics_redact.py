@@ -5,7 +5,7 @@ from diagnostics_redact import Redactor
 
 def test_dlc_path_replaced():
     r = Redactor(dlc_dir=Path("/dlc/songs"))
-    out = r.redact_text("loaded from /dlc/songs/foo.archive")
+    out = r.redact_text("loaded from /dlc/songs/foo.feedpak")
     assert "<DLC_DIR>" in out
     assert "/dlc/songs" not in out
     assert r.counts["paths_replaced"] == 1
@@ -13,8 +13,8 @@ def test_dlc_path_replaced():
 
 def test_song_filename_redacted_consistently():
     r = Redactor()
-    a = r.redact_text("Loading Test-Artist_Test-Song.archive")
-    b = r.redact_text("Replaying Test-Artist_Test-Song.archive again")
+    a = r.redact_text("Loading Test-Artist_Test-Song.feedpak")
+    b = r.redact_text("Replaying Test-Artist_Test-Song.feedpak again")
     token_a = a.split("Loading ")[1].strip()
     token_b = b.split("Replaying ")[1].split(" ")[0]
     assert token_a == token_b
@@ -63,8 +63,8 @@ def test_home_dir_replaced():
 def test_different_redactors_produce_different_tokens():
     a = Redactor()
     b = Redactor()
-    out_a = a.redact_text("Foo.archive")
-    out_b = b.redact_text("Foo.archive")
+    out_a = a.redact_text("Foo.feedpak")
+    out_b = b.redact_text("Foo.feedpak")
     assert out_a != out_b
 
 

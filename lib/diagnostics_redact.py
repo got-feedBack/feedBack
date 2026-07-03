@@ -34,7 +34,7 @@ _QSTRING_SECRET_RE = re.compile(
     r"(?i)\b(api[_-]?key|key|token|secret|password|pwd|auth)=([^\s&\"']+)"
 )
 _SONG_FILENAME_RE = re.compile(
-    r"\b[\w()'\-+&,.!?\[\]]+\.(?:psarc|sloppak|wem|ogg|mp3|wav)\b",
+    r"\b[\w()'\-+&,.!?\[\]]+\.(?:psarc|sloppak|feedpak|wem|ogg|mp3|wav)\b",
     re.IGNORECASE,
 )
 
