@@ -256,6 +256,12 @@ _DEMO_BLOCKED: list[tuple[str, re.Pattern]] = [
     # throttled Cover Art Archive calls — anonymous demo visitors don't get
     # to spend the shared rate budget (same rule as enrichment search/kick).
     ("GET",    re.compile(r"^/api/song/.+/art/candidates$")),
+    # Artist pages (PR-B): the links GET lazily fetches from MusicBrainz on a
+    # visitor's behalf AND writes the artist_enrichment cache; refresh
+    # re-spends the shared rate limit. The /page route stays open (all-local
+    # read). Same rationale as /api/enrichment/search above.
+    ("GET",    re.compile(r"^/api/artist/.+/links$")),
+    ("POST",   re.compile(r"^/api/artist/.+/links/refresh$")),
 ]
 
 
@@ -914,6 +920,22 @@ class MetadataDB:
                 self.conn.execute(ddl)
             except sqlite3.OperationalError:
                 pass
+        # Artist-level enrichment cache (artist pages, launch charrette §5):
+        # ONE row per matched MusicBrainz artist holding the whitelisted
+        # url-relations (external links) + MB genres from a single throttled
+        # artist lookup, fetched lazily on the first artist-page links request
+        # and refreshed only on demand. Keyed by mb_artist_id (NOT the display
+        # name), so alias merges / renames never orphan it. Never purged on
+        # rescan — like song_enrichment, it is re-derivable but expensive
+        # (rate-limited) to re-fetch. Additive + idempotent.
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS artist_enrichment (
+                mb_artist_id TEXT PRIMARY KEY,
+                url_rels TEXT,
+                genres TEXT,
+                fetched_at TEXT
+            )
+        """)
         # Progression (spec 010): instrument paths, challenges, quests, the
         # Decibels wallet, and the cosmetics shop. Targets/titles live in the
         # bundled content (data/progression/); these tables hold only player
@@ -1912,6 +1934,181 @@ class MetadataDB:
             (limit,)).fetchall()
         return [{"name": r[0], "count": r[1],
                  "canonical": amap.get((r[0] or "").lower(), r[0])} for r in rows]
+
+    # ── Artist pages (launch charrette PR-B) ─────────────────────────────────
+    # The artist page is "X *in your library*" — a shelf plus your relationship
+    # to it, never a discography browser (locked position 1). Everything here
+    # reads LOCAL rows only; the external-links layer (artist_enrichment) is a
+    # separate lazy cache keyed by mb_artist_id.
+
+    def artist_known_mb_id(self, variants: list) -> str | None:
+        """The artist's MusicBrainz id, if any of their songs' enrichment rows
+        carry one. Only `matched`/`manual` rows count (partial coverage is the
+        contract — degrade gracefully); the most common id wins so one stray
+        wrong match can't out-vote the rest of the shelf."""
+        if not variants:
+            return None
+        ph = ",".join(["?"] * len(variants))
+        row = self.conn.execute(
+            f"SELECT e.mb_artist_id, COUNT(*) c FROM song_enrichment e "
+            f"JOIN songs s ON s.filename = e.filename "
+            f"WHERE s.artist COLLATE NOCASE IN ({ph}) "
+            f"AND e.match_state IN ('matched', 'manual') "
+            f"AND e.mb_artist_id IS NOT NULL AND e.mb_artist_id != '' "
+            f"GROUP BY e.mb_artist_id ORDER BY c DESC, e.mb_artist_id LIMIT 1",
+            variants).fetchone()
+        return row[0] if row else None
+
+    def artist_page(self, name: str) -> dict:
+        """The all-LOCAL artist-page payload: canonical name (alias-aware),
+        the raw variants it merges, song/album counts, the albums list, the
+        mastered count (DENOMINATOR LAW, locked position 2: every number
+        counts songs YOU OWN — the WHERE is `artist IN (your variants)` over
+        `songs`, never anything external), mb_artist_id when known, header-
+        mosaic art, similar-in-library via genre co-occurrence (locked
+        position 3: only artists already in the library, empty → hidden), and
+        the play-all file list. An unknown name returns a zero-count page (an
+        unmatched artist is still a fully functional page)."""
+        from urllib.parse import quote
+        canonical = self._terminal_canonical((name or "").strip())
+        variants = self._raw_variants_for(canonical)
+        ph = ",".join(["?"] * len(variants)) if variants else "?"
+        rows = self.conn.execute(
+            f"SELECT filename, title, album, year, genre FROM songs "
+            f"WHERE title != '' AND artist COLLATE NOCASE IN ({ph}) "
+            f"ORDER BY album COLLATE NOCASE, (track_number IS NULL) ASC, "
+            f"COALESCE(disc, 1), track_number, title COLLATE NOCASE",
+            variants or [canonical]).fetchall()
+        # Albums: distinct non-empty album names in shelf order, each with the
+        # earliest authored year, a track count, and a representative cover
+        # song (the first row → also the mosaic's source).
+        albums: dict = {}
+        album_order: list = []
+        for fn, _t, album, year, _g in rows:
+            key = (album or "").strip()
+            if not key:
+                continue
+            k = key.lower()
+            if k not in albums:
+                albums[k] = {"name": key, "year": (year or ""), "count": 0, "cover": fn}
+                album_order.append(k)
+            albums[k]["count"] += 1
+            if not albums[k]["year"] and year:
+                albums[k]["year"] = year
+        album_list = [albums[k] for k in album_order]
+        # "also shown as": the raw variants actually present in the library
+        # (the canonical itself is the headline, so it's excluded).
+        vrows = self.conn.execute(
+            f"SELECT artist, COUNT(*) FROM songs "
+            f"WHERE title != '' AND artist COLLATE NOCASE IN ({ph}) "
+            f"GROUP BY artist COLLATE NOCASE ORDER BY COUNT(*) DESC",
+            variants or [canonical]).fetchall()
+        shown_as = [{"name": r[0], "count": r[1]} for r in vrows
+                    if (r[0] or "").lower() != (canonical or "").lower()]
+        # Mastered / practice presence — over THIS artist's library songs only.
+        mastered = 0
+        has_stats = False
+        fns = [r[0] for r in rows]
+        if fns:
+            fph = ",".join(["?"] * len(fns))
+            srows = self.conn.execute(
+                f"SELECT filename, MAX(best_accuracy) FROM song_stats "
+                f"WHERE filename IN ({fph}) GROUP BY filename", fns).fetchall()
+            has_stats = len(srows) > 0
+            mastered = sum(1 for _fn, acc in srows
+                           if acc is not None and acc >= MASTERY_ACCURACY)
+        # Similar in your library: other artists sharing songs.genre values,
+        # ranked by distinct shared genres then by how many of their songs sit
+        # in those genres. Raw artist rows are folded through the alias map so
+        # "ACDC" and "AC/DC" rank as one artist; self is excluded either way.
+        genres = sorted({(r[4] or "").strip().lower() for r in rows} - {""})
+        similar: list = []
+        if genres:
+            gph = ",".join(["?"] * len(genres))
+            grows = self.conn.execute(
+                f"SELECT artist, COUNT(DISTINCT lower(genre)), COUNT(*) FROM songs "
+                f"WHERE title != '' AND genre != '' AND lower(genre) IN ({gph}) "
+                f"AND artist IS NOT NULL AND artist != '' "
+                f"GROUP BY artist COLLATE NOCASE", genres).fetchall()
+            amap = self.alias_map()
+            agg: dict = {}
+            for raw, shared, n in grows:
+                canon = amap.get((raw or "").lower(), raw)
+                if (canon or "").lower() == (canonical or "").lower():
+                    continue
+                cur = agg.setdefault((canon or "").lower(),
+                                     {"artist": canon, "shared_genres": 0, "count": 0})
+                cur["shared_genres"] = max(cur["shared_genres"], shared)
+                cur["count"] += n
+            similar = sorted(
+                agg.values(),
+                key=lambda a: (-a["shared_genres"], -a["count"], (a["artist"] or "").lower())
+            )[:5]
+        # Header mosaic (locked position 10: MB hosts no artist images — the
+        # default is a mosaic of OWNED album art via the playlist-cover
+        # grammar): one representative song per album first, then fill from
+        # the remaining songs, up to 4.
+        seen: set = set()
+        art_files: list = []
+        for al in album_list:
+            if al["cover"] not in seen:
+                seen.add(al["cover"])
+                art_files.append(al["cover"])
+            if len(art_files) >= 4:
+                break
+        if len(art_files) < 4:
+            for fn in fns:
+                if fn not in seen:
+                    seen.add(fn)
+                    art_files.append(fn)
+                if len(art_files) >= 4:
+                    break
+        return {
+            "artist": canonical,
+            "variants": shown_as,
+            "song_count": len(rows),
+            "album_count": len(album_list),
+            "mastered_count": mastered,
+            "has_stats": has_stats,
+            "albums": album_list,
+            "mb_artist_id": self.artist_known_mb_id(variants),
+            "similar": similar,
+            "art_urls": [f"/api/song/{quote(fn)}/art" for fn in art_files],
+            # Play-all seed (album/track order, same as the rows above).
+            # Bounded so a pathological library can't balloon the payload.
+            "files": fns[:1000],
+        }
+
+    def get_artist_enrichment(self, mb_artist_id: str) -> dict | None:
+        """Cached artist-level enrichment row, JSON fields parsed (bad/legacy
+        JSON degrades to empty rather than 500ing the links route)."""
+        row = self.conn.execute(
+            "SELECT mb_artist_id, url_rels, genres, fetched_at "
+            "FROM artist_enrichment WHERE mb_artist_id = ?",
+            (mb_artist_id,)).fetchone()
+        if not row:
+            return None
+
+        def _parsed(raw, fallback):
+            try:
+                v = json.loads(raw) if raw else fallback
+            except (TypeError, ValueError):
+                return fallback
+            return v if isinstance(v, type(fallback)) else fallback
+
+        return {"mb_artist_id": row[0], "url_rels": _parsed(row[1], {}),
+                "genres": _parsed(row[2], []), "fetched_at": row[3]}
+
+    def put_artist_enrichment(self, mb_artist_id: str, url_rels: dict,
+                              genres: list) -> None:
+        """Store (or refresh) the one artist-level cache row."""
+        with self._lock:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO artist_enrichment "
+                "(mb_artist_id, url_rels, genres, fetched_at) "
+                "VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
+                (mb_artist_id, json.dumps(url_rels or {}), json.dumps(genres or [])))
+            self.conn.commit()
 
     def record_session(self, filename: str, arrangement: int, *, score: int,
                        accuracy: float, last_position=None) -> dict:
@@ -8084,6 +8281,120 @@ def delete_artist_alias(raw_name: str):
     return {"ok": True}
 
 
+# ── Artist pages (launch charrette PR-B) ──────────────────────────────────────
+# GET page = 100% local (renders offline, renders unmatched); GET links = the
+# ONE lazy MusicBrainz artist lookup, cached forever in artist_enrichment and
+# re-fetched only by the explicit refresh. Both links routes are demo-blocked
+# (they store server state + spend the shared MB rate limit).
+
+# MB artist url-relation types → the page's link slots (locked position 4:
+# whitelist only, links-only forever). Everything not listed is dropped.
+_ARTIST_URL_REL_SLOTS = {
+    "official homepage": "official",
+    "setlistfm": "tour",
+    "concerts": "tour",
+    "youtube": "video",
+    "video channel": "video",
+    "social network": "social",
+    "bandcamp": "social",
+    "soundcloud": "social",
+    "wikipedia": "wikipedia",
+    "wikidata": "wikipedia",
+}
+
+
+def _artist_links_from_mb(body: dict) -> tuple[dict, list]:
+    """Whitelist an MB artist doc's url-relations into the page's link slots:
+    {official, tour, video, social: [...], wikipedia}. Every URL passes the
+    same http(s)-scheme gate as art redirects (_safe_art_redirect_url) so a
+    hostile javascript:/data:/file: resource can never reach an href. First
+    URL wins per single slot; social collects up to 5; wikipedia is preferred
+    over wikidata when both exist. Also returns MB's genre names (capped)."""
+    links: dict = {}
+    social: list = []
+    wikidata_url = None
+    for rel in (body or {}).get("relations") or []:
+        if not isinstance(rel, dict):
+            continue
+        rtype = str(rel.get("type") or "").strip().lower()
+        slot = _ARTIST_URL_REL_SLOTS.get(rtype)
+        if not slot:
+            continue
+        url = rel.get("url")
+        url = url.get("resource") if isinstance(url, dict) else url
+        if _safe_art_redirect_url(url) is None:
+            continue
+        if slot == "social":
+            if url not in social and len(social) < 5:
+                social.append(url)
+        elif rtype == "wikidata":
+            wikidata_url = wikidata_url or url
+        elif slot not in links:
+            links[slot] = url
+    if social:
+        links["social"] = social
+    if "wikipedia" not in links and wikidata_url:
+        links["wikipedia"] = wikidata_url
+    genres = [str(g.get("name")) for g in (body or {}).get("genres") or []
+              if isinstance(g, dict) and g.get("name")]
+    return links, genres[:8]
+
+
+def _artist_links_payload(name: str, force: bool = False) -> dict:
+    """Shared by GET links + POST refresh. Order of gates: the user's opt-in
+    setting (external links are OFF by default — the dev-chat thread's call),
+    then a known mb_artist_id (no id → nothing to look up), then the cache
+    (unless force), then the offline guard, then ONE throttled fetch."""
+    cfg = _load_config(CONFIG_DIR / "config.json") or _default_settings()
+    if cfg.get("artist_external_links") is not True:
+        return {"links": {}, "matched": False, "disabled": True}
+    canonical = meta_db._terminal_canonical((name or "").strip())
+    mbid = meta_db.artist_known_mb_id(meta_db._raw_variants_for(canonical))
+    mbid = (mbid or "").strip().lower()
+    # The id is interpolated into the MB request path — same strict-shape rule
+    # as the manifest identity keys (_MBID_RE), so a junk/hostile value stored
+    # via a hand-rolled /pick body can never reach the request line.
+    if not mbid or not _MBID_RE.match(mbid):
+        return {"links": {}, "matched": False}
+    if not force:
+        cached = meta_db.get_artist_enrichment(mbid)
+        if cached:
+            return {"links": cached["url_rels"], "genres": cached["genres"],
+                    "matched": True, "cached": True, "mb_artist_id": mbid}
+    if not _enrich_network_enabled():
+        return {"links": {}, "matched": True, "offline": True, "mb_artist_id": mbid}
+    try:
+        body = _mb_http_get(f"artist/{mbid}", {"inc": "url-rels+genres+tags"})
+    except EnrichTransportError:
+        return {"links": {}, "matched": True, "offline": True, "mb_artist_id": mbid}
+    links, genres = _artist_links_from_mb(body or {})
+    meta_db.put_artist_enrichment(mbid, links, genres)
+    return {"links": links, "genres": genres, "matched": True, "cached": False,
+            "mb_artist_id": mbid}
+
+
+@app.get("/api/artist/{name:path}/page")
+def api_artist_page(name: str):
+    """The artist page's all-LOCAL payload — counts, albums, aliases, similar-
+    in-library, mosaic art, play-all seed. Never touches the network; an
+    unmatched or even unknown artist still returns a functional page."""
+    return meta_db.artist_page(name)
+
+
+@app.get("/api/artist/{name:path}/links")
+def api_artist_links(name: str):
+    """External links for a matched artist — cached after the first call.
+    Sync route on purpose (like /api/enrichment/search): FastAPI runs it in
+    the threadpool so the MB throttle's sleep never blocks the event loop."""
+    return _artist_links_payload(name)
+
+
+@app.post("/api/artist/{name:path}/links/refresh")
+def api_artist_links_refresh(name: str):
+    """Explicit re-fetch of the cached links (the page's manual Refresh)."""
+    return _artist_links_payload(name, force=True)
+
+
 # ── Player profile / unified XP / streak (fee[dB]ack v0.3.0) ──────────────────
 
 def _list_bundled_avatars() -> list[str]:
@@ -9212,6 +9523,14 @@ def _default_settings():
         # surface first (they gain the most), artist = A–Z, recent = newest
         # files first.
         "enrich_review_order": "missing_first",
+        # Artist pages (PR-B). The page itself is 100% local (renders from
+        # your own library rows), so it defaults ON; the external-links row
+        # (official site / tour dates / videos / social, one throttled
+        # MusicBrainz artist lookup per matched artist) is opt-IN — default
+        # OFF per the dev-chat thread. Links are links-only forever: always
+        # the external browser, never media delivered in-app.
+        "artist_pages_enabled": True,
+        "artist_external_links": False,
     }
 
 
@@ -9384,7 +9703,9 @@ def save_settings(data: dict):
             updates["enrich_auto_threshold"] = t
     for _bool_key in ("enrich_src_musicbrainz", "enrich_src_caa",
                       "enrich_apply_names", "enrich_apply_year",
-                      "enrich_apply_genres", "enrich_apply_art"):
+                      "enrich_apply_genres", "enrich_apply_art",
+                      # Artist pages (PR-B): page on/off + external-links opt-in.
+                      "artist_pages_enabled", "artist_external_links"):
         if _bool_key in data:
             raw = data[_bool_key]
             if raw is not None:
