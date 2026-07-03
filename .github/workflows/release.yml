@@ -35,9 +35,9 @@ jobs:
           # stable releases (no pre-release suffix).
           {
             echo "tags<<TAGS_EOF"
-            echo "ghcr.io/${GITHUB_REPOSITORY}:${version}"
+            echo "ghcr.io/${GITHUB_REPOSITORY,,}:${version}"
             if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "ghcr.io/${GITHUB_REPOSITORY}:latest"
+              echo "ghcr.io/${GITHUB_REPOSITORY,,}:latest"
             fi
             echo "TAGS_EOF"
           } >> "$GITHUB_OUTPUT"
