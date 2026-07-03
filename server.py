@@ -11023,6 +11023,16 @@ def post_song_revert_original(filename: str):
         except ValueError:
             pass
 
+    # Confine revert to actual song packages, mirroring the write path's guard
+    # (_gap_fill_proposals / _overwrite_proposals both refuse non-sloppak
+    # targets). Without this, a non-package path under DLC_DIR that happens to
+    # have a sibling `.bak` (or a plain directory carrying a manifest.yaml.bak)
+    # would get its backup copied over it and the DB re-synced — mutating a file
+    # this feature was never meant to touch. Same 404 the art/source endpoints
+    # return for a non-sloppak target.
+    if resolved is None or not resolved.exists() or not sloppak_mod.is_sloppak(resolved):
+        return JSONResponse({"error": "not found"}, 404)
+
     with _song_io_lock:
         bak = _song_backup_path(resolved)
         if bak is None:

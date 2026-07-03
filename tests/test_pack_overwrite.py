@@ -317,6 +317,19 @@ def test_revert_without_backup_is_404(server, client):
     assert client.post("/api/song/a.sloppak/revert-original").status_code == 404
 
 
+def test_revert_refuses_non_package_target_with_sibling_bak(server, client):
+    """A non-package file under DLC_DIR with a sibling `.bak` must NOT be
+    reverted — revert mirrors the write path's is_sloppak guard, so it never
+    restores a stray backup over a file the feature was not meant to touch."""
+    target = server.DLC_DIR / "notes.txt"
+    target.write_bytes(b"user notes, not a pack")
+    (server.DLC_DIR / "notes.txt.bak").write_bytes(b"stray backup")
+    r = client.post("/api/song/notes.txt/revert-original")
+    assert r.status_code == 404
+    # The target is left byte-for-byte untouched.
+    assert target.read_bytes() == b"user notes, not a pack"
+
+
 def test_preview_reports_backup_after_gap_fill(server, client):
     """Plain gap-fill (R4a) also leaves the one-time backup — the preview
     surfaces it so the drawer can offer Revert."""
