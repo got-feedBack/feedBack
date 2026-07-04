@@ -185,6 +185,22 @@ def test_enrich_auto_matches_japanese_primary_via_alias(server, monkeypatch):
     assert row["mb_recording_id"] == "rec-jp"
 
 
+# ── per-song field locks respected by the auto-matcher ───────────────────────
+
+def test_locked_field_not_canonicalized_by_auto_match(server, monkeypatch):
+    _put(server, "x.sloppak")                       # title "Thunderstruck (v2)", artist "ACDC"
+    server.meta_db.set_song_override("x.sloppak", "artist", locked=True)
+    monkeypatch.setattr(server, "_mb_http_get",
+                        lambda path, params: {"recordings": [mb_doc()]})
+    monkeypatch.setattr(server, "_enrich_network_enabled", lambda: True)
+    server._background_enrich()
+    row = server.meta_db.get_enrichment("x.sloppak")
+    assert row["match_state"] == "matched"          # still matches (identity applies)…
+    assert row["canon_artist"] is None              # …but the LOCKED artist isn't canonicalized
+    assert row["canon_title"] == "Thunderstruck"    # unlocked display fields still apply
+    assert row["mb_recording_id"]                   # identity keys still stored (art needs them)
+
+
 # ── offline safety (the pytest-never-hits-network contract) ──────────────────
 
 def test_offline_default_skips_matching(server, monkeypatch):
