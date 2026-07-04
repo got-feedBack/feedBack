@@ -256,7 +256,15 @@ def build_recording_query(artist, title, *, loose: bool = False) -> str:
         # (punctuation → spaces, diacritics stripped, & → "and"), so no
         # Lucene-special character survives to need escaping. Group each field's
         # terms and require both groups.
-        return " AND ".join("(%s)" % g for g in (t, a) if g)
+        q = " AND ".join("(%s)" % g for g in (t, a) if g)
+        # Keep the SAME live exclusion as the strict path: the loose query is
+        # lower-precision, and score_candidate doesn't penalize a live take, so
+        # without this a studio chart whose strict query missed could fall back
+        # to — and auto-confirm — a live-only recording. Skipped only when the
+        # source title is itself a live take (mirrors the strict path).
+        if q and not _LIVE_GROUP_RE.search(str(title or "")):
+            q += " AND -secondarytype:Live"
+        return q
     parts = []
     if t:
         parts.append('recording:"%s"' % _lucene_escape_phrase(t))

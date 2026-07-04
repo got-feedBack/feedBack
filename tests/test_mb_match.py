@@ -195,14 +195,25 @@ def test_build_recording_query_loose_drops_field_phrases():
     assert m.build_recording_query("Junko Ohashi", "Telephone Number") == \
         'recording:"telephone number" AND artist:"junko ohashi" AND -secondarytype:Live'
     # The loose form has no field scoping and no phrases, so MusicBrainz also
-    # searches artist ALIASES — rescues non-Latin-primary artists (大橋純子).
+    # searches artist ALIASES — rescues non-Latin-primary artists (大橋純子) —
+    # but keeps the same live exclusion (a studio chart must not fall back to a
+    # live-only recording).
     loose = m.build_recording_query("Junko Ohashi", "Telephone Number", loose=True)
-    assert loose == "(telephone number) AND (junko ohashi)"
+    assert loose == "(telephone number) AND (junko ohashi) AND -secondarytype:Live"
     assert "artist:" not in loose and '"' not in loose
 
 
 def test_build_recording_query_loose_missing_artist():
-    assert m.build_recording_query("", "Fantasy", loose=True) == "(fantasy)"
+    assert m.build_recording_query("", "Fantasy", loose=True) == \
+        "(fantasy) AND -secondarytype:Live"
+
+
+def test_build_recording_query_loose_keeps_live_for_live_charts():
+    # A live chart's loose fallback must NOT exclude live recordings (same gate
+    # as the strict path) — else its only correct recording is filtered out.
+    loose = m.build_recording_query("AC/DC", "Highway to Hell (Live at Donington)", loose=True)
+    assert "-secondarytype:Live" not in loose
+    assert loose == "(highway to hell) AND (ac dc)"
 
 
 # ── MusicBrainz response parsing ──────────────────────────────────────────────
