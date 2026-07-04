@@ -134,6 +134,57 @@ def test_search_does_not_retry_when_strict_hits(server, monkeypatch):
     assert len(calls) == 1
 
 
+# ── alias-aware scoring (non-Latin-primary artists) ──────────────────────────
+
+_AID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+
+def test_artist_aliases_fetched_and_cached(server, monkeypatch):
+    calls = []
+
+    def fake(path, params):
+        calls.append(path)
+        return {"sort-name": "Ohashi, Junko",
+                "aliases": [{"name": "Junko Ohashi"}, {"name": "大橋 純子"}]}
+
+    monkeypatch.setattr(server, "_mb_http_get", fake)
+    names = server._mb_artist_aliases(_AID)
+    assert "Junko Ohashi" in names and "Ohashi, Junko" in names
+    server._mb_artist_aliases(_AID)          # cached → no second request
+    assert len(calls) == 1
+
+
+def test_artist_aliases_rejects_bad_id(server, monkeypatch):
+    def boom(path, params):
+        raise AssertionError("must not fetch for a non-UUID id")
+
+    monkeypatch.setattr(server, "_mb_http_get", boom)
+    assert server._mb_artist_aliases("not-a-uuid") == []
+
+
+def test_enrich_auto_matches_japanese_primary_via_alias(server, monkeypatch):
+    # A pack whose (romanized) artist MB stores under a Japanese primary name.
+    _put(server, "x.sloppak", title="Telephone Number", artist="Junko Ohashi")
+
+    def _routed(path, params):
+        if path.startswith("artist/"):                      # alias lookup
+            return {"sort-name": "Ohashi, Junko",
+                    "aliases": [{"name": "Junko Ohashi"}]}
+        q = params.get("query", "")
+        if q.startswith("recording:"):                      # strict phrase → nothing
+            return {"recordings": []}
+        return {"recordings": [mb_doc(rid="rec-jp", title="Telephone Number",
+                                      artist="大橋純子", artist_id=_AID)]}   # loose hit
+
+    monkeypatch.setattr(server, "_mb_http_get", _routed)
+    monkeypatch.setattr(server, "_enrich_network_enabled", lambda: True)
+    server._background_enrich()
+    row = server.meta_db.get_enrichment("x.sloppak")
+    # The romanized alias lifts the artist over the auto floor → auto-confirmed.
+    assert row["match_state"] == "matched"
+    assert row["mb_recording_id"] == "rec-jp"
+
+
 # ── offline safety (the pytest-never-hits-network contract) ──────────────────
 
 def test_offline_default_skips_matching(server, monkeypatch):

@@ -144,12 +144,31 @@ def _duration_int(v):
         return None
 
 
+def cand_artist_sim(song: dict, cand: dict) -> float:
+    """Best artist similarity between the song's reference artist and the
+    candidate's PRIMARY name OR any of its `artist_aliases` (romanized/alternate
+    names). MusicBrainz stores many artists under a non-Latin primary name
+    (大橋純子) with the romanized form ("Junko Ohashi") only as an alias, so a
+    reference typed/derived in romaji scores 0 against the primary but 1.0
+    against the alias. The caller (server) attaches `artist_aliases` only for
+    promising near-misses, so this is a plain max when they're present and the
+    original single comparison when they're not."""
+    best = similarity(song.get("artist"), cand.get("artist"), artist=True)
+    for alias in cand.get("artist_aliases") or []:
+        if best >= 1.0:
+            break
+        s = similarity(song.get("artist"), alias, artist=True)
+        if s > best:
+            best = s
+    return best
+
+
 def score_candidate(song: dict, cand: dict) -> float:
     """Combined confidence that MusicBrainz candidate `cand` is the song the
     chart transcribes. 0.5*artist + 0.5*title, plus small year/duration
     corroboration bonuses, capped at 1.0. Missing fields score 0 on their
     half — classify() separately refuses to auto-match without both."""
-    artist_sim = similarity(song.get("artist"), cand.get("artist"), artist=True)
+    artist_sim = cand_artist_sim(song, cand)
     title_sim = similarity(song.get("title"), cand.get("title"))
     score = 0.5 * artist_sim + 0.5 * title_sim
     sy, cy = _year_int(song.get("year")), _year_int(cand.get("year"))
@@ -180,7 +199,7 @@ def classify(song: dict, cand: dict, score: float, auto_min: float | None = None
     """
     if auto_min is None:
         auto_min = AUTO_MIN
-    artist_sim = similarity(song.get("artist"), cand.get("artist"), artist=True)
+    artist_sim = cand_artist_sim(song, cand)
     title_sim = similarity(song.get("title"), cand.get("title"))
     if (score >= auto_min and artist_sim >= AUTO_ARTIST_MIN
             and title_sim >= AUTO_TITLE_MIN):

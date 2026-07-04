@@ -216,6 +216,27 @@ def test_build_recording_query_loose_keeps_live_for_live_charts():
     assert loose == "(highway to hell) AND (ac dc)"
 
 
+# ── alias-aware artist scoring ────────────────────────────────────────────────
+
+def test_cand_artist_sim_uses_aliases():
+    song = {"artist": "Junko Ohashi", "title": "Telephone Number"}
+    # primary is the Japanese name → romanized reference scores 0…
+    assert m.cand_artist_sim(song, {"artist": "大橋純子"}) == 0.0
+    # …but a romanized alias confirms it
+    assert m.cand_artist_sim(
+        song, {"artist": "大橋純子", "artist_aliases": ["Ohashi Junko", "Junko Ohashi"]}) == 1.0
+
+
+def test_alias_lifts_candidate_to_auto():
+    song = {"artist": "Junko Ohashi", "title": "Telephone Number"}
+    jp = {"artist": "大橋純子", "title": "Telephone Number"}
+    # Without the alias: title matches but the artist floor fails → never auto.
+    assert m.classify(song, jp, m.score_candidate(song, jp)) != "auto"
+    # With the romanized alias attached: artist clears the floor → auto.
+    jp_alias = dict(jp, artist_aliases=["Junko Ohashi"])
+    assert m.classify(song, jp_alias, m.score_candidate(song, jp_alias)) == "auto"
+
+
 # ── MusicBrainz response parsing ──────────────────────────────────────────────
 
 MB_DOC = {

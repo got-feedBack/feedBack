@@ -6544,6 +6544,78 @@ _MBID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 _ISRC_RE = re.compile(r"^[A-Z]{2}[A-Z0-9]{3}[0-9]{7}$")
 
 
+# ── Alias-aware scoring ───────────────────────────────────────────────────────
+# MusicBrainz stores many artists under a non-Latin PRIMARY name (大橋純子) with
+# the romanized form ("Junko Ohashi") only as an ALIAS. A recording search
+# returns the primary name in its artist-credit, never the aliases — so scoring
+# a romanized reference against the primary gives 0 and the match can't confirm.
+# We fetch the artist's aliases (one throttled lookup, process-cached) and hand
+# them to the scorer, but ONLY for a promising near-miss (title already agrees,
+# artist doesn't) so a normal pass spends no extra requests.
+_ALIAS_ENRICH_MAX = 3          # cap alias lookups per song/search (each is ≤1/s)
+_artist_alias_cache: dict[str, list[str]] = {}
+
+
+def _mb_artist_aliases(artist_id: str) -> list[str]:
+    """Romanized/alternate names for a MusicBrainz artist, process-cached (an
+    artist recurs across a whole discography, so a library of one artist costs
+    ONE lookup). Returns [] for an unknown/aliasless artist. Raises
+    EnrichTransportError on a network failure so the caller pauses the pass
+    (nothing is cached on failure → retried next pass)."""
+    aid = str(artist_id or "")
+    if aid in _artist_alias_cache:
+        return _artist_alias_cache[aid]
+    if not _MBID_RE.match(aid):
+        return []
+    body = _mb_http_get(f"artist/{aid}", {"inc": "aliases"})
+    names: list[str] = []
+    if body:
+        sort_name = str(body.get("sort-name") or "").strip()
+        if sort_name:
+            names.append(sort_name)          # often the romanized form for JP artists
+        for al in body.get("aliases") or []:
+            if isinstance(al, dict) and al.get("name"):
+                names.append(str(al["name"]))
+    seen: set[str] = set()
+    out: list[str] = []
+    for n in names:
+        k = n.casefold()
+        if k and k not in seen:
+            seen.add(k)
+            out.append(n)
+    out = out[:12]
+    _artist_alias_cache[aid] = out
+    return out
+
+
+def _alias_enrich(ref: dict, cands: list[dict]) -> None:
+    """Attach `artist_aliases` in place to candidates that look like the
+    non-Latin-primary case — title agrees with the reference but the primary
+    artist doesn't — so the scorer can confirm them via a romanized alias.
+    Bounded by _ALIAS_ENRICH_MAX + the process cache; a no-op when the
+    reference has no artist or nothing is aliasable."""
+    ref_artist = (ref.get("artist") or "").strip()
+    if not ref_artist:
+        return
+    spent = 0
+    for c in cands:
+        if spent >= _ALIAS_ENRICH_MAX:
+            break
+        if not isinstance(c, dict) or c.get("artist_aliases") is not None:
+            continue
+        aid = c.get("artist_id")
+        if not aid:
+            continue
+        # Only spend a lookup on a promising near-miss: the title already
+        # matches, but the primary artist doesn't (that's the alias signature).
+        if mb_match.similarity(ref.get("title"), c.get("title")) < mb_match.AUTO_TITLE_MIN:
+            continue
+        if mb_match.similarity(ref_artist, c.get("artist"), artist=True) >= mb_match.AUTO_ARTIST_MIN:
+            continue
+        c["artist_aliases"] = _mb_artist_aliases(aid)   # cached; attach [] to avoid refetch
+        spent += 1
+
+
 def _manifest_exact_ids(filename: str) -> dict:
     """Optional `mbid`/`isrc` from the pack manifest — the spec's additive
     identity keys. Feature-detected: packs published before that spec
@@ -6956,7 +7028,13 @@ def _enrich_one(row: dict, auto_min: float | None = None, field_filter=None,
                                            cand=field_filter(cands[0]) if field_filter else cands[0])
             return
 
-    ranked = mb_match.rank_candidates(ref, _mb_search_recordings(ref.get("artist"), ref.get("title")))
+    cands = _mb_search_recordings(ref.get("artist"), ref.get("title"))
+    # Alias-enrich promising near-misses (title agrees, primary artist doesn't)
+    # so a non-Latin-primary artist can confirm via its romanized alias, then
+    # rank once with the aliases in hand. `ref` carries any filename-derived
+    # artist seed, so alias scoring runs against the searched identity.
+    _alias_enrich(ref, cands)
+    ranked = mb_match.rank_candidates(ref, cands)
     best = ranked[0] if ranked else None
     tier = mb_match.classify(ref, best, best["score"], auto_min=auto_min) if best else "none"
     if tier == "auto":
@@ -7851,6 +7929,13 @@ def api_enrichment_search(artist: str = "", title: str = "", limit: int = 8,
     if duration and duration > 0 and not ref.get("duration"):
         ref = dict(ref)
         ref["duration"] = duration
+    # Alias-enrich so a non-Latin-primary artist (大橋純子) ranks by its
+    # romanized alias against the typed query ("Junko Ohashi") instead of
+    # sinking to the bottom with a 0 artist score.
+    try:
+        _alias_enrich(ref, cands)
+    except EnrichTransportError:
+        pass   # aliases are a ranking nicety here; fall back to primary-name scoring
     return {"candidates": mb_match.rank_candidates(ref, cands)}
 
 
