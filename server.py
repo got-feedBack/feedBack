@@ -45,7 +45,8 @@ from audio import find_wem_files, convert_wem
 from tunings import (
     DEFAULT_REFERENCE_PITCH, DEFAULT_TUNINGS, PROFILE_IDS, PROFILE_PATHWAYS,
     apply_flat_instrument_patch_to_profiles, apply_reference_pitch,
-    normalize_instrument_profiles, settings_with_instrument_profiles, tuning_name,
+    normalize_instrument_profile, normalize_instrument_profiles,
+    settings_with_instrument_profiles, tuning_name,
 )
 import sloppak as sloppak_mod
 import drums as drums_mod
@@ -9331,13 +9332,25 @@ def save_settings(data: dict):
                 return {"error": "pathway must be one of songs, practice, learn, studio"}
             updates["pathway"] = raw
 
+    _profile_patch = None
     if "instrument_profiles" in data:
         raw = data["instrument_profiles"]
         if raw is not None:
-            profiles, error = normalize_instrument_profiles(raw)
-            if error:
-                return {"error": error}
-            updates["instrument_profiles"] = profiles
+            if not isinstance(raw, dict):
+                return {"error": "instrument_profiles must be an object"}
+            # Validate each PROVIDED profile individually and keep the patch
+            # PARTIAL — /api/settings is a partial-merge endpoint, so updating one
+            # profile must NOT reset the others to defaults. Merged over the
+            # persisted profiles inside the lock below (not via the wholesale
+            # `updates` merge, which would clobber the unspecified ones).
+            _profile_patch = {}
+            for _pid, _praw in raw.items():
+                if _pid not in PROFILE_IDS:
+                    return {"error": f"unknown instrument profile: {_pid}"}
+                _prof, _perr = normalize_instrument_profile(_pid, _praw)
+                if _perr:
+                    return {"error": _perr}
+                _profile_patch[_pid] = _prof
     if "active_instrument_profile" in data:
         raw = data["active_instrument_profile"]
         if raw is not None:
@@ -9360,6 +9373,15 @@ def save_settings(data: dict):
         if cfg is None:
             cfg = _default_settings()
         cfg.update(updates)
+        if _profile_patch is not None:
+            # Merge the validated partial over the persisted profiles so a
+            # single-profile update leaves the others intact (a fresh config
+            # falls back to the built-in defaults for the unspecified ones).
+            _existing, _ = normalize_instrument_profiles(cfg.get("instrument_profiles"))
+            if _existing is None:
+                _existing = {}
+            _existing.update(_profile_patch)
+            cfg["instrument_profiles"] = _existing
         # Only canonicalize/persist the instrument profiles when this save
         # actually touches them (or the config already carries them). GET always
         # virtualizes profiles via settings_with_instrument_profiles, so a save

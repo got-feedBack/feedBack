@@ -500,8 +500,17 @@
             renderInstrument(); keepOpen();
         }));
         menu.querySelectorAll('[data-pill="strings"]').forEach((b) => b.addEventListener('click', async () => {
-            await saveSettings({ string_count: Number(b.getAttribute('data-val')) });
-            setWorkingInstrument(settings.instrument, settings.string_count);
+            const newSc = Number(b.getAttribute('data-val'));
+            // Clamp the tuning to one valid for the new string count and post it
+            // alongside string_count — otherwise the backend silently resets a
+            // now-invalid tuning to Standard while this UI keeps showing the old
+            // one (settings/tuner desync). Mirrors the instrument-switch clamp.
+            const tunings = _tuningsForInstrument(settings.instrument, newSc);
+            await saveSettings({
+                string_count: newSc,
+                tuning: tunings.includes(settings.tuning) ? settings.tuning : (tunings[0] || settings.tuning),
+            });
+            setWorkingInstrument(settings.instrument, newSc);
             renderInstrument(); keepOpen();
         }));
         menu.querySelector('[data-inst-tuning]').addEventListener('change', (e) => saveSettings({ tuning: e.target.value }));

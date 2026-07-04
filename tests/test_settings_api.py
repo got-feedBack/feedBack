@@ -834,6 +834,23 @@ def test_reset_clears_requested_keys(client, tmp_path):
     assert cfg["demucs_server_url"] == "http://demucs.example:9000"
 
 
+def test_partial_instrument_profiles_update_preserves_others(client, tmp_path):
+    # /api/settings is a partial-merge endpoint, so a POST that carries only ONE
+    # instrument profile must not reset the others to defaults.
+    gl = client.get("/api/settings").json()["instrument_profiles"]["guitar-lead"]
+    gl = dict(gl); gl["tuning"] = "Drop D"
+    client.post("/api/settings", json={"instrument_profiles": {"guitar-lead": gl}})
+    assert (client.get("/api/settings").json()["instrument_profiles"]
+            ["guitar-lead"]["tuning"] == "Drop D")
+    # Now update ONLY bass (Drop D is valid for a 4-string bass).
+    bass = client.get("/api/settings").json()["instrument_profiles"]["bass"]
+    bass = dict(bass); bass["tuning"] = "Drop D"
+    client.post("/api/settings", json={"instrument_profiles": {"bass": bass}})
+    out = client.get("/api/settings").json()["instrument_profiles"]
+    assert out["guitar-lead"]["tuning"] == "Drop D", "the untouched profile survived"
+    assert out["bass"]["tuning"] == "Drop D"
+
+
 def test_active_profile_switch_on_fresh_config(client, tmp_path):
     # A fresh config has no instrument_profiles; an explicit active-profile
     # switch must be honored, not overwritten by the profile inferred from the
