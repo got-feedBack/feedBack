@@ -834,6 +834,35 @@ def test_reset_clears_requested_keys(client, tmp_path):
     assert cfg["demucs_server_url"] == "http://demucs.example:9000"
 
 
+def test_active_profile_switch_on_fresh_config(client, tmp_path):
+    # A fresh config has no instrument_profiles; an explicit active-profile
+    # switch must be honored, not overwritten by the profile inferred from the
+    # legacy flat defaults (guitar-lead).
+    r = client.post("/api/settings", json={"active_instrument_profile": "bass"})
+    assert r.status_code == 200 and "error" not in r.json()
+    got = client.get("/api/settings").json()
+    assert got["active_instrument_profile"] == "bass"
+    assert got["instrument"] == "bass"
+
+
+def test_reset_pathway_reaches_into_instrument_profiles(client, tmp_path):
+    # pathway is mirrored into every instrument profile, so a Gameplay reset
+    # that only deleted the flat key would leave GET re-deriving the old value
+    # from the profile. The reset must reach into the persisted profiles too.
+    client.post("/api/settings", json={"pathway": "studio"})
+    assert client.get("/api/settings").json()["pathway"] == "studio"
+    profiles = _read_cfg(tmp_path)["instrument_profiles"]
+    assert any(p["pathway"] == "studio" for p in profiles.values())
+
+    r = client.post("/api/settings/reset", json={"keys": ["pathway"]})
+    assert r.status_code == 200
+    assert "pathway" in r.json()["reset"]
+    # GET re-derives from the profile — which must now be back to the default.
+    assert client.get("/api/settings").json()["pathway"] == "songs"
+    for prof in _read_cfg(tmp_path)["instrument_profiles"].values():
+        assert prof["pathway"] == "songs"
+
+
 def test_reset_ignores_unknown_keys(client, tmp_path):
     (tmp_path / "config.json").write_text(json.dumps({"master_difficulty": 40}))
     # Unknown / non-resettable keys are silently ignored, not an error, and

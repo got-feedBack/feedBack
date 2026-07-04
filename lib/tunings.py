@@ -207,7 +207,19 @@ def _valid_reference_pitch(value) -> float | None:
 
 def _valid_tuning_for_key(key: str, tuning):
     if isinstance(tuning, str):
-        return tuning if tuning in TUNING_PRESET_MIDIS.get(key, {}) and len(tuning) <= 64 else None
+        if len(tuning) > 64:
+            return None
+        if tuning in TUNING_PRESET_MIDIS.get(key, {}):
+            return tuning
+        # A name that IS a built-in preset for a different key is a misapplied
+        # built-in (e.g. "Drop D" on a 5-string bass, whose low string is B) —
+        # reject it. A name unknown to every built-in table is a provider/custom
+        # tuning (the tuner plugin's, exposed via /api/tunings) that this pure
+        # layer can't resolve — accept it so settings round-trip; the provider
+        # owns its validity.
+        if any(tuning in names for names in TUNING_PRESET_MIDIS.values()):
+            return None
+        return tuning
     if isinstance(tuning, list):
         expected = len(STANDARD_OPEN_MIDIS.get(key, []))
         if len(tuning) != expected:
@@ -327,7 +339,12 @@ def settings_with_instrument_profiles(cfg: dict) -> dict:
     if "instrument_profiles" not in out:
         legacy = profile_from_legacy_settings(out)
         profiles[legacy["id"]] = legacy
-        out["active_instrument_profile"] = legacy["id"]
+        # Default the active profile to the one migrated from the legacy flat
+        # fields, but DON'T clobber an explicit request — a fresh-config
+        # `POST {"active_instrument_profile": "bass"}` must switch, not be
+        # overwritten by the guitar-lead inferred from defaults. active_profile_id
+        # below normalizes an invalid value.
+        out.setdefault("active_instrument_profile", legacy["id"])
     active = active_profile_id(out.get("active_instrument_profile"))
     selected = profiles[active]
     out["instrument_profiles"] = profiles

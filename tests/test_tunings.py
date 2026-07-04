@@ -5,6 +5,7 @@ import pytest
 from tunings import (
     DEFAULT_TUNINGS,
     TUNING_PRESET_MIDIS,
+    _valid_tuning_for_key,
     apply_flat_instrument_patch_to_profiles,
     open_midis_to_freqs,
     settings_with_instrument_profiles,
@@ -13,6 +14,19 @@ from tunings import (
     tuning_offsets_from_midis,
     tuning_preset_offsets,
 )
+
+
+def test_valid_tuning_for_key_builtin_and_provider_names():
+    # A built-in valid for the key is accepted; a built-in valid only for a
+    # DIFFERENT key (misapplied, e.g. "Drop D" on a 5-string bass) is rejected.
+    assert _valid_tuning_for_key("bass-5", "Drop A") == "Drop A"
+    assert _valid_tuning_for_key("bass-5", "Drop D") is None
+    assert _valid_tuning_for_key("guitar-6", "Standard") == "Standard"
+    # A name unknown to every built-in table is a provider/custom tuning (tuner
+    # plugin, /api/tunings) the pure layer can't resolve — accept it so settings
+    # round-trip rather than normalizing it away to Standard.
+    assert _valid_tuning_for_key("bass-5", "My Custom DADGAD") == "My Custom DADGAD"
+    assert _valid_tuning_for_key("guitar-6", "x" * 65) is None   # length cap kept
 
 
 # ── Standard tunings (all six strings share the same offset) ─────────────────

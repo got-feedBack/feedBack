@@ -9360,11 +9360,20 @@ def save_settings(data: dict):
         if cfg is None:
             cfg = _default_settings()
         cfg.update(updates)
-        try:
-            cfg = apply_flat_instrument_patch_to_profiles(cfg, updates)
-        except ValueError as exc:
-            return {"error": str(exc)}
-        cfg = settings_with_instrument_profiles(cfg)
+        # Only canonicalize/persist the instrument profiles when this save
+        # actually touches them (or the config already carries them). GET always
+        # virtualizes profiles via settings_with_instrument_profiles, so a save
+        # that doesn't touch instrument settings must stay a plain partial merge
+        # — otherwise an empty (or unrelated) POST would freeze the default
+        # profiles into the on-disk config.
+        _profile_keys = ("instrument", "string_count", "tuning", "reference_pitch",
+                         "pathway", "instrument_profiles", "active_instrument_profile")
+        if "instrument_profiles" in cfg or any(k in updates for k in _profile_keys):
+            try:
+                cfg = apply_flat_instrument_patch_to_profiles(cfg, updates)
+            except ValueError as exc:
+                return {"error": str(exc)}
+            cfg = settings_with_instrument_profiles(cfg)
         _atomic_write_file(config_file, json.dumps(cfg, indent=2).encode("utf-8"))
     return {"message": ". ".join(messages) if messages else "Settings saved"}
 
@@ -9402,6 +9411,16 @@ def reset_settings(data: dict):
         removed = [k for k in keys if k in cfg]
         for k in removed:
             del cfg[k]
+        # `pathway` is mirrored into every instrument profile, so deleting the
+        # flat key alone doesn't reset it — GET re-derives the value from the
+        # active profile. Reset it inside the persisted profiles too (back to the
+        # "songs" default), without disturbing the rest of the instrument config.
+        if "pathway" in keys and isinstance(cfg.get("instrument_profiles"), dict):
+            for prof in cfg["instrument_profiles"].values():
+                if isinstance(prof, dict):
+                    prof["pathway"] = "songs"
+            if "pathway" not in removed:
+                removed.append("pathway")
         _atomic_write_file(config_file, json.dumps(cfg, indent=2).encode("utf-8"))
     return {"message": "Settings reset", "reset": removed}
 
