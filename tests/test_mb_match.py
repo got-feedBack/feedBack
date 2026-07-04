@@ -145,6 +145,21 @@ def test_rank_candidates_orders_by_our_score():
     assert all("score" in c for c in ranked)
 
 
+def test_rank_candidates_studio_preference_is_dropped_for_live_charts():
+    """Tied-score candidates: a studio chart prefers the studio take, but a
+    LIVE chart must NOT be forced to the studio recording."""
+    studio = {"recording_id": "studio", "artist": "AC/DC", "title": "Highway to Hell",
+              "studio": True, "mb_score": 90}
+    live = {"recording_id": "live", "artist": "AC/DC", "title": "Highway to Hell",
+            "studio": False, "mb_score": 95}
+    # Studio chart -> studio take wins the tie (studio flag), despite lower mb_score.
+    studio_song = {"artist": "AC/DC", "title": "Highway to Hell"}
+    assert m.rank_candidates(studio_song, [live, studio])[0]["recording_id"] == "studio"
+    # Live chart -> studio preference dropped, so the higher-mb_score live take wins.
+    live_song = {"artist": "AC/DC", "title": "Highway to Hell (Live at Donington)"}
+    assert m.rank_candidates(live_song, [studio, live])[0]["recording_id"] == "live"
+
+
 # ── query building ────────────────────────────────────────────────────────────
 
 def test_build_recording_query_denoises_and_quotes():

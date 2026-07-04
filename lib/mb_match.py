@@ -198,6 +198,11 @@ def rank_candidates(song: dict, candidates: list[dict]) -> list[dict]:
     canonical studio take wins over live/promo/extended cuts. Each returned dict
     is a copy carrying `score` (rounded — it's displayed and stored)."""
     sd = _duration_int(song.get("duration"))
+    # For a chart that IS a live take (build_recording_query keeps live
+    # recordings for these) the studio take is the WRONG recording, so drop the
+    # studio tiebreak — duration proximity + text/mb score then pick the right
+    # live version instead of auto-matching the studio one.
+    prefer_studio = not _LIVE_GROUP_RE.search(str(song.get("title") or ""))
 
     def _dur_diff(c):
         cd = _duration_int(c.get("duration"))
@@ -210,7 +215,7 @@ def rank_candidates(song: dict, candidates: list[dict]) -> list[dict]:
         ranked.append(c)
     ranked.sort(
         key=lambda c: (c["score"],
-                       1 if c.get("studio") else 0,   # canonical studio take
+                       (1 if c.get("studio") else 0) if prefer_studio else 0,
                        -_dur_diff(c),                 # closest to the audio length
                        c.get("mb_score") or 0),
         reverse=True)
