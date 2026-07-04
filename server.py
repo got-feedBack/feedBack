@@ -6254,6 +6254,9 @@ def _mb_search_recordings(artist, title, limit: int = 8) -> list[dict]:
 # Optional path: requires the Chromaprint `fpcalc` binary AND an AcoustID API
 # key ($ACOUSTID_API_KEY). Both absent ⇒ graceful no-op; the text matcher runs.
 
+_ACOUSTID_MAX_UPLOAD_BYTES = 256 * 1024 * 1024  # 256 MB — an uncompressed master
+
+
 def _fpcalc_bin() -> str | None:
     """Locate the Chromaprint `fpcalc` binary: $FPCALC override, else PATH."""
     import shutil
@@ -7625,16 +7628,28 @@ def api_enrichment_identify(file: UploadFile = File(...)):
     gate = _acoustid_gate()
     if gate is not None:
         return gate
-    content = file.file.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="empty upload")
     import tempfile
     ext = (Path(file.filename or "").suffix or ".bin").lower()
     tmpdir = tempfile.mkdtemp(prefix="feedback_acoustid_")
     tmp = os.path.join(tmpdir, "audio" + ext)
     try:
+        # Stream the upload to disk with a cap instead of reading it all into
+        # memory — an oversized upload must not balloon RAM (fpcalc reads from
+        # the temp file anyway). Generous ceiling for an uncompressed master.
+        total = 0
         with open(tmp, "wb") as fh:
-            fh.write(content)
+            while True:
+                chunk = file.file.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > _ACOUSTID_MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="audio upload too large (256 MB max)")
+                fh.write(chunk)
+        if total == 0:
+            raise HTTPException(status_code=400, detail="empty upload")
         cands = _identify_by_fingerprint(tmp)
     except EnrichTransportError as e:
         return JSONResponse({"error": "acoustid unavailable", "detail": str(e)},
