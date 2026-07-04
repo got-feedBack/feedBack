@@ -412,7 +412,10 @@
         const go = () => runSearch(root, song);
         root.querySelector('[data-mr-search-go]')?.addEventListener('click', go);
         input?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
-        panel.querySelector('[data-mr-identify]')?.addEventListener('click', () => runIdentify(panel, song));
+        // Identify-by-audio (AcoustID, #759) renders its hits into the same
+        // search-results area — scope to `root` (the tab body / panel), not the
+        // out-of-scope `panel` the pre-refactor #759 wiring referenced.
+        root.querySelector('[data-mr-identify]')?.addEventListener('click', () => runIdentify(root, song));
     }
 
     // ── Tabbed single-song popup (slice 4) ───────────────────────────────────
