@@ -52,6 +52,7 @@ import loosefolder as loosefolder_mod
 # tier classification + response parsing. No network/DB in there — the
 # throttled transport and the song_enrichment writes live in this module.
 import mb_match
+import acoustid_match
 # Metadata extraction lives in a side-effect-free module so ProcessPool
 # scan workers can import + unpickle _scan_one without re-running this
 # module's import-time side effects (see lib/scan_worker.py).
@@ -6244,6 +6245,97 @@ def _mb_search_recordings(artist, title, limit: int = 8) -> list[dict]:
     return mb_match.parse_search_response(body or {})
 
 
+# ── AcoustID audio fingerprinting (content-based identification) ──────────────
+# Optional path: requires the Chromaprint `fpcalc` binary AND an AcoustID API
+# key ($ACOUSTID_API_KEY). Both absent ⇒ graceful no-op; the text matcher runs.
+
+def _fpcalc_bin() -> str | None:
+    """Locate the Chromaprint `fpcalc` binary: $FPCALC override, else PATH."""
+    import shutil
+    cand = os.environ.get("FPCALC")
+    if cand and Path(cand).exists():
+        return cand
+    return shutil.which("fpcalc")
+
+
+def _acoustid_available() -> bool:
+    """True only when the network is on, an API key is set, AND fpcalc exists."""
+    return (_enrich_network_enabled()
+            and acoustid_match.is_configured()
+            and _fpcalc_bin() is not None)
+
+
+def _fpcalc(path: str) -> "tuple[int, str] | None":
+    """Fingerprint a local audio file → (duration_seconds, fingerprint). None on
+    any failure (missing binary/file, decode error, timeout)."""
+    binp = _fpcalc_bin()
+    if not binp or not Path(path).exists():
+        return None
+    import subprocess
+    import json as _json
+    try:
+        pr = subprocess.run([binp, "-json", str(path)],
+                            capture_output=True, timeout=30)
+    except Exception:
+        return None
+    if pr.returncode != 0:
+        return None
+    try:
+        data = _json.loads(pr.stdout.decode("utf-8", "replace"))
+        dur = int(round(float(data.get("duration"))))
+        fp = str(data.get("fingerprint") or "")
+    except Exception:
+        return None
+    if not fp or dur <= 0:
+        return None
+    return dur, fp
+
+
+def _acoustid_lookup(duration: int, fingerprint: str) -> list[dict]:
+    """Look a fingerprint up on AcoustID → candidate dicts (mb_match shape).
+    Throttled + offline-guarded like the MusicBrainz path. [] when unavailable
+    or no hit; raises EnrichTransportError for network-shaped failures."""
+    key = acoustid_match.api_key()
+    if not key or not _enrich_network_enabled():
+        return []
+    import requests
+    _enrich_throttle()
+    try:
+        resp = requests.get(
+            f"{acoustid_match.ACOUSTID_API_ROOT}/lookup",
+            params={
+                "client": key, "format": "json",
+                "meta": acoustid_match.LOOKUP_META,
+                "duration": duration, "fingerprint": fingerprint,
+            },
+            headers={"User-Agent": _enrich_user_agent()},
+            timeout=10,
+        )
+    except requests.RequestException as e:
+        raise EnrichTransportError(str(e)) from e
+    if resp.status_code == 429:
+        raise EnrichTransportError("acoustid 429 (rate limited)")
+    if resp.status_code != 200:
+        raise EnrichTransportError(f"acoustid HTTP {resp.status_code}")
+    try:
+        body = resp.json()
+    except ValueError as e:
+        raise EnrichTransportError("bad JSON from acoustid") from e
+    return acoustid_match.parse_lookup_response(body)
+
+
+def _identify_by_fingerprint(path: str) -> list[dict]:
+    """fpcalc + AcoustID lookup for a local audio file. [] if fingerprinting is
+    unavailable, the file can't be read, or nothing matched. Available to the
+    library-enrichment pipeline as well as the /identify endpoint."""
+    if not _acoustid_available():
+        return []
+    fp = _fpcalc(path)
+    if not fp:
+        return []
+    return _acoustid_lookup(fp[0], fp[1])
+
+
 def _mb_lookup_recording(mbid: str) -> dict | None:
     """Direct lookup for a manifest-carried recording MBID (tier 0)."""
     body = _mb_http_get(
@@ -7434,6 +7526,40 @@ def api_enrichment_search(artist: str = "", title: str = "", limit: int = 8,
     if ref is None:
         ref = {"artist": artist, "title": title}
     return {"candidates": mb_match.rank_candidates(ref, cands)}
+
+
+@app.post("/api/enrichment/identify")
+def api_enrichment_identify(file: UploadFile = File(...)):
+    """Identify a song by AUDIO FINGERPRINT (AcoustID) rather than text — the
+    reliable way to get the EXACT recording/version (the studio take, not a live
+    bootleg or an extended cut). Upload the master audio; returns candidates in
+    the same shape as /search, so the review UI and the editor's Match popup can
+    render fingerprint hits identically. 503 when fingerprinting isn't configured
+    (needs the fpcalc Chromaprint binary + an ACOUSTID_API_KEY). Sync route: the
+    fpcalc subprocess + HTTP run in FastAPI's threadpool."""
+    if not _acoustid_available():
+        return JSONResponse(
+            {"error": "audio fingerprinting unavailable",
+             "detail": "requires the fpcalc (Chromaprint) binary and an "
+                       "ACOUSTID_API_KEY"},
+            status_code=503)
+    content = file.file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="empty upload")
+    import tempfile
+    ext = (Path(file.filename or "").suffix or ".bin").lower()
+    tmpdir = tempfile.mkdtemp(prefix="feedback_acoustid_")
+    tmp = os.path.join(tmpdir, "audio" + ext)
+    try:
+        with open(tmp, "wb") as fh:
+            fh.write(content)
+        cands = _identify_by_fingerprint(tmp)
+    except EnrichTransportError as e:
+        return JSONResponse({"error": "acoustid unavailable", "detail": str(e)},
+                            status_code=503)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+    return {"candidates": cands}
 
 
 @app.get("/api/startup-status")
