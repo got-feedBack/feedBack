@@ -788,6 +788,13 @@
                             </div>
                             <div class="text-[11px] text-gray-600 mt-1">What a confident match may fill in on its own — matches you confirm in the review queue always apply in full.</div>
                         </div>
+                        <!-- Audio fingerprint (AcoustID) — opt-in, default OFF. Wired by match-review.js. -->
+                        <div class="fb-srow-wide mb-1">
+                            <div class="text-[10px] uppercase tracking-wide text-gray-500 mb-1">Audio fingerprint (AcoustID)</div>
+                            <label class="flex items-center gap-2 text-xs text-gray-400 mb-1"><input type="checkbox" id="acoustid-enabled" class="rounded border-gray-600 bg-dark-700 text-accent"> Identify by audio — reads the recording itself for the exact version (studio vs live/extended)</label>
+                            <input type="text" id="acoustid-api-key" placeholder="AcoustID application key" class="w-full bg-dark-700 border border-gray-800 rounded-xl px-2 py-1.5 text-xs text-gray-300 outline-none">
+                            <div class="text-[11px] text-gray-600 mt-1">Opt-in. Get a free key at acoustid.org/new-application; the fpcalc (Chromaprint) binary must be on the server's PATH.</div>
+                        </div>
                         <div class="grid grid-cols-2 gap-2 mb-1 text-xs text-gray-400 fb-srow-wide">
                             <label class="flex items-center gap-2">Review queue order
                                 <select id="enrich-review-order" class="bg-dark-700 border border-gray-800 rounded-xl px-2 py-1.5 text-xs text-gray-300 outline-none">

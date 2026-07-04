@@ -57,6 +57,7 @@ import loosefolder as loosefolder_mod
 # tier classification + response parsing. No network/DB in there — the
 # throttled transport and the song_enrichment writes live in this module.
 import mb_match
+import acoustid_match
 # Metadata extraction lives in a side-effect-free module so ProcessPool
 # scan workers can import + unpickle _scan_one without re-running this
 # module's import-time side effects (see lib/scan_worker.py).
@@ -246,6 +247,11 @@ _DEMO_BLOCKED: list[tuple[str, re.Pattern]] = [
     ("POST",   re.compile(r"^/api/enrichment/review/.+$")),
     ("POST",   re.compile(r"^/api/enrichment/kick$")),
     ("GET",    re.compile(r"^/api/enrichment/search$")),
+    # AcoustID audio fingerprinting: both identify endpoints run fpcalc (CPU)
+    # and spend the shared AcoustID rate budget on the caller's behalf — same
+    # rule as the search/kick relays above; not for anonymous demo visitors.
+    ("POST",   re.compile(r"^/api/enrichment/identify$")),
+    ("POST",   re.compile(r"^/api/enrichment/identify/.+$")),
     # Context menus (R2): the per-song re-match mutates the cache + spends
     # rate limit; Get-info exposes filesystem paths.
     ("POST",   re.compile(r"^/api/enrichment/refresh/.+$")),
@@ -6294,6 +6300,179 @@ def _mb_search_recordings(artist, title, limit: int = 12) -> list[dict]:
     return mb_match.parse_search_response(body or {})
 
 
+# ── AcoustID audio fingerprinting (content-based identification) ──────────────
+# Optional path: requires the Chromaprint `fpcalc` binary AND an AcoustID API
+# key ($ACOUSTID_API_KEY). Both absent ⇒ graceful no-op; the text matcher runs.
+
+_ACOUSTID_MAX_UPLOAD_BYTES = 256 * 1024 * 1024  # 256 MB — an uncompressed master
+
+
+def _fpcalc_bin() -> str | None:
+    """Locate the Chromaprint `fpcalc` binary: $FPCALC override, else PATH."""
+    import shutil
+    cand = os.environ.get("FPCALC")
+    if cand and Path(cand).exists():
+        return cand
+    return shutil.which("fpcalc")
+
+
+def _acoustid_settings() -> "tuple[bool, str]":
+    """(enabled, api_key) for AcoustID, resolved from settings with an env-var
+    fallback for the key. Opt-in: `acoustid_enabled` defaults off. The key lives
+    in settings so a user can set it themselves in the UI; $ACOUSTID_API_KEY is a
+    server-wide fallback for a headless deploy."""
+    cfg = _load_config(CONFIG_DIR / "config.json") or {}
+    enabled = cfg.get("acoustid_enabled", False) is True
+    key = cfg.get("acoustid_api_key")
+    if not isinstance(key, str) or not key.strip():
+        key = os.environ.get("ACOUSTID_API_KEY", "")
+    return enabled, (key or "").strip()
+
+
+def _acoustid_available() -> bool:
+    """True only when the user opted in, a key is set (settings or env), the
+    network is on, AND fpcalc exists."""
+    enabled, key = _acoustid_settings()
+    return (enabled
+            and _enrich_network_enabled()
+            and acoustid_match.is_configured(key)
+            and _fpcalc_bin() is not None)
+
+
+def _fpcalc(path: str) -> "tuple[int, str] | None":
+    """Fingerprint a local audio file → (duration_seconds, fingerprint). None on
+    any failure (missing binary/file, decode error, timeout)."""
+    binp = _fpcalc_bin()
+    if not binp or not Path(path).exists():
+        return None
+    import subprocess
+    import json as _json
+    try:
+        pr = subprocess.run([binp, "-json", str(path)],
+                            capture_output=True, timeout=30)
+    except Exception:
+        return None
+    if pr.returncode != 0:
+        return None
+    try:
+        data = _json.loads(pr.stdout.decode("utf-8", "replace"))
+        dur = int(round(float(data.get("duration"))))
+        fp = str(data.get("fingerprint") or "")
+    except Exception:
+        return None
+    if not fp or dur <= 0:
+        return None
+    return dur, fp
+
+
+def _acoustid_lookup(duration: int, fingerprint: str) -> list[dict]:
+    """Look a fingerprint up on AcoustID → candidate dicts (mb_match shape).
+    Throttled + offline-guarded like the MusicBrainz path. [] when unavailable
+    or no hit; raises EnrichTransportError for network-shaped failures."""
+    _, key = _acoustid_settings()
+    if not key or not _enrich_network_enabled():
+        return []
+    import requests
+    _enrich_throttle()
+    try:
+        # POST, not GET: a fingerprint is multi-KB (a 3.5-min track is ~3.5k
+        # chars), so a GET crams it into the URL and a long song overflows the
+        # server's URL limit → a spurious failure. AcoustID accepts the same
+        # params form-encoded in the body.
+        resp = requests.post(
+            f"{acoustid_match.ACOUSTID_API_ROOT}/lookup",
+            data={
+                "client": key, "format": "json",
+                "meta": acoustid_match.LOOKUP_META,
+                "duration": duration, "fingerprint": fingerprint,
+            },
+            headers={"User-Agent": _enrich_user_agent()},
+            timeout=10,
+        )
+    except requests.RequestException as e:
+        raise EnrichTransportError(str(e)) from e
+    if resp.status_code == 429:
+        raise EnrichTransportError("acoustid 429 (rate limited)")
+    if resp.status_code != 200:
+        raise EnrichTransportError(f"acoustid HTTP {resp.status_code}")
+    try:
+        body = resp.json()
+    except ValueError as e:
+        raise EnrichTransportError("bad JSON from acoustid") from e
+    return acoustid_match.parse_lookup_response(body)
+
+
+def _identify_by_fingerprint(path: str) -> list[dict]:
+    """fpcalc + AcoustID lookup for a local audio file. [] if fingerprinting is
+    unavailable, the file can't be read, or nothing matched. Available to the
+    library-enrichment pipeline as well as the /identify endpoint."""
+    if not _acoustid_available():
+        return []
+    fp = _fpcalc(path)
+    if not fp:
+        return []
+    return _acoustid_lookup(fp[0], fp[1])
+
+
+def _acoustid_gate() -> "JSONResponse | None":
+    """Shared availability gate for the identify endpoints: None when ready,
+    else a 412 needs_setup (opt-in off / no key → the UI re-prompts) or a 503
+    (set up but fpcalc/network missing). Never lets a caller pretend a
+    fingerprint ran."""
+    if _acoustid_available():
+        return None
+    enabled, key = _acoustid_settings()
+    if not enabled or not key:
+        return JSONResponse(
+            {"error": "audio fingerprinting not set up", "needs_setup": True,
+             "detail": "Turn on AcoustID and add a free API key to identify by audio — "
+                       "it reads the recording itself, far more reliable than text search."},
+            status_code=412)
+    return JSONResponse(
+        {"error": "audio fingerprinting unavailable", "needs_setup": False,
+         "detail": "the fpcalc (Chromaprint) binary was not found on the server"},
+        status_code=503)
+
+
+def _song_audio_file(filename: str) -> "str | None":
+    """Resolve a LIBRARY song (by filename/id) to a local master-audio file for
+    fingerprinting: the full-mix `original_audio` extracted from a sloppak, or a
+    loose folder's audio. None when the song can't be found or ships no full-mix
+    audio (some packs carry only stems). Mirrors serve_sloppak_file's containment
+    guards so a crafted filename can't read outside DLC_DIR / the pack."""
+    dlc = _get_dlc_dir()
+    if not dlc:
+        return None
+    resolved = _resolve_dlc_path(dlc, filename)
+    if resolved is None or not resolved.exists():
+        return None
+    if sloppak_mod.is_sloppak(resolved):
+        try:
+            canon = resolved.relative_to(dlc.resolve()).as_posix()
+        except ValueError:
+            return None
+        rel = (sloppak_mod.load_manifest(resolved) or {}).get("original_audio")
+        if not isinstance(rel, str) or not rel.strip():
+            return None
+        src = sloppak_mod.get_cached_source_dir(canon)
+        if src is None:
+            try:
+                src = sloppak_mod.resolve_source_dir(canon, dlc, SLOPPAK_CACHE_DIR)
+            except Exception:
+                return None
+        target = (src / rel.strip()).resolve()
+        try:
+            target.relative_to(src.resolve())
+        except ValueError:
+            return None
+        return str(target) if target.is_file() else None
+    try:
+        audio = loosefolder_mod.find_audio(resolved)
+    except Exception:
+        audio = None
+    return str(audio) if audio and Path(str(audio)).is_file() else None
+
+
 def _mb_lookup_recording(mbid: str) -> dict | None:
     """Direct lookup for a manifest-carried recording MBID (tier 0)."""
     body = _mb_http_get(
@@ -7491,6 +7670,93 @@ def api_enrichment_search(artist: str = "", title: str = "", limit: int = 8,
         ref = dict(ref)
         ref["duration"] = duration
     return {"candidates": mb_match.rank_candidates(ref, cands)}
+
+
+@app.post("/api/enrichment/identify")
+async def api_enrichment_identify(request: Request):
+    """Identify a song by AUDIO FINGERPRINT (AcoustID) rather than text — the
+    reliable way to get the EXACT recording/version (the studio take, not a live
+    bootleg or an extended cut). Upload the master audio; returns candidates in
+    the same shape as /search, so the review UI and the editor's Match popup can
+    render fingerprint hits identically. 412 `needs_setup` when the user hasn't
+    opted in / has no key (the UI nudges them to Settings); 503 when it's set up
+    but the fpcalc Chromaprint binary is missing or the network is off. Async so
+    the multipart is size-capped BEFORE spooling; the blocking fpcalc subprocess
+    + AcoustID HTTP run in the threadpool via run_in_executor."""
+    gate = _acoustid_gate()
+    if gate is not None:
+        return gate
+    # Pre-parse Content-Length guard — reject an oversized body before Starlette
+    # spools the multipart to temp disk (mirrors the song-upload endpoint). The
+    # per-part cap below is the authoritative limit; this is the fast up-front no.
+    cl = request.headers.get("content-length")
+    if cl is not None:
+        try:
+            cl_int = int(cl)
+        except ValueError:
+            return JSONResponse({"error": "Invalid Content-Length header"}, status_code=400)
+        if cl_int > _ACOUSTID_MAX_UPLOAD_BYTES + _MULTIPART_OVERHEAD_SLACK:
+            return JSONResponse({"error": "audio upload too large (256 MB max)"}, status_code=413)
+    try:
+        form = await request.form(max_part_size=_ACOUSTID_MAX_UPLOAD_BYTES)
+    except Exception:
+        return JSONResponse({"error": "audio upload too large (256 MB max)"}, status_code=413)
+    file = form.get("file")
+    if not isinstance(file, UploadFile):
+        raise HTTPException(status_code=400, detail="missing file upload")
+    import tempfile
+    ext = (Path(file.filename or "").suffix or ".bin").lower()
+    tmpdir = tempfile.mkdtemp(prefix="feedback_acoustid_")
+    tmp = os.path.join(tmpdir, "audio" + ext)
+    try:
+        total = 0
+        with open(tmp, "wb") as fh:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > _ACOUSTID_MAX_UPLOAD_BYTES:
+                    return JSONResponse(
+                        {"error": "audio upload too large (256 MB max)"}, status_code=413)
+                fh.write(chunk)
+        if total == 0:
+            raise HTTPException(status_code=400, detail="empty upload")
+        # fpcalc subprocess + AcoustID HTTP are blocking — off the event loop.
+        cands = await asyncio.get_event_loop().run_in_executor(
+            None, _identify_by_fingerprint, tmp)
+    except EnrichTransportError as e:
+        return JSONResponse({"error": "acoustid unavailable", "detail": str(e)},
+                            status_code=503)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+    return {"candidates": cands}
+
+
+@app.post("/api/enrichment/identify/{filename:path}")
+def api_enrichment_identify_song(filename: str):
+    """Identify an EXISTING library song by AUDIO FINGERPRINT — the library-side
+    counterpart to /api/enrichment/identify (which takes an upload). Fingerprints
+    the song's own master audio on disk (the manual "Identify by audio" action in
+    the Fix-metadata / match-review flow). Same candidate shape as /search, so the
+    review UI renders fingerprint hits like text hits. Same 412/503 gating; 404
+    when the song has no full-mix audio to fingerprint."""
+    gate = _acoustid_gate()
+    if gate is not None:
+        return gate
+    audio = _song_audio_file(filename)
+    if not audio:
+        return JSONResponse(
+            {"error": "no audio",
+             "detail": "couldn't find this song's master audio to fingerprint "
+                       "(a stems-only pack has no full mix to identify)."},
+            status_code=404)
+    try:
+        cands = _identify_by_fingerprint(audio)
+    except EnrichTransportError as e:
+        return JSONResponse({"error": "acoustid unavailable", "detail": str(e)},
+                            status_code=503)
+    return {"candidates": cands}
 
 
 @app.get("/api/startup-status")
@@ -9839,6 +10105,17 @@ def _default_settings():
         # the external browser, never media delivered in-app.
         "artist_pages_enabled": True,
         "artist_external_links": False,
+        # Audio fingerprinting (AcoustID + Chromaprint). OPT-IN, default OFF.
+        # Text matching (MusicBrainz) can't reliably pick the exact recording
+        # for a song with many comp/live/reissue takes (especially a
+        # non-title-track — the title can't find the album); fingerprinting
+        # reads the audio itself and resolves the EXACT recording. Needs the
+        # user's own free AcoustID application key
+        # (https://acoustid.org/new-application) plus the `fpcalc` binary. The
+        # key lives here (settings) — not only an env var — so a user can set it
+        # themselves in the UI; $ACOUSTID_API_KEY stays a server-wide fallback.
+        "acoustid_enabled": False,
+        "acoustid_api_key": "",
     }
 
 
@@ -10013,13 +10290,24 @@ def save_settings(data: dict):
                       "enrich_apply_names", "enrich_apply_year",
                       "enrich_apply_genres", "enrich_apply_art",
                       # Artist pages (PR-B): page on/off + external-links opt-in.
-                      "artist_pages_enabled", "artist_external_links"):
+                      "artist_pages_enabled", "artist_external_links",
+                      # AcoustID audio-fingerprinting opt-in (default off).
+                      "acoustid_enabled"):
         if _bool_key in data:
             raw = data[_bool_key]
             if raw is not None:
                 if not isinstance(raw, bool):
                     return {"error": f"{_bool_key} must be a boolean"}
                 updates[_bool_key] = raw
+    if "acoustid_api_key" in data:
+        # Free AcoustID application key (opaque token). null is a no-op, empty
+        # string clears; length-capped so a bad POST can't bloat config.json.
+        # Never logged. The matcher trims + validates presence at read time.
+        raw = data["acoustid_api_key"]
+        if raw is not None:
+            if not isinstance(raw, str) or len(raw) > 128:
+                return {"error": "acoustid_api_key must be a string (at most 128 chars)"}
+            updates["acoustid_api_key"] = raw.strip()
     if "enrich_review_order" in data:
         raw = data["enrich_review_order"]
         if raw is not None:
