@@ -6235,8 +6235,11 @@ def _mb_http_get(path: str, params: dict) -> dict | None:
         raise EnrichTransportError("bad JSON from musicbrainz") from e
 
 
-def _mb_search_recordings(artist, title, limit: int = 8) -> list[dict]:
-    """Text search (tier 2–4): denoised Lucene query over /recording."""
+def _mb_search_recordings(artist, title, limit: int = 12) -> list[dict]:
+    """Text search (tier 2–4): denoised Lucene query over /recording. The query
+    now drops live-only recordings and our ranker rewards the studio take, so a
+    slightly larger default result set gives the re-ranker room to surface the
+    canonical version (one request per song regardless of limit)."""
     query = mb_match.build_recording_query(artist, title)
     if not query:
         return []
@@ -7413,13 +7416,16 @@ def api_enrichment_pick(filename: str, data: dict = Body(...)):
 
 @app.get("/api/enrichment/search")
 def api_enrichment_search(artist: str = "", title: str = "", limit: int = 8,
-                          filename: str = ""):
+                          filename: str = "", duration: float = 0.0):
     """Manual-search proxy to MusicBrainz (throttled + identified like the
     background matcher — a user typing in the drawer must not sidestep the
     rate limit). `filename` optionally scores results against that song's
     stored identity (year/duration corroboration) instead of just the typed
-    text. Sync route on purpose: FastAPI runs it in the threadpool, so the
-    throttle's sleep never blocks the event loop."""
+    text. `duration` (seconds) lets a caller that HAS the audio but no library
+    row — e.g. the editor's create modal, which holds the master track — pass
+    its length so the studio take ranks above live/extended cuts. Sync route on
+    purpose: FastAPI runs it in the threadpool, so the throttle's sleep never
+    blocks the event loop."""
     if not (artist.strip() or title.strip()):
         raise HTTPException(status_code=400, detail="artist or title required")
     limit = max(1, min(int(limit), 25))
@@ -7433,6 +7439,10 @@ def api_enrichment_search(artist: str = "", title: str = "", limit: int = 8,
         ref = meta_db.enrichment_song_row(filename)
     if ref is None:
         ref = {"artist": artist, "title": title}
+    # A caller-supplied duration corroborates the take even without a library row.
+    if duration and duration > 0 and not ref.get("duration"):
+        ref = dict(ref)
+        ref["duration"] = duration
     return {"candidates": mb_match.rank_candidates(ref, cands)}
 
 

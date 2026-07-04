@@ -39,6 +39,14 @@ DURATION_BONUS_LOOSE = 0.025   # …within 15s
 _DURATION_TIGHT = 5
 _DURATION_LOOSE = 15
 
+# Release-group secondary types that mark a NON-canonical release (a live album,
+# a greatest-hits comp, a remix/DJ set, …). Used both to pick the canonical
+# studio album for display and to reward studio recordings in ranking.
+_SECONDARY_SKIP = {
+    "live", "compilation", "remix", "dj-mix", "mixtape/street",
+    "demo", "interview", "audiobook", "spokenword",
+}
+
 # ── Denoise ───────────────────────────────────────────────────────────────────
 # A parenthetical/bracketed group is dropped when it contains any of these
 # noise terms as a whole word (chart-variant markers, tuning/pitch notes,
@@ -154,6 +162,10 @@ def score_candidate(song: dict, cand: dict) -> float:
             score += DURATION_BONUS
         elif diff <= _DURATION_LOOSE:
             score += DURATION_BONUS_LOOSE
+    # NB: the studio-vs-live distinction is deliberately NOT scored here — a live
+    # take is still the RIGHT SONG (same title/artist), so it must not change the
+    # auto/review confidence. Canonical-version preference lives in the RANK sort
+    # (rank_candidates) instead, where it only reorders same-song candidates.
     return min(score, 1.0)
 
 
@@ -179,15 +191,29 @@ def classify(song: dict, cand: dict, score: float, auto_min: float | None = None
 
 
 def rank_candidates(song: dict, candidates: list[dict]) -> list[dict]:
-    """Score every candidate against the song and return them sorted by our
-    score (MusicBrainz's own search score is only a tiebreak). Each returned
-    dict is a copy carrying `score` (rounded — it's displayed and stored)."""
+    """Score every candidate against the song and return them sorted best-first.
+    The combined `score` caps at 1.0, so a perfect-text-match query (every "AC/DC
+    Highway to Hell" recording) ties at the top — there the studio flag and, when
+    the caller knows the audio length, the duration match break the tie so the
+    canonical studio take wins over live/promo/extended cuts. Each returned dict
+    is a copy carrying `score` (rounded — it's displayed and stored)."""
+    sd = _duration_int(song.get("duration"))
+
+    def _dur_diff(c):
+        cd = _duration_int(c.get("duration"))
+        return abs(sd - cd) if (sd and cd) else 10 ** 6
+
     ranked = []
     for cand in candidates or []:
         c = dict(cand)
         c["score"] = round(score_candidate(song, cand), 4)
         ranked.append(c)
-    ranked.sort(key=lambda c: (c["score"], c.get("mb_score") or 0), reverse=True)
+    ranked.sort(
+        key=lambda c: (c["score"],
+                       1 if c.get("studio") else 0,   # canonical studio take
+                       -_dur_diff(c),                 # closest to the audio length
+                       c.get("mb_score") or 0),
+        reverse=True)
     return ranked
 
 
@@ -209,7 +235,16 @@ def build_recording_query(artist, title) -> str:
         parts.append('recording:"%s"' % _lucene_escape_phrase(t))
     if a:
         parts.append('artist:"%s"' % _lucene_escape_phrase(a))
-    return " AND ".join(parts)
+    q = " AND ".join(parts)
+    # Drop live-ONLY recordings (bootlegs, live albums) — the canonical studio
+    # take is never tagged Live, and this is the single biggest source of junk in
+    # a flat recording search. Compilations are deliberately NOT excluded: they
+    # REUSE the studio recording, so filtering them would drop the very recording
+    # we want (verified against MusicBrainz — `-secondarytype:Compilation` cut the
+    # AC/DC studio "Highway to Hell" recording entirely).
+    if q:
+        q += " AND -secondarytype:Live"
+    return q
 
 
 def _artist_credit(doc: dict) -> tuple[str, str, str]:
@@ -226,19 +261,29 @@ def _artist_credit(doc: dict) -> tuple[str, str, str]:
     return name, str(artist.get("id", "") or ""), str(artist.get("sort-name", "") or "")
 
 
+def _is_clean_studio_album(rg: dict) -> bool:
+    """A release-group that is a primary-type Album with NO non-canonical
+    secondary type (Live / Compilation / Remix / …) — i.e. a studio album."""
+    if str(rg.get("primary-type", "")).lower() != "album":
+        return False
+    secs = {str(s).lower() for s in (rg.get("secondary-types") or [])}
+    return not (secs & _SECONDARY_SKIP)
+
+
 def _best_release(doc: dict) -> dict:
-    """Pick the release used for canon album/year: prefer Official status and
-    an Album release-group, then the earliest date. Returns {} if none."""
+    """Pick the release used for canon album/year: prefer an OFFICIAL studio
+    Album (primary Album with no Live/Compilation/… secondary type), then the
+    earliest date. Falls back to any release when none is clean. {} if none."""
     releases = [r for r in (doc.get("releases") or []) if isinstance(r, dict)]
     if not releases:
         return {}
 
     def sort_key(r):
-        status_ok = 0 if str(r.get("status", "")).lower() == "official" else 1
         rg = r.get("release-group") or {}
-        album_ok = 0 if str(rg.get("primary-type", "")).lower() == "album" else 1
+        clean = 0 if _is_clean_studio_album(rg) else 1
+        status_ok = 0 if str(r.get("status", "")).lower() == "official" else 1
         date = str(r.get("date", "") or "9999")
-        return (status_ok, album_ok, date)
+        return (clean, status_ok, date)
 
     return sorted(releases, key=sort_key)[0]
 
@@ -261,6 +306,7 @@ def parse_recording_doc(doc: dict) -> dict | None:
         return None
     artist_name, artist_id, artist_sort = _artist_credit(doc)
     release = _best_release(doc)
+    studio = _is_clean_studio_album(release.get("release-group") or {})
     length = doc.get("length")
     try:
         duration = int(round(float(length) / 1000.0)) if length else None
@@ -281,6 +327,7 @@ def parse_recording_doc(doc: dict) -> dict | None:
         "isrc": isrcs[0] if isrcs else "",
         "genres": _genres(doc),
         "mb_score": int(doc.get("score") or 0),
+        "studio": studio,
     }
 
 

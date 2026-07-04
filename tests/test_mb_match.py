@@ -149,7 +149,9 @@ def test_rank_candidates_orders_by_our_score():
 
 def test_build_recording_query_denoises_and_quotes():
     q = m.build_recording_query("ACDC", 'Thunderstruck (v2)')
-    assert q == 'recording:"thunderstruck" AND artist:"acdc"'
+    # Live-only recordings are excluded — the studio take is never tagged Live,
+    # and it's the biggest source of junk in a flat recording search.
+    assert q == 'recording:"thunderstruck" AND artist:"acdc" AND -secondarytype:Live'
 
 
 def test_build_recording_query_escapes_and_handles_missing_artist():
