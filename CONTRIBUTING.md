@@ -118,7 +118,7 @@ Plugins are the main extension point. The org distinguishes three tiers ([full p
 
 Core plugins currently in this repo: `achievements`, `highway_3d`, `drum_highway_3d`, `keys_highway_3d`, `tuner`, `folder_library`, `minigames`, `app_tour_library`, `app_tour_settings`, `capability_inspector`, `input_setup`.
 
-Everything else in the desktop installer — note detection, stems, splitscreen, editor, NAM tone, and the rest — lives in separate `feedBack-plugin-*` repositories and is listed in [`feedBack-desktop/scripts/build-common.sh`](https://github.com/got-feedback/feedBack-desktop/blob/main/scripts/build-common.sh). Release builds pin those clones in `plugin-lock.json` on the active `release/*` branch; nightlies track each plugin's default branch.
+Everything else in the desktop installer — note detection, stems, splitscreen, editor, NAM tone, and the rest — lives in separate `feedBack-plugin-*` repositories and is listed in [`feedBack-desktop/scripts/build-common.sh`](https://github.com/got-feedback/feedBack-desktop/blob/main/scripts/build-common.sh). The desktop build clones each entry at compile time; `SLOPSMITH_REF` selects which core branch or tag to bundle (default `main`), and individual plugin lines can append `@<branch>` to pin a non-default ref for release or feature-branch builds.
 
 To add or change a plugin, read the [Plugin System](CLAUDE.md) and [Plugin Best Practices](CLAUDE.md) sections in `CLAUDE.md`. New org plugins should call the reusable `plugin-lint` workflow from [`.github`](https://github.com/got-feedback/.github).
 
