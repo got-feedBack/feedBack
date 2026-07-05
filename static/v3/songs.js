@@ -515,15 +515,22 @@
             done:     ['bg-fb-good/90 text-black', '✓ Updated', ''],
             nochange: ['bg-black/60 text-fb-textDim', '— No match', ''],
             // Resting indicator: subtle, so a mostly-unmatched library isn't a
-            // wall of loud badges; points at the manual fix.
-            nomatch:  ['bg-black/60 text-fb-textDim', 'No match', 'No metadata match found — right-click to fix it by hand'],
+            // wall of loud badges. Clickable — a one-click handoff into the
+            // Fix-metadata popup for this song (see the [data-meta-fix] wiring).
+            nomatch:  ['bg-black/60 text-fb-textDim', 'No match', 'Click to fix the metadata by hand'],
         };
         const conf = M[st] || M.queued;
+        const fixable = st === 'nomatch';   // resting badge → opens Fix-metadata
         // top-10 clears the tuning chip (top-2) in both normal and select mode;
-        // z-20 sits it above the art. Non-interactive so it never eats a click.
-        return '<span class="v3-meta-tile absolute top-10 left-2 z-20 ' + conf[0] +
-            ' text-[0.5625rem] font-bold px-1.5 py-0.5 rounded-sm leading-tight pointer-events-none"' +
-            (conf[2] ? ' title="' + conf[2] + '"' : '') + '>' + conf[1] + '</span>';
+        // z-20 sits it above the art. Batch states are non-interactive; the
+        // resting "no match" badge is the handoff into the popup.
+        const cls = 'v3-meta-tile absolute top-10 left-2 z-20 ' + conf[0] +
+            ' text-[0.5625rem] font-bold px-1.5 py-0.5 rounded-sm leading-tight ' +
+            (fixable ? 'pointer-events-auto cursor-pointer hover:bg-fb-primary hover:text-white transition-colors' : 'pointer-events-none');
+        return '<span class="' + cls + '"' +
+            (fixable ? ' data-meta-fix="1"' : '') +
+            (conf[2] ? ' title="' + conf[2] + '"' : '') +
+            '>' + conf[1] + '</span>';
     }
 
     // After a song is scored, the badge for that card is stale until the next
@@ -1466,6 +1473,13 @@
             el.querySelector('[data-charts]')?.addEventListener('click', (e) => {
                 e.stopPropagation();
                 openChartsDrawer(e.currentTarget.getAttribute('data-charts'), song);
+            });
+            // "No match" badge → straight into the Fix-metadata popup for this
+            // song (the batch → fix handoff). stopPropagation so it doesn't also
+            // trigger the card's play. Follows the displayed chart, like the menu.
+            el.querySelector('[data-meta-fix]')?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (window.__fbFixMatch) window.__fbFixMatch(playTarget);
             });
             // Artist line → the artist page (PR-B). In select mode the grid's
             // capture-phase toggle intercepts first, so selection still wins.
