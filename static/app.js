@@ -2870,6 +2870,10 @@ const HWC_DEFAULT_FALLBACK = { lowE: '#cc0000', A: '#cca800', D: '#0066cc', G: '
 //   - colorblind: the Okabe–Ito accessible qualitative palette (vermillion,
 //     orange, yellow, bluish-green, sky-blue, blue, reddish-purple), the most
 //     distinguishable option for deuteranopia/protanopia.
+//   - colorblind_deuteranope: a deuteranope-tuned variant of the Okabe–Ito set
+//     above, contributed by a deuteranopic player who still found that set hard
+//     to separate. Retunes the six main strings (red / yellow-green / blue /
+//     orange / teal / deep-purple) and keeps its 7/8-string colors unchanged.
 //   - neon: electric, max-saturation hues whose LIGHTNESS deliberately zig-zags
 //     between neighbours (bright→bright→brightest→dark blue→bright green→dark
 //     violet) so adjacent strings separate harder than vivid — a stage/stream
@@ -2905,6 +2909,10 @@ const HWC_PRESETS = [
     {
         id: 'colorblind', label: 'Colorblind-friendly',
         colors: { lowE: '#d55e00', A: '#e69f00', D: '#f0e442', G: '#009e73', B: '#56b4e9', highE: '#cc79a7', low7: '#0072b2', low8: '#999999' },
+    },
+    {
+        id: 'colorblind_deuteranope', label: 'Colorblind (deuteranope)',
+        colors: { lowE: '#aa1414', A: '#88de00', D: '#1889e3', G: '#c6601c', B: '#00f5b2', highE: '#4d2173', low7: '#0072b2', low8: '#999999' },
     },
     {
         id: 'neon', label: 'Neon',
