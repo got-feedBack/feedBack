@@ -303,6 +303,7 @@
             '<span class="text-xs text-fb-textDim shrink-0">' + esc(pct) + '</span></span>' +
             '<span class="block text-xs text-fb-textDim truncate">' + esc(meta) + '</span>' +
             diffChips(song, c) +
+            (_single ? '<span class="block text-xs text-fb-primary pt-1">Use these values →</span>' : '') +
             '</button>';
     }
 
@@ -483,7 +484,39 @@
             };
         }
         song._detailsState = st;
+        // Match→Details bridge: a candidate picked with "Use these values" lands
+        // its fields here as the pending (unsaved) input values, shown pre-filled
+        // for review — the grid never adopts a match silently, so the user still
+        // Saves (or Writes to file).
+        const adopted = song._pendingDetails;
+        if (adopted) {
+            for (const [f] of DETAIL_FIELDS) {
+                if (f in adopted) st[f].value = String(adopted[f] || '');
+            }
+            song._pendingDetails = null;
+        }
         paintDetails(body, song);
+        if (adopted) {
+            const s = body.querySelector('[data-df-status]');
+            if (s) { s.className = 'text-xs leading-relaxed text-fb-textDim'; s.textContent = 'Filled from the match — review, then Save or Write to file.'; }
+        }
+    }
+
+    // Match→Details bridge: adopt a candidate's display fields into the Details
+    // tab (opt-in — never silent). Pin the match too so the art/canon follow,
+    // then land on Details pre-filled for review.
+    async function useTheseValues(song, cand) {
+        if (!cand) return;
+        song._pendingDetails = {
+            title: String(cand.title || ''), artist: String(cand.artist || ''),
+            album: String(cand.album || ''), year: String(cand.year || ''),
+        };
+        try {
+            await post('/api/enrichment/review/' + enc(song.filename) + '/pick', { candidate: cand });
+        } catch (_) { /* pin is best-effort; the values still populate Details */ }
+        try { window.feedBack?.emit('library:changed', { reason: 'match' }); } catch (_) { }
+        _tab = 'details';
+        renderTabbed();
     }
 
     function paintDetails(body, song) {
@@ -705,6 +738,7 @@
             btn.addEventListener('click', async () => {
                 const cand = cands[Number(btn.getAttribute('data-mr-cand'))];
                 if (!cand) return;
+                if (_single) { useTheseValues(song, cand); return; }   // popup → adopt into Details
                 await post('/api/enrichment/review/' + enc(song.filename) + '/pick',
                     { candidate: cand });
                 settle(song);
@@ -757,6 +791,7 @@
             btn.addEventListener('click', async () => {
                 const cand = cands[Number(btn.getAttribute('data-mr-cand'))];
                 if (!cand) return;
+                if (_single) { useTheseValues(song, cand); return; }   // popup → adopt into Details
                 await post('/api/enrichment/review/' + enc(song.filename) + '/pick',
                     { candidate: cand });
                 settle(song);
