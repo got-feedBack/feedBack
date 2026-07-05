@@ -514,12 +514,13 @@
             '<div class="p-5 space-y-4 overflow-y-auto v3-scroll min-h-0">' +
             '<div class="flex items-start gap-3">' +
             '<img src="' + esc(artUrl(song)) + '" alt="" onerror="this.style.visibility=\'hidden\'" class="w-14 h-14 rounded-lg object-cover bg-fb-card shrink-0">' +
-            '<p class="text-xs text-fb-textDim pt-1">Your edits show in the library right away and are never written to the song files. Use <span class="text-fb-text">Match</span> to pull info from MusicBrainz, or lock a field to keep it.</p>' +
+            '<p class="text-xs text-fb-textDim pt-1"><span class="text-fb-text">Save</span> keeps edits as a reversible library overlay — the song files aren\'t touched. <span class="text-fb-text">Write to file</span> bakes them into the pack itself. Lock a field to keep an auto-match from changing it.</p>' +
             '</div>' +
             DETAIL_FIELDS.map(row).join('') +
-            '<p data-df-status class="text-xs h-4"></p>' +
+            '<p data-df-status class="text-xs leading-relaxed"></p>' +
             '</div>' +
-            '<div class="flex items-center justify-end gap-2 p-5 pt-3 border-t border-fb-border/40 shrink-0">' +
+            '<div class="flex items-center justify-between gap-2 p-5 pt-3 border-t border-fb-border/40 shrink-0">' +
+            '<button data-df-write type="button" title="Write these values into the song file itself — permanent, survives a full rescan. The rest of the pack is untouched." class="text-sm text-fb-textDim hover:text-fb-text border border-fb-border/50 rounded-md px-3 py-2">Write to file</button>' +
             '<button data-df-save class="bg-fb-primary hover:bg-fb-primaryHi text-white px-4 py-2 rounded-md text-sm">Save</button>' +
             '</div>';
         body.querySelectorAll('[data-df-input]').forEach((inp) => {
@@ -532,6 +533,7 @@
             b.addEventListener('click', () => { const f = b.getAttribute('data-df-revert'); st[f].value = st[f].pack || ''; st[f].locked = false; paintDetails(body, song); });
         });
         body.querySelector('[data-df-save]')?.addEventListener('click', () => saveDetails(body, song));
+        body.querySelector('[data-df-write]')?.addEventListener('click', () => writeToFile(body, song));
     }
 
     async function saveDetails(body, song) {
@@ -570,6 +572,62 @@
         }
         try { window.feedBack?.emit('library:changed', { reason: 'override' }); } catch (_) { }
         if (status) { status.className = 'text-xs h-4 text-fb-good'; status.textContent = 'Saved.'; }
+    }
+
+    // "Write to file" — bake the shown title/artist/album/year INTO the pack
+    // itself (the one action here that touches the file), via the existing
+    // POST /api/song/{fn}/meta (writes the manifest, re-stats, coalesces a
+    // rescan). On a real file write the display overrides for those fields are
+    // now redundant, so clear their VALUES (keeping any locks) and re-render —
+    // the field then reads from the file as "Pack". Loose-folder / unwritable
+    // packs fall back to a DB-only update: we say so and keep the overlay.
+    async function writeToFile(body, song) {
+        const st = song._detailsState;
+        const fields = {};
+        for (const [f] of DETAIL_FIELDS) fields[f] = String(st[f].value || '').trim();
+        const status = body.querySelector('[data-df-status]');
+        const writeBtn = body.querySelector('[data-df-write]');
+        const saveBtn = body.querySelector('[data-df-save]');
+        if (writeBtn) writeBtn.disabled = true;
+        if (saveBtn) saveBtn.disabled = true;
+        if (status) { status.className = 'text-xs leading-relaxed text-fb-textDim'; status.textContent = 'Writing to the song file…'; }
+        let ok = false, persisted = false;
+        try {
+            const r = await fetch('/api/song/' + enc(song.filename) + '/meta', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(fields),
+            });
+            ok = r.ok;
+            const j = await r.json().catch(() => ({}));
+            persisted = !!(j && j.persisted);
+        } catch (_) { ok = false; }
+        if (writeBtn) writeBtn.disabled = false;
+        if (saveBtn) saveBtn.disabled = false;
+        if (!ok) {
+            if (status) { status.className = 'text-xs leading-relaxed text-fb-accent'; status.textContent = 'Could not write to the file — try again.'; }
+            return;
+        }
+        // Keep the in-memory song + grid in step with what was written.
+        for (const [f] of DETAIL_FIELDS) song[f] = fields[f];
+        try { window.feedBack?.emit('library:changed', { reason: 'write' }); } catch (_) { }
+        if (persisted) {
+            const clear = {};
+            for (const [f] of DETAIL_FIELDS) clear[f] = { value: null, locked: !!st[f].locked };
+            try {
+                await fetch('/api/song/' + enc(song.filename) + '/overrides', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ overrides: clear }),
+                });
+            } catch (_) { /* the file write still succeeded; the overlay just lingers */ }
+            await renderDetailsTab(body, song);   // re-fetch: pack now = written values, overrides cleared
+            const s2 = body.querySelector('[data-df-status]');
+            if (s2) { s2.className = 'text-xs leading-relaxed text-fb-good'; s2.textContent = 'Written to the song file.'; }
+        } else if (status) {
+            status.className = 'text-xs leading-relaxed text-fb-textDim';
+            status.textContent = 'Saved to the library — this pack’s file couldn’t be written, so it may revert on a full rescan.';
+        }
     }
 
     // Cover-art tab: the current art + a button that hands off to the shared
