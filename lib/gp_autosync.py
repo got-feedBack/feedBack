@@ -728,13 +728,17 @@ def bar_start_times(gp_path: str) -> list[float]:
     bar-resolution map for .gp/.gpx, per-tick integration for .gp3/4/5), so
     the returned times share an axis with auto_sync's sync points.
 
-    Raises ValueError if the file cannot be parsed.
+    Raises ValueError if the file cannot be parsed, ImportError if the file
+    is GP3/4/5 and PyGuitarPro is not installed.
     """
     try:
         root = _load_gpif(gp_path)
     except _Gp345FileError:
         import guitarpro
-        song = guitarpro.parse(gp_path)
+        try:
+            song = guitarpro.parse(gp_path)
+        except Exception as exc:
+            raise ValueError(f"Cannot parse GP3/4/5 file {gp_path!r}: {exc}") from exc
         tempo_events = _gp345_tempo_events(song)
         return [
             _gp345_tick_to_secs(tempo_events, tick)
