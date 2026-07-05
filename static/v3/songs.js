@@ -3867,6 +3867,18 @@
     function _clearMetaTiles() {
         Object.keys(_metaTile).forEach((fn) => { delete _metaTile[fn]; });
         document.querySelectorAll('.v3-meta-tile').forEach((el) => el.remove());
+        // The persistent "No match" badge derives from _unmatched (not _metaTile),
+        // yet shares the .v3-meta-tile class — so the blanket remove above strips it.
+        // Repaint the resting indicator on any rendered card so a metadata rescan's
+        // tile-clear doesn't silently drop it until the next scroll/re-render.
+        _unmatched.forEach((fn) => {
+            const sel = (window.CSS && CSS.escape) ? CSS.escape(fn) : fn;
+            document.querySelectorAll('[data-fn="' + sel + '"] [data-v3-play]').forEach((play) => {
+                if (play.querySelector('.v3-meta-tile')) return;
+                const html = enrichBadge(fn);
+                if (html) play.insertAdjacentHTML('beforeend', html);
+            });
+        });
     }
 
 
