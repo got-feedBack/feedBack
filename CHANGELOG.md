@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`lib/midi_import.py`: `convert_midi_tempo_map` — MIDI imports can finally carry
+  their bars.** The keys/drums note converters always computed a tempo-aware
+  tick→seconds map internally (to bake note times to absolute seconds) and then threw
+  it away — and never read `time_signature` meta at all — so every MIDI import landed
+  with no measures and an implied 4/4 regardless of what the file said. The new helper
+  extracts the whole grid: `tempos` (`{time, bpm}`), `time_signatures` (`{time,
+  ts:[num,den]}`, the song-timeline sidecar shape), and a full `beats` grid on the
+  editor's row shape (numbered downbeats with a `den` hint, `-1` interior beats,
+  eighth-note rows in 6/8 etc.). Event scope mirrors the existing tick map — SMF
+  type 0/1 merge meta across tracks, type 2 reads only the chosen track (independent
+  timelines must never share a grid); mid-bar signature events apply at the next bar
+  boundary; times are computed from absolute ticks through the cumulative tempo table
+  and rounded once at emit, so rounding error never accumulates with song length.
+  Consumed by the editor's upcoming multitrack MIDI import (tempo-seed dialog). Tests:
+  `tests/test_midi_tempo_map.py`.
+
 ### Fixed
 - **Auto-sync: DTW step constraint — riff-based songs no longer produce garbage sync points.** `librosa.sequence.dtw`'s default step pattern allows unbounded horizontal/vertical path runs, and on music with long self-similar chroma stretches (riff-driven stoner/doom, drone sections) the flat cost surface let the warping path collapse — minutes of score mapped onto a single audio frame, so the per-bar warp imported charts wildly out of sync while reporting success (observed on a real 138 BPM tab: effective displayed tempo 159 BPM, three sync points sharing one audio timestamp). `_dtw_align` now uses the standard music-sync slope-constrained step pattern (`[[1,1],[1,2],[2,1]]`, local tempo ratio bounded to 0.5x–2x), which makes the degenerate path impossible, with a fallback to unconstrained steps when the global length ratio makes the constrained pattern infeasible (e.g. a tab aligned against a full-concert video). Validated on the failing song: coarse points track the recording 1:1, refined downbeats land on onset peaks at 3.3x background energy.
 

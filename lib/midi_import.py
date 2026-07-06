@@ -393,6 +393,138 @@ def _build_tick_to_seconds(midi: mido.MidiFile, track_index: int) -> Callable[[i
     return tick_to_seconds
 
 
+# Safety valve for the bar walk below: a malformed SMF (absurd tempo + long
+# trailing meta) could otherwise imply millions of bars. Real charts sit
+# orders of magnitude below this.
+_TEMPO_MAP_MAX_BARS = 20000
+
+
+def convert_midi_tempo_map(midi_path: str, track_index: int = 0) -> dict:
+    """Extract the song-timeline grid a `.mid` file carries: tempos, time
+    signatures, and a full beat grid — the data the note converters here
+    always computed internally (to bake note times) and then threw away,
+    which left every MIDI import with no bars, no measures, and an implied
+    4/4 no matter what the file said.
+
+    Returns ``{"tempos": [...], "time_signatures": [...], "beats": [...]}``:
+
+    - ``tempos``: ``{time, bpm}`` per tempo event (deduped per tick).
+    - ``time_signatures``: ``{time, ts: [num, den]}`` per signature event —
+      the song-timeline sidecar shape (feedpak-spec §7.4).
+    - ``beats``: one row per beat on the editor grid shape — downbeats carry
+      a running ``measure`` (1, 2, 3, …) plus a ``den`` hint (the signature
+      denominator), interior beats carry ``measure: -1``. The beat unit
+      follows the active signature (6/8 ⇒ six eighth-note rows per bar).
+
+    Event scope mirrors ``_build_tick_to_seconds``: SMF type 0/1 merge meta
+    from all tracks (shared timeline); type 2 reads ONLY ``track_index``
+    (independent timelines — callers must never share one grid across
+    type-2 tracks). Signature changes apply at the NEXT bar boundary when a
+    file places one mid-bar (ill-formed but seen in the wild). All times
+    are computed from absolute ticks through the cumulative tempo table and
+    rounded once at emit — rounding error never accumulates with song
+    length. An SMF with no note events yields empty ``beats``.
+    """
+    midi = mido.MidiFile(midi_path)
+    ticks_per_beat = midi.ticks_per_beat or 480
+    midi_type = getattr(midi, "type", 1)
+    meta_source = (
+        [midi.tracks[track_index]] if midi_type == 2 else midi.tracks
+    )
+    tick_to_seconds = _build_tick_to_seconds(midi, track_index)
+
+    # ── collect meta + the end of musical content ────────────────────────
+    sig_events: list[tuple[int, int, int]] = []
+    tempo_events: list[tuple[int, int]] = []
+    for tr in meta_source:
+        abs_tick = 0
+        for msg in tr:
+            abs_tick += msg.time
+            if msg.type == "time_signature":
+                num = int(getattr(msg, "numerator", 4) or 4)
+                den = int(getattr(msg, "denominator", 4) or 4)
+                if num > 0 and den > 0:
+                    sig_events.append((abs_tick, num, den))
+            elif msg.type == "set_tempo":
+                tempo_events.append((abs_tick, int(msg.tempo)))
+    end_tick = 0
+    note_source = (
+        [midi.tracks[track_index]] if midi_type == 2 else midi.tracks
+    )
+    for tr in note_source:
+        abs_tick = 0
+        for msg in tr:
+            abs_tick += msg.time
+            if msg.type in ("note_on", "note_off"):
+                end_tick = max(end_tick, abs_tick)
+
+    # Dedupe at equal ticks (last wins), matching the tempo-table rule.
+    sig_events.sort(key=lambda e: e[0])
+    sigs: list[tuple[int, int, int]] = []
+    for ev in sig_events:
+        if sigs and sigs[-1][0] == ev[0]:
+            sigs[-1] = ev
+        else:
+            sigs.append(ev)
+    if not sigs or sigs[0][0] > 0:
+        sigs.insert(0, (0, 4, 4))
+
+    tempo_events.sort(key=lambda e: e[0])
+    tempos_out: list[dict] = []
+    seen_tempo_ticks: dict[int, int] = {}
+    for ev_tick, ev_tempo in tempo_events:
+        seen_tempo_ticks[ev_tick] = ev_tempo
+    for ev_tick in sorted(seen_tempo_ticks):
+        tempos_out.append({
+            "time": round(tick_to_seconds(ev_tick), 3),
+            "bpm": round(60_000_000.0 / seen_tempo_ticks[ev_tick], 3),
+        })
+    if not tempos_out:
+        tempos_out.append({"time": 0.0, "bpm": 120.0})
+
+    time_signatures_out = [
+        {"time": round(tick_to_seconds(t), 3), "ts": [num, den]}
+        for t, num, den in sigs
+    ]
+
+    # ── walk bars from tick 0 to the end of the notes ────────────────────
+    beats: list[dict] = []
+    if end_tick > 0:
+        cur_tick = 0.0
+        measure = 1
+        sig_idx = 0
+        while cur_tick < end_tick and measure <= _TEMPO_MAP_MAX_BARS:
+            # Active signature: the latest event at or before this bar's
+            # start. Mid-bar events wait for the next boundary by
+            # construction (we only re-read between bars).
+            while (sig_idx + 1 < len(sigs)
+                    and sigs[sig_idx + 1][0] <= cur_tick + 1e-6):
+                sig_idx += 1
+            _, num, den = sigs[sig_idx]
+            beat_ticks = ticks_per_beat * 4.0 / den
+            beats.append({
+                "time": round(tick_to_seconds(int(round(cur_tick))), 3),
+                "measure": measure,
+                "den": den,
+            })
+            for k in range(1, num):
+                sub_tick = cur_tick + k * beat_ticks
+                if sub_tick >= end_tick:
+                    break
+                beats.append({
+                    "time": round(tick_to_seconds(int(round(sub_tick))), 3),
+                    "measure": -1,
+                })
+            cur_tick += num * beat_ticks
+            measure += 1
+
+    return {
+        "tempos": tempos_out,
+        "time_signatures": time_signatures_out,
+        "beats": beats,
+    }
+
+
 # ── Drum track listing (channel-9 only) ──────────────────────────────────────
 
 # Velocity below this is treated as a ghost note. GM doesn't have an explicit
