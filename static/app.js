@@ -4379,7 +4379,7 @@ async function uploadSongs(fileList) {
         if (lower.endsWith('.feedpak') || lower.endsWith('.sloppak')) {
             files.push(f);
         } else {
-            failures.push(`${f.name}: only .feedpak accepted`);
+            failures.push(`${f.name}: only .feedpak or .sloppak accepted`);
         }
     }
     if (files.length === 0) {
