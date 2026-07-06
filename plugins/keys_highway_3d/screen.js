@@ -1032,7 +1032,7 @@
         // still tracks the notes — just from a nudged height/distance/tilt.
         camHeight: 1.0,   // ×preset camera height (higher = more overhead)
         camDist: 1.0,     // ×preset camera distance (larger = further back)
-        camTilt: -0.6,    // aim offset up(+)/down(−); default paired with the overhead rig for the tuned piano view
+        camTilt: 0.0,     // aim offset up(+)/down(−); 0 = neutral — the tuned overhead aim lives in CAM_PRESETS.overhead, so this fine-tune only nudges from a preset (and Classic + tilt 0 == the historical rig)
     };
     // Numeric FX keys clamp to a declared [min, max]; keys absent from this
     // table keep the historical 0–1 slider range. The camera fine-tune knobs
@@ -1245,15 +1245,19 @@
     };
 
     // Camera-rig presets. 'classic' is the original low, near-telephoto rig
-    // (numerically identical to the historical constants, so an untouched
-    // setting keeps the stock framing). y/z/lookY/lookZ are in pre-K world
-    // units — the instance multiplies by K at the use sites, same as the old
-    // constants did. Zoom scales position AND look-at every frame, so all
-    // presets inherit the adaptive dolly behaviour unchanged.
+    // (numerically identical to the historical constants, so 'classic' with the
+    // neutral camTilt default reproduces the exact stock framing). y/z/lookY/lookZ
+    // are in pre-K world units — the instance multiplies by K at the use sites,
+    // same as the old constants did. Zoom scales position AND look-at every
+    // frame, so all presets inherit the adaptive dolly behaviour unchanged.
+    // Each preset carries its OWN tuned aim in lookY: 'overhead' bakes in the
+    // plug-and-play downward tilt (the −0.6 × CAM_TILT_UNITS = −33 that used to
+    // ship as the camTilt default) so the default look is unchanged while
+    // camTilt now defaults to 0 (a neutral nudge from whatever preset is picked).
     const CAM_PRESETS = {
-        classic:  { fov: 40, y: 46,  z: 112, lookY: 8, lookZ: -165 },
-        elevated: { fov: 44, y: 78,  z: 118, lookY: 4, lookZ: -150 },
-        overhead: { fov: 48, y: 118, z: 74,  lookY: 0, lookZ: -115 },
+        classic:  { fov: 40, y: 46,  z: 112, lookY: 8,   lookZ: -165 },
+        elevated: { fov: 44, y: 78,  z: 118, lookY: 4,   lookZ: -150 },
+        overhead: { fov: 48, y: 118, z: 74,  lookY: -33, lookZ: -115 },
     };
     // Camera preset id — string-valued like the theme, so it gets its own
     // validated key + setter rather than an FX_DEFAULTS slot.
@@ -1263,8 +1267,10 @@
             const id = localStorage.getItem(FX_LS_CAMERA);
             if (id && CAM_PRESETS[id]) return id;
         } catch (_) {}
-        // Default: the overhead reading rig — paired with the camTilt default
-        // below it gives the tuned plug-and-play piano view. Others selectable.
+        // Default: the overhead reading rig — its lookY already carries the
+        // tuned downward aim, so with the neutral camTilt default it gives the
+        // plug-and-play piano view out of the box. Others selectable ('classic'
+        // + neutral tilt = the exact historical rig).
         return 'overhead';
     }
     window.keys3dSetCamera = function (id) {
@@ -1690,14 +1696,17 @@
         // multiply the preset, tilt offsets the aim height. Returns the
         // effective {y, z, lookY, lookZ} in pre-K units; the caller scales by
         // K and the auto-zoom. Keeps the pan/dolly follow-motion intact —
-        // these only move the vantage point it orbits around.
+        // these only move the vantage point it orbits around. Writes into a
+        // reusable object (returned live) so the per-frame camera update stays
+        // allocation-free — the callers read it synchronously and never retain
+        // it, so a single shared instance is safe.
+        const _rigOut = { y: 0, z: 0, lookY: 0, lookZ: 0 };
         function _rig() {
-            return {
-                y: _camPreset.y * fx.camHeight,
-                z: _camPreset.z * fx.camDist,
-                lookY: _camPreset.lookY + fx.camTilt * CAM_TILT_UNITS,
-                lookZ: _camPreset.lookZ,
-            };
+            _rigOut.y = _camPreset.y * fx.camHeight;
+            _rigOut.z = _camPreset.z * fx.camDist;
+            _rigOut.lookY = _camPreset.lookY + fx.camTilt * CAM_TILT_UNITS;
+            _rigOut.lookZ = _camPreset.lookZ;
+            return _rigOut;
         }
         // Per-key approach glow: a key lights in its pitch-class colour ONLY while a
         // note is heading for it, ramping up the closer that note gets to the hit-line.

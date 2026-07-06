@@ -266,13 +266,14 @@ test('octaveNoteColor: hue steps per octave, loops, sharps darker, sub-C1 distin
 
 /* ── Camera presets + fine-tune (feat/keys3d-camera) ─────────────────── */
 
-test('FX defaults: camera height/distance neutral, tilt tuned for the default view', () => {
+test('FX defaults: camera height/distance/tilt all neutral (preset carries the tuned aim)', () => {
     const { FX_DEFAULTS, FX_RANGES } = load().slopsmithViz_keys_highway_3d.__test;
     assert.equal(FX_DEFAULTS.camHeight, 1.0);
     assert.equal(FX_DEFAULTS.camDist, 1.0);
-    // Tilt ships at the tuned plug-and-play value (paired with overhead),
-    // and must sit inside its declared range.
-    assert.equal(FX_DEFAULTS.camTilt, -0.6);
+    // Tilt ships NEUTRAL (0): the tuned plug-and-play aim now lives in
+    // CAM_PRESETS.overhead.lookY, so the fine-tune only nudges from a preset
+    // and 'classic' + this default reproduces the exact historical rig.
+    assert.equal(FX_DEFAULTS.camTilt, 0.0);
     assert.ok(FX_DEFAULTS.camTilt >= FX_RANGES.camTilt[0] && FX_DEFAULTS.camTilt <= FX_RANGES.camTilt[1]);
     // Height/distance bracket 1 (can go lower AND higher); tilt spans 0.
     assert.ok(FX_RANGES.camHeight[0] < 1 && 1 < FX_RANGES.camHeight[1]);
@@ -340,7 +341,9 @@ test('camera presets: classic preserves the stock rig, overhead is the default',
     const { CAM_PRESETS, readCameraSetting } = load().slopsmithViz_keys_highway_3d.__test;
     assert.deepEqual(Object.keys(CAM_PRESETS), ['classic', 'elevated', 'overhead']);
     // 'classic' preserves the historical constants (pre-K units) even though
-    // it is no longer the default — anyone who picks it gets the old rig.
+    // it is no longer the default — anyone who picks it gets the old rig back
+    // EXACTLY, because camTilt now defaults to 0 (neutral): effective aim =
+    // classic.lookY + 0*CAM_TILT_UNITS = 8, the historical LOOK_Y.
     assert.deepEqual({ ...CAM_PRESETS.classic },
         { fov: 40, y: 46, z: 112, lookY: 8, lookZ: -165 });
     for (const [id, p] of Object.entries(CAM_PRESETS)) {
@@ -350,6 +353,21 @@ test('camera presets: classic preserves the stock rig, overhead is the default',
         assert.ok(p.y > 0 && p.z > 0, id + ' sits above and behind the keys');
     }
     assert.equal(readCameraSetting(), 'overhead'); // no localStorage in the vm → tuned default
+});
+
+test('camera default look is unchanged: overhead bakes the old tuned tilt, camTilt is neutral', () => {
+    const { CAM_PRESETS, FX_DEFAULTS } = load().slopsmithViz_keys_highway_3d.__test;
+    const CAM_TILT_UNITS = 55; // full-swing of the camTilt offset at ±1 (screen.js)
+    // The shipped default look = overhead preset + the default camTilt. Before,
+    // that was lookY 0 + (−0.6 × 55) = −33; the tuned aim now lives in the
+    // preset (lookY −33) with a neutral camTilt (0), so the effective aim — and
+    // thus the out-of-the-box framing — is byte-identical.
+    const effOverhead = CAM_PRESETS.overhead.lookY + FX_DEFAULTS.camTilt * CAM_TILT_UNITS;
+    assert.equal(effOverhead, -33);
+    // 'classic' + the neutral default reproduces the historical LOOK_Y (8) —
+    // the "pick Classic for the original look" promise, now actually true.
+    const effClassic = CAM_PRESETS.classic.lookY + FX_DEFAULTS.camTilt * CAM_TILT_UNITS;
+    assert.equal(effClassic, 8);
 });
 
 test('keys3dSetCamera: persists + dispatches valid ids, ignores unknown', () => {
