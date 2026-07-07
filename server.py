@@ -1348,16 +1348,23 @@ class MetadataDB:
         return [{"tag": r[0], "count": r[1]} for r in rows]
 
     def user_meta_map(self, filenames) -> dict:
-        """Batch {filename: user_difficulty} for a page of rows (set values
-        only). Lets query_page embed difficulty without an N+1."""
+        """Batch {filename: user_difficulty} for a set of rows (set values
+        only). Lets query_page / query_artists embed difficulty without an
+        N+1. Chunked under SQLite's variable limit — query_artists can pass
+        every song across 50 artists, well past a single IN (...)."""
         fns = list(filenames)
-        if not fns:
-            return {}
-        ph = ",".join("?" * len(fns))
-        rows = self.conn.execute(
-            f"SELECT filename, user_difficulty FROM song_user_meta "
-            f"WHERE filename IN ({ph}) AND user_difficulty IS NOT NULL", fns).fetchall()
-        return {r[0]: r[1] for r in rows}
+        out: dict = {}
+        for i in range(0, len(fns), 400):
+            chunk = fns[i:i + 400]
+            if not chunk:
+                break
+            ph = ",".join("?" * len(chunk))
+            rows = self.conn.execute(
+                f"SELECT filename, user_difficulty FROM song_user_meta "
+                f"WHERE filename IN ({ph}) AND user_difficulty IS NOT NULL", chunk).fetchall()
+            for fn, diff in rows:
+                out[fn] = diff
+        return out
 
     def tags_map(self, filenames) -> dict:
         """Batch {filename: [tags]} for a page of rows."""
