@@ -277,3 +277,56 @@ def test_wire_format_shape(tmp_path):
     assert "anchors" in result
     assert "tuning" in result
     assert "capo" in result
+
+
+# ── non-positive division guard (legacy inline tempo path) ───────────────────
+
+def test_zero_division_does_not_crash(tmp_path):
+    """A malformed header (ticks_per_beat == 0) must not raise ZeroDivisionError.
+
+    The legacy inline tempo map in convert_midi_track_to_keys_wire divides by
+    ticks_per_beat at two sites; a 0 division falls back to the SMF default so
+    the note is still emitted with a sane, non-negative time.
+    """
+    mid = mido.MidiFile(ticks_per_beat=0)
+    track = mido.MidiTrack()
+    mid.tracks.append(track)
+    # Note starts after a one-"beat" rest so a bad divisor would skew its start.
+    track.append(mido.Message("note_on",  channel=0, note=60, velocity=64, time=480))
+    track.append(mido.Message("note_off", channel=0, note=60, velocity=0,  time=480))
+
+    path = _save(mid, tmp_path)
+    assert mido.MidiFile(path).ticks_per_beat == 0  # precondition: divisor is 0
+    result = convert_midi_track_to_keys_wire(path, track_index=0)
+    assert len(result["notes"]) == 1
+    n = result["notes"][0]
+    # 480-tick fallback @ 120 BPM: one beat = 0.5 s.
+    assert n["t"] == pytest.approx(0.5)
+    assert n["t"] >= 0.0
+    assert n["sus"] == pytest.approx(0.5)
+
+
+def test_smpte_negative_division_produces_nonnegative_times(tmp_path):
+    """SMPTE division (mido returns a NEGATIVE ticks_per_beat) must not yield
+    negative times through the legacy inline path.
+
+    ``or 480`` would miss this (a negative value is truthy); the ``> 0`` guard
+    falls back so the emitted note keeps a sane, non-negative start time.
+    """
+    mid = mido.MidiFile()
+    mid.ticks_per_beat = -1  # simulate a SMPTE / malformed signed-short division
+    track = mido.MidiTrack()
+    mid.tracks.append(track)
+    track.append(mido.Message("note_on",  channel=0, note=60, velocity=64, time=480))
+    track.append(mido.Message("note_off", channel=0, note=60, velocity=0,  time=480))
+
+    path = _save(mid, tmp_path)
+    assert mido.MidiFile(path).ticks_per_beat < 0  # precondition: negative divisor
+    result = convert_midi_track_to_keys_wire(path, track_index=0)
+    assert len(result["notes"]) == 1
+    n = result["notes"][0]
+    assert n["t"] >= 0.0
+    assert n["sus"] >= 0.0
+    # 480-tick fallback @ 120 BPM: one beat = 0.5 s.
+    assert n["t"] == pytest.approx(0.5)
+    assert n["sus"] == pytest.approx(0.5)

@@ -203,7 +203,13 @@ def convert_midi_track_to_keys_wire(
     #     a foreign track's tempo events do NOT apply to the chosen
     #     track. Merging would mis-time the notes — restrict the tempo
     #     scan to the selected track only.
-    ticks_per_beat = midi.ticks_per_beat
+    # ``ticks_per_beat`` is 0 for a malformed header and NEGATIVE for SMPTE
+    # division (mido returns the signed short as-is). Both feed the two
+    # divisions below (tempo-table build + tick_to_seconds), so guard here:
+    # 0 would raise ZeroDivisionError and a negative value would yield
+    # negative/garbage times. Use ``> 0`` (not ``or``) so the negative SMPTE
+    # case also falls back to the SMF default.
+    ticks_per_beat = midi.ticks_per_beat if midi.ticks_per_beat > 0 else 480
     raw_events: list[tuple[int, int]] = [(0, 500000)]  # default 120 BPM
     midi_type = getattr(midi, "type", 1)
     tempo_source = (
