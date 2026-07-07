@@ -1316,8 +1316,8 @@
 
     // Sharp-display layout id — string-valued (3-way), its own validated key +
     // setter. 'floating' = the original raised-plane sharps with white-only
-    // lanes (default, unchanged look); 'flat' = every note on one plane with
-    // piano-shaped tiled lanes (sharps leaned to even the naturals); 'realistic'
+    // lanes; 'flat' = every note on one plane with piano-shaped tiled lanes
+    // (sharps leaned to even the naturals); 'realistic'
     // = one plane with note bars sized like the physical keys (full naturals,
     // full sharps overlapping on top). Geometry-time — applied on the next chart
     // build via init()'s re-read.
