@@ -4107,6 +4107,18 @@ class MetadataDB:
                 "((SELECT MAX(best_accuracy) FROM song_stats s WHERE s.filename = songs.filename) IS NULL) ASC, "
                 "(SELECT MAX(best_accuracy) FROM song_stats s WHERE s.filename = songs.filename) DESC"
             ),
+            # Personal difficulty rating (song_user_meta.user_difficulty, 1..5 —
+            # manually set or seeded by the difficulty_tagger plugin), via a
+            # correlated subquery like mastery above (drops to OFFSET paging).
+            # Unrated songs push to the bottom in both directions.
+            "difficulty": (
+                "((SELECT user_difficulty FROM song_user_meta u WHERE u.filename = songs.filename) IS NULL) ASC, "
+                "(SELECT user_difficulty FROM song_user_meta u WHERE u.filename = songs.filename) ASC"
+            ),
+            "difficulty-desc": (
+                "((SELECT user_difficulty FROM song_user_meta u WHERE u.filename = songs.filename) IS NULL) ASC, "
+                "(SELECT user_difficulty FROM song_user_meta u WHERE u.filename = songs.filename) DESC"
+            ),
         }
         if group and sort in ("mastery", "mastery-desc"):
             # Sort law (§7.1): mastery aggregates MAX across the WHOLE group —

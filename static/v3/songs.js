@@ -38,6 +38,9 @@
         // Mastery = best accuracy across arrangements (song_stats); unscored songs
         // sort last either way. Ascending surfaces what needs work; never default.
         ['mastery', 'Needs practice first'], ['mastery-desc', 'Most mastered first'],
+        // Personal difficulty (song_user_meta.user_difficulty, 1-5); unrated
+        // songs sort last either way.
+        ['difficulty', 'Difficulty (easiest first)'], ['difficulty-desc', 'Difficulty (hardest first)'],
     ];
     const FORMATS = [['', 'All formats'], ['sloppak', 'Feedpak'], ['loose', 'Folder']];
     const ARRANGEMENTS = ['Lead', 'Rhythm', 'Bass', 'Combo', 'Vocals'];
