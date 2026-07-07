@@ -869,8 +869,15 @@ window._tunerUI = function(state, actions) {
         btn.textContent = 'Tuner';
         btn.title = 'Open Tuner';
         btn.onclick = window.tuner.toggle;
-        const closeBtn = isV3 ? null : controls.querySelector('button:last-child');
-        if (closeBtn) controls.insertBefore(btn, closeBtn);
+        // Anchor to the last DIRECT-child button of `controls` (the classic
+        // transport's close/exit button). A bare `button:last-child` can match
+        // a NESTED button that is not a direct child of `controls`, and
+        // `insertBefore()` then throws NotFoundError — which propagated out of
+        // the player-screen transition and aborted its render (feedBack#800).
+        // `:scope > button:last-of-type` restricts the anchor to a direct child;
+        // the parentNode check is a belt-and-suspenders guard before insertBefore.
+        const closeBtn = isV3 ? null : controls.querySelector(':scope > button:last-of-type');
+        if (closeBtn && closeBtn.parentNode === controls) controls.insertBefore(btn, closeBtn);
         else controls.appendChild(btn);
         updatePlayerButton();
     }
