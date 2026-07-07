@@ -11567,6 +11567,14 @@ async function loadPlugins() {
                         // URL ?v=mtime convention elsewhere in this file).
                         const v = encodeURIComponent(wantedVersion);
                         script.src = `/api/plugins/${plugin.id}/screen.js${v ? `?v=${v}` : ''}`;
+                        // Module-migration (R0): a migrated plugin declares
+                        // scriptType:"module" and its screen.js is `import
+                        // './src/main.js'`. A <script type="module"> fires load
+                        // only after its whole static-import graph evaluates, so
+                        // the await-onload completion + _loadingPluginId contract
+                        // below is preserved (a classic-IIFE dynamic import()
+                        // would not). Classic plugins are unaffected.
+                        if (plugin.script_type === 'module') script.type = 'module';
                         script.dataset.pluginId = plugin.id;
                         script.dataset.pluginVersion = wantedVersion;
                         window.feedBack._loadingPluginId = plugin.id;
