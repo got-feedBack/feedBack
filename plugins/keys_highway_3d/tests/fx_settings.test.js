@@ -515,3 +515,38 @@ test('laneSpanFlat (V5): octaveGaps widens B→C by octGap, sharps unaffected', 
     assert.ok(Math.abs((s.right - s.left) - 2 * dims.sharpHalf) < 1e-9, 'sharp width unchanged by gaps');
 });
 
+test('laneSpanFlat (V5): active-range boundary key is NOT trimmed by an out-of-range neighbor sharp', () => {
+    const { laneSpanFlat } = load().slopsmithViz_keys_highway_3d.__test;
+    const dims = { whiteW: 12, sharpHalf: 2.2, shift: 2.2 / 3, octGap: 0.9 }; // mirrors LANE_DIMS_FLAT
+    // F (midi 65, cx 36): its upper neighbor F# (66) is a sharp. When F sits
+    // at range.activeHigh and F# is excluded from the active range, F# never
+    // gets a lane drawn (see the activeLow/activeHigh skip around the
+    // lane-strip loop) — trimming F's right edge for it would leave a dark,
+    // unfilled sliver. The edge should stay full instead.
+    const highBoundary = { activeLow: 60, activeHigh: 65 };
+    const fAtBoundary = laneSpanFlat(65, false, 36, dims, false, highBoundary);
+    assert.ok(Math.abs(fAtBoundary.right - (36 + dims.whiteW / 2)) < 1e-9,
+        'F right edge stays full when F# is out of the active range');
+    // Same key, but now F# IS in the active range: normal zero-overlap
+    // tiling applies — the trim matches the ungated (no-range) call exactly,
+    // so in-range geometry is unaffected by this fix.
+    const highIncluded = { activeLow: 60, activeHigh: 66 };
+    const fWithSharpInRange = laneSpanFlat(65, false, 36, dims, false, highIncluded);
+    const fUngated = laneSpanFlat(65, false, 36, dims, false);
+    assert.ok(Math.abs(fWithSharpInRange.right - fUngated.right) < 1e-9,
+        'F trims normally once F# is back in range');
+    assert.ok(fWithSharpInRange.right < fAtBoundary.right, 'in-range trim is narrower than the boundary full edge');
+
+    // Symmetric case on the low edge: D (midi 62, cx 12), lower neighbor C#
+    // (61) excluded when D sits at range.activeLow.
+    const lowBoundary = { activeLow: 62, activeHigh: 72 };
+    const dAtBoundary = laneSpanFlat(62, false, 12, dims, false, lowBoundary);
+    assert.ok(Math.abs(dAtBoundary.left - (12 - dims.whiteW / 2)) < 1e-9,
+        'D left edge stays full when C# is out of the active range');
+    const lowIncluded = { activeLow: 61, activeHigh: 72 };
+    const dWithSharpInRange = laneSpanFlat(62, false, 12, dims, false, lowIncluded);
+    const dUngated = laneSpanFlat(62, false, 12, dims, false);
+    assert.ok(Math.abs(dWithSharpInRange.left - dUngated.left) < 1e-9,
+        'D trims normally once C# is back in range');
+});
+

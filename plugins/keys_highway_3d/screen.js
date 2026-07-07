@@ -202,21 +202,32 @@
     // naturals come out equal. Lanes still tile edge-to-edge (no overlap, no
     // gap). With `gaps`, each B→C octave boundary opens an extra `octGap`
     // divider by shaving half of it off the B and the C (naturals only).
-    function laneSpanFlat(midi, black, cx, dims, gaps) {
+    // `range`, when given, gates the trim to a neighbouring sharp that is
+    // itself inside `range.activeLow..range.activeHigh`. A white key at the
+    // active-range boundary (see the `midi < range.activeLow ||
+    // midi > range.activeHigh` skip around the lane-strip loop) may sit next
+    // to a sharp pitch-class that falls just outside the active range — that
+    // sharp's lane is never drawn, so trimming the white key's edge for it
+    // leaves a dark, unfilled sliver. Gating on range keeps that edge full
+    // while leaving the normal (fully in-range) zero-overlap tiling intact.
+    // Callers that don't pass `range` (e.g. the unit tests exercising raw
+    // tiling geometry) keep the unconditional trim.
+    function laneSpanFlat(midi, black, cx, dims, gaps, range) {
         const { whiteW, sharpHalf, shift, octGap } = dims;
         if (black) {
             const c = cx + _sharpLeanDir(((midi % 12) + 12) % 12) * shift;
             return { left: c - sharpHalf, right: c + sharpHalf };
         }
+        const neighborActive = (m) => !range || (m >= range.activeLow && m <= range.activeHigh);
         // White: each side that meets a sharp is trimmed to that (leaned) sharp's
         // near edge; a side that meets another white keeps the half-slot edge.
         let left = cx - whiteW / 2;
         let right = cx + whiteW / 2;
-        if (_isBlackPc(midi - 1)) {
+        if (_isBlackPc(midi - 1) && neighborActive(midi - 1)) {
             const bc = (cx - whiteW / 2) + _sharpLeanDir(((midi - 1) % 12 + 12) % 12) * shift;
             left = bc + sharpHalf;
         }
-        if (_isBlackPc(midi + 1)) {
+        if (_isBlackPc(midi + 1) && neighborActive(midi + 1)) {
             const bc = (cx + whiteW / 2) + _sharpLeanDir(((midi + 1) % 12 + 12) % 12) * shift;
             right = bc - sharpHalf;
         }
@@ -1785,12 +1796,14 @@
         const REAL_SHARP_HALF = BLACK_W / 2;    // sharp bar = physical black key (6.4K)
         const REAL_SHARP_LIFT = 0.3 * K;
         const LANE_DIMS_REAL = { natHalf: REAL_NAT_HALF, sharpHalf: REAL_SHARP_HALF, octGap: OCT_GAP };
-        // Lane span for the active non-floating sharp mode.
+        // Lane span for the active non-floating sharp mode. `range`
+        // (activeLow/activeHigh) is optional and only consulted by the flat
+        // layout, to gate the boundary-key edge trim (see laneSpanFlat).
         const _flatMode = () => _sharpMode === 'flat' || _sharpMode === 'realistic';
-        function laneSpanFor(midi, black, cx, gaps) {
+        function laneSpanFor(midi, black, cx, gaps, range) {
             return _sharpMode === 'realistic'
                 ? laneSpanReal(midi, black, cx, LANE_DIMS_REAL, gaps)
-                : laneSpanFlat(midi, black, cx, LANE_DIMS_FLAT, gaps);
+                : laneSpanFlat(midi, black, cx, LANE_DIMS_FLAT, gaps, range);
         }
 
         // Camera — the default 'classic' preset is a low, near-telephoto rig
@@ -2799,7 +2812,7 @@
                         if (pc === 0) left += OCT_GAP / 2;
                     }
                 } else {
-                    const span = laneSpanFor(midi, entry.black, keyX(entry, whiteCount), gaps);
+                    const span = laneSpanFor(midi, entry.black, keyX(entry, whiteCount), gaps, range);
                     left = span.left; right = span.right;
                     if (_sharpMode === 'realistic' && entry.black) stripY = laneY + REAL_SHARP_LIFT;
                 }
@@ -2959,7 +2972,7 @@
                 let w, x, y;
                 if (_flatMode()) {
                     const span = laneSpanFor(
-                        note.midi, entry.black, keyX(entry, whiteCount), fx.octaveGaps);
+                        note.midi, entry.black, keyX(entry, whiteCount), fx.octaveGaps, range);
                     // 'realistic' bars are full (physical-key size); 'flat' bars are
                     // inset a touch for a dark separator in the tight tiling.
                     const inset = _sharpMode === 'realistic' ? 1.0 : 0.9;
