@@ -1911,10 +1911,13 @@ def convert_drum_track_to_drumtab(
 
                     hit: dict = {"t": round(t, 3), "p": piece}
 
-                    # Velocity: GP stores 1-127 MIDI velocity directly; default
-                    # is 95 (Velocities.default). Pass through verbatim,
-                    # clamping defensively so a corrupt file can't poison the
-                    # wire format.
+                    # Velocity: GP stores 1-127 MIDI velocity directly. Note
+                    # this is GP's *authoring* default (95, Velocities.default)
+                    # — unrelated to the drumtab render default of 100
+                    # (DEFAULT_VELOCITY, lib/drums.py:179), which only applies
+                    # when `v` is omitted from a hit. Pass the GP value through
+                    # verbatim, clamping defensively so a corrupt file can't
+                    # poison the wire format.
                     vel = int(getattr(note, "velocity", 0) or 0)
                     if 1 <= vel <= 127:
                         hit["v"] = vel
@@ -1965,6 +1968,10 @@ def convert_drum_track_to_drumtab(
                 _rec["times"] = [p[0] for p in _pairs]
                 _rec["velocities"] = [p[1] for p in _pairs]
             else:
+                # Belt-and-suspenders: times & velocities are always appended
+                # together under the same `len(times) < 100` guard above, so
+                # in practice the lengths can't diverge. Kept as a defensive
+                # fallback, not a real divergence case.
                 _rec["times"].sort()
 
     return {
