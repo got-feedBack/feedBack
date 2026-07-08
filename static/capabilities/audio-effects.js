@@ -9,6 +9,8 @@
 
     const SCHEMA = 'feedBack.audio_effects.diagnostics.v1';
     const PLAN_SCHEMA = 'feedBack.audio_effects.chain_plan.v1';
+// Pre-rebrand plugins (rig_builder <= 2.9.x) still send the old schema id — accept it as an alias.
+const LEGACY_PLAN_SCHEMA = 'slopsmith.audio_effects.chain_plan.v1';
     const OWNER_ID = 'core.audio.effects';
     const DEFAULT_ROUTE_KEY = 'desktop-main';
     const DEFAULT_TIMEOUT_MS = 2000;
@@ -734,7 +736,7 @@
         const errors = [];
         const source = _plainObject(rawPlan);
         const schema = _string(source.schema || source.version, PLAN_SCHEMA);
-        if (schema !== PLAN_SCHEMA && schema !== '1') errors.push('Unsupported chain plan schema');
+        if (schema !== PLAN_SCHEMA && schema !== LEGACY_PLAN_SCHEMA && schema !== '1') errors.push('Unsupported chain plan schema');
         const planRoute = _safeRoute(source.routeKey || source.route || routeKey);
         if (planRoute !== routeKey) errors.push('Chain plan route does not match selected route');
         const providerId = _safeId(source.providerId || provider.providerId, provider.providerId);
