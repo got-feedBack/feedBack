@@ -45,10 +45,12 @@ order are all preserved. (A classic IIFE that fired a fire-and-forget
    "no implicit IO at import time", applied to the frontend.) Tests are `.mjs`
    and use real `import`, retiring the regex/`extractFunction` harness.
 5. **Assets resolve via `import.meta.url`.** `document.currentScript` is `null`
-   inside a module. For a worklet/WASM/image under `assets/`, use
-   `new URL('assets/x.js', import.meta.url)` — or the absolute route path
-   `/api/plugins/<id>/assets/x.js`. Worklets run in a *separate* module graph
-   (`AudioWorkletGlobalScope`) and cannot share modules with `src/`.
+   inside a module. `assets/` lives at the plugin root, so a `src/` module must
+   climb out of `src/`: from `src/main.js`, `new URL('../assets/x.js',
+   import.meta.url)` (deeper modules need more `../`). Simpler and
+   depth-independent: the absolute route `/api/plugins/<id>/assets/x.js`.
+   Worklets run in a *separate* module graph (`AudioWorkletGlobalScope`) and
+   cannot share modules with `src/`.
 6. **Re-init comes from `screen:changed`, not re-execution.** The host loads
    `screen.js` once per version and `showScreen` re-injects nothing, so module
    top-level code does **not** re-run when the user re-enters the screen at the

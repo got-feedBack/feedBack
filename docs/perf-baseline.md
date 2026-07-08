@@ -39,10 +39,11 @@ the hooks, they just need real songs in `DLC_DIR`.
 
 ### R0 baseline — 2026-07-08 (branch `feat/r0-plugin-module-rails`)
 
-> ⚠️ Captured against an **empty** library (no charts in `DLC_DIR`), so the
-> `/api/library*` and boot numbers are floor values — re-take on a seeded
-> environment for the real R0 baseline before comparing R1+ against it. Recorded
-> here to prove the harness and lock the methodology.
+> ⚠️ A quick capture (`--n 50 --soak 8`) against an **empty** library (no charts
+> in `DLC_DIR`), so the `/api/library*` and boot numbers are floor values —
+> re-take on a seeded environment with the recommended `--n 60 --soak 30` for the
+> real R0 baseline before comparing R1+ against it. Recorded here to prove the
+> harness and lock the methodology.
 
 Server latency (ms), n=50:
 
