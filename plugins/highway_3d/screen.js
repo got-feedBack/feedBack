@@ -14714,13 +14714,16 @@
             if (_poseHMul !== 1) _camY *= _poseHMul;
             if (_poseDMul !== 1) _camZ *= _poseDMul;
             // ── Free-camera user tweaks (orbit / height / zoom / pan) ──
-            // Driven by the Camera Director plugin via window.__h3dCamCtl.
+            // Driven by the Camera Director plugin via the camera bridge:
+            // window.__h3dCamCtlPanels[panelIndexFor(canvas)] when split (this
+            // panel's own camera), falling back to the global window.__h3dCamCtl.
             // Layered ON TOP of the auto-framing so note tracking still works.
             // The bridge is read once into _freeCam and reused for both the
             // position and the look-at transforms; every field is coerced to a
             // finite number before use so a malformed object can never feed NaN
             // into cam.position / cam.lookAt.
-            // _freeCam resolved above (per-panel-aware Camera Director bridge).
+            // _freeCam resolved above via _freeCamFor(highwayCanvas): the
+            // per-panel __h3dCamCtlPanels entry, else global __h3dCamCtl, else null.
             const _lookAtZ = -FOCUS_D * 0.35 * _poseLookZMul;
             if (_freeCam && _freeCam.enabled) {
                 const _distMul = Number.isFinite(_freeCam.distMul) ? _freeCam.distMul : 1;
