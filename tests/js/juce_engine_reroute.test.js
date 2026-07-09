@@ -40,7 +40,7 @@ function extractWatcherIIFE(src) {
 
 // Build a sandbox with fakes and run the watcher IIFE inside it. Returns the
 // sandbox so tests can drive window._reevaluateJuceRouting and inspect state.
-function makeSandbox({ isAudioRunning, loadBackingTrack }) {
+function makeSandbox({ isAudioRunning, loadBackingTrack, outputType = 'Windows Audio' }) {
     const calls = { loadBackingTrack: [], jucePlay: 0, jucePause: 0, audioPlay: 0 };
 
     const audio = {
@@ -65,6 +65,7 @@ function makeSandbox({ isAudioRunning, loadBackingTrack }) {
     const juceApi = {
         isAudioRunning: () => Promise.resolve(isAudioRunning()),
         loadBackingTrack: (p) => { calls.loadBackingTrack.push(p); return Promise.resolve(loadBackingTrack()); },
+        getCurrentDevice: () => Promise.resolve({ outputType: typeof outputType === 'function' ? outputType() : outputType }),
         getBackingDuration: () => Promise.resolve(180),
         seekBacking: () => Promise.resolve(),
         startBacking: () => Promise.resolve(),
@@ -150,6 +151,87 @@ test('non-JUCE-eligible song (sloppak stems) is never rerouted', async () => {
 
     assert.equal(sb.window._juceMode, false, 'stems stay on HTML5');
     assert.equal(sb.__calls.loadBackingTrack.length, 0);
+});
+
+test('feedpak full-mix + exclusive output → migrates to JUCE', async () => {
+    const sb = makeSandbox({
+        isAudioRunning: () => true,
+        loadBackingTrack: () => true,
+        outputType: 'Windows Audio (Exclusive Mode)',
+    });
+    sb.window._juceMode = false;
+    sb.window._currentSongAudio = {
+        url: '/api/sloppak/song.sloppak/file/stems/full.ogg',
+        juceEligible: false,
+        feedpakFullMix: true,
+    };
+
+    await sb.window._reevaluateJuceRouting();
+
+    assert.equal(sb.window._juceMode, true, 'feedpak full-mix rides the engine under exclusive output');
+    assert.equal(sb.__calls.loadBackingTrack.length, 1);
+});
+
+test('feedpak full-mix + ASIO output → migrates to JUCE', async () => {
+    const sb = makeSandbox({
+        isAudioRunning: () => true,
+        loadBackingTrack: () => true,
+        outputType: 'ASIO',
+    });
+    sb.window._juceMode = false;
+    sb.window._currentSongAudio = {
+        url: '/api/sloppak/song.sloppak/file/stems/full.ogg',
+        juceEligible: false,
+        feedpakFullMix: true,
+    };
+
+    await sb.window._reevaluateJuceRouting();
+
+    assert.equal(sb.window._juceMode, true, 'ASIO is exclusive-style; feedpak rides the engine');
+});
+
+test('feedpak full-mix + shared output → stays on HTML5 (stem mixer untouched)', async () => {
+    for (const shared of ['Windows Audio', 'Windows Audio (Low Latency Mode)', 'DirectSound']) {
+        const sb = makeSandbox({
+            isAudioRunning: () => true,
+            loadBackingTrack: () => true,
+            outputType: shared,
+        });
+        sb.window._juceMode = false;
+        sb.window._currentSongAudio = {
+            url: '/api/sloppak/song.sloppak/file/stems/full.ogg',
+            juceEligible: false,
+            feedpakFullMix: true,
+        };
+
+        await sb.window._reevaluateJuceRouting();
+
+        assert.equal(sb.window._juceMode, false, `stays on HTML5 for shared type "${shared}"`);
+        assert.equal(sb.__calls.loadBackingTrack.length, 0);
+    }
+});
+
+test('feedpak on JUCE + output leaves exclusive mode → migrates back to HTML5', async () => {
+    let type = 'Windows Audio (Exclusive Mode)';
+    const sb = makeSandbox({
+        isAudioRunning: () => true,
+        loadBackingTrack: () => true,
+        outputType: () => type,
+    });
+    const url = '/api/sloppak/song.sloppak/file/stems/full.ogg';
+    sb.window._juceMode = true;
+    sb.window._juceAudioUrl = url;
+    sb.window._currentSongAudio = { url, juceEligible: false, feedpakFullMix: true };
+
+    // Still exclusive: routing is consistent, no switch.
+    await sb.window._reevaluateJuceRouting();
+    assert.equal(sb.window._juceMode, true, 'consistent while exclusive');
+
+    // Device switched to shared mid-song: must return to HTML5.
+    type = 'Windows Audio';
+    await sb.window._reevaluateJuceRouting();
+    assert.equal(sb.window._juceMode, false, 'returned to HTML5 after leaving exclusive mode');
+    assert.equal(sb.audio.src, url, 'HTML5 element re-pointed at the song');
 });
 
 test('JUCE hard-reject is memoised → not retried on the next poll', async () => {

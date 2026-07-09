@@ -103,12 +103,98 @@ def test_returns_404_for_nonexistent_file(client_and_server):
     assert "error" in r.json()
 
 
-# ── rejected non-/audio/ inputs ───────────────────────────────────────────────
+# ── sloppak URLs (feedpak full-mix, desktop exclusive-mode routing) ──────────
 
-def test_rejects_sloppak_url(client_and_server):
+@pytest.fixture()
+def dlc_client(tmp_path, monkeypatch):
+    """Loopback TestClient with a temp DLC_DIR for sloppak resolution."""
+    dlc = tmp_path / "dlc"
+    dlc.mkdir()
+    monkeypatch.setenv("DLC_DIR", str(dlc))
+    monkeypatch.setenv("CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setenv("FEEDBACK_SYNC_STARTUP", "1")
+    sys.modules.pop("server", None)
+    server = importlib.import_module("server")
+    # Module-level sloppak source-dir cache survives re-import; clear it so a
+    # prior test's filename key can't shadow this test's temp DLC_DIR.
+    server.sloppak_mod._source_cache.clear()
+    monkeypatch.setattr(server, "load_plugins", lambda *a, **kw: None)
+    monkeypatch.setattr(server, "startup_scan", lambda: None)
+    static_tmp = tmp_path / "static"
+    static_tmp.mkdir()
+    monkeypatch.setattr(server, "STATIC_DIR", static_tmp)
+    tc = TestClient(server.app, client=("127.0.0.1", 50000))
+    try:
+        yield tc, server, dlc
+    finally:
+        tc.close()
+        meta_db = getattr(server, "meta_db", None)
+        conn = getattr(meta_db, "conn", None)
+        if conn is not None:
+            getattr(__import__("sys").modules.get("server"), "_join_background_db_threads", lambda: None)()
+            conn.close()
+
+
+def _make_sloppak(dlc, name="song.sloppak"):
+    """Create a minimal directory-form sloppak with a full-mix file."""
+    pak = dlc / name
+    (pak / "stems").mkdir(parents=True)
+    (pak / "stems" / "full.ogg").write_bytes(b"OggS-fake")
+    return pak
+
+
+def test_sloppak_url_resolves_to_local_path(dlc_client):
+    tc, _server, dlc = dlc_client
+    pak = _make_sloppak(dlc)
+    r = tc.get(
+        "/api/audio-local-path",
+        params={"url": "/api/sloppak/song.sloppak/file/stems/full.ogg"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["path"] == str((pak / "stems" / "full.ogg").resolve())
+
+
+def test_sloppak_url_percent_encoded_segments_decode(dlc_client):
+    tc, _server, dlc = dlc_client
+    _make_sloppak(dlc, name="My Song.sloppak")
+    r = tc.get(
+        "/api/audio-local-path",
+        params={"url": "/api/sloppak/My%20Song.sloppak/file/stems/full.ogg"},
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_sloppak_url_rel_traversal_is_403(dlc_client):
+    tc, _server, dlc = dlc_client
+    _make_sloppak(dlc)
+    (dlc / "secret.txt").write_text("top secret")
+    r = tc.get(
+        "/api/audio-local-path",
+        params={"url": "/api/sloppak/song.sloppak/file/..%2Fsecret.txt"},
+    )
+    assert r.status_code == 403, r.text
+
+
+def test_sloppak_url_filename_traversal_is_403(dlc_client):
+    tc, _server, _dlc = dlc_client
+    r = tc.get(
+        "/api/audio-local-path",
+        params={"url": "/api/sloppak/..%2F..%2F..%2Fetc/file/passwd"},
+    )
+    assert r.status_code == 403, r.text
+
+
+def test_sloppak_url_without_dlc_configured_is_404(client_and_server):
+    """No DLC_DIR in the base fixture — resolver reports 'not configured'."""
     client, _ = client_and_server
-    r = client.get("/api/audio-local-path", params={"url": "/api/sloppak/mysong/file/stems/full.ogg"})
-    assert r.status_code == 400
+    r = client.get(
+        "/api/audio-local-path",
+        params={"url": "/api/sloppak/mysong/file/stems/full.ogg"},
+    )
+    assert r.status_code == 404
+
+
+# ── rejected non-/audio/ inputs ───────────────────────────────────────────────
 
 
 def test_rejects_empty_url(client_and_server):

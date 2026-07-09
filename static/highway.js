@@ -3409,21 +3409,57 @@ function createHighway() {
                                 if (msg.audio_url) {
                                     const audio = document.getElementById('audio');
                                     const audioFilename = msg.audio_url.split('/').pop();
-                                    // Only attempt JUCE routing for /audio/ URLs — sloppak stems
-                                    // (/api/sloppak/…) are not resolvable via audio-local-path.
+                                    // /audio/ URLs are always JUCE-routable. A feedpak full-mix
+                                    // (single-mix pack: original audio, no stems) is routable too,
+                                    // but ONLY under an exclusive-style output — the actual
+                                    // exclusive check happens at routing time (app.js watcher /
+                                    // the async block below), not here, because the share mode
+                                    // can change while the song is loaded. Sloppak stem URLs are
+                                    // never routable.
                                     const isAudioUrl = msg.audio_url.startsWith('/audio/');
+                                    // "Full mix" covers BOTH single-mix pack shapes:
+                                    //  - stem-less packs (original_audio: in the manifest,
+                                    //    audio_url == original_audio_url), and
+                                    //  - single-stem packs (stems: [full.ogg] only) — the server
+                                    //    puts the full mix in the stems list, has_original_audio
+                                    //    is false, and audio_url points at the one stem. With one
+                                    //    stem there is no per-stem mix to preserve, so routing it
+                                    //    natively loses nothing. Real multi-stem (>1) stays out
+                                    //    until Phase 2.
+                                    const isFeedpakFullMix = !isAudioUrl
+                                        && msg.audio_url.startsWith('/api/sloppak/')
+                                        && ((!!msg.has_original_audio && !msg.has_stems)
+                                            || (msg.stems || []).length === 1);
                                     // Record the loaded song's audio so app.js can re-route it
                                     // between the HTML5 and JUCE paths if the audio engine is
                                     // started/stopped after the song is already loaded. Set this
                                     // unconditionally (not just on reload): when alreadyLoaded is
                                     // true the watcher must still see correct, current metadata.
-                                    window._currentSongAudio = { url: msg.audio_url, juceEligible: isAudioUrl };
+                                    window._currentSongAudio = {
+                                        url: msg.audio_url,
+                                        juceEligible: isAudioUrl,
+                                        feedpakFullMix: isFeedpakFullMix,
+                                    };
                                     const alreadyLoaded = window._juceMode
                                         ? window._juceAudioUrl === msg.audio_url
                                         : (audio.src && audio.src.includes(audioFilename));
+                                    // [feedpak-route] diagnostics: every eligibility input in one
+                                    // line — shows up in the exported diagnostics bundle. If
+                                    // has_stems is true the pack is multi-stem and Phase 1
+                                    // deliberately does not route it (Phase 2 work).
+                                    console.log('[feedpak-route] song-load:',
+                                        'url=', msg.audio_url,
+                                        'isAudioUrl=', isAudioUrl,
+                                        'isFeedpakFullMix=', isFeedpakFullMix,
+                                        'has_stems=', !!msg.has_stems,
+                                        'stems=', (msg.stems || []).length,
+                                        'has_original_audio=', !!msg.has_original_audio,
+                                        'format=', msg.format,
+                                        'alreadyLoaded=', alreadyLoaded,
+                                        'juceApi=', !!window.feedBackDesktop?.audio);
                                     if (!alreadyLoaded) {
                                         const juceApi = window.feedBackDesktop?.audio;
-                                        if (isAudioUrl && juceApi) {
+                                        if ((isAudioUrl || isFeedpakFullMix) && juceApi) {
                                             // Run JUCE routing off the critical message-processing chain
                                             // so subsequent notes/chords/ready messages aren't blocked
                                             // waiting for IPC + HTTP round-trips. The 'ready' handler
@@ -3466,7 +3502,24 @@ function createHighway() {
                                                         clearTimeout(barrierTimer);
                                                         if (gen !== _wsGen) return; // navigated away during the wait
                                                     }
-                                                    if (await juceApi.isAudioRunning()) {
+                                                    // Feedpak full-mix rides the engine ONLY under an
+                                                    // exclusive-style output (shared mode falls through to
+                                                    // the HTML5 fallback below, keeping the WebAudio path
+                                                    // fully working). /audio/ songs route whenever the
+                                                    // engine runs, as before. If the share mode changes
+                                                    // later, the app.js watcher re-evaluates and migrates.
+                                                    let routeToJuce = await juceApi.isAudioRunning();
+                                                    console.log('[feedpak-route] initial-load: engineRunning=', routeToJuce);
+                                                    if (routeToJuce) {
+                                                        if (gen !== _wsGen) return; // stale
+                                                        if (isFeedpakFullMix) {
+                                                            const exclFn = window._juceOutputIsExclusive;
+                                                            routeToJuce = !!(await exclFn?.());
+                                                            console.log('[feedpak-route] initial-load: feedpak exclusive check →',
+                                                                routeToJuce, '(predicate installed=', typeof exclFn === 'function', ')');
+                                                        }
+                                                    }
+                                                    if (routeToJuce) {
                                                         if (gen !== _wsGen) return; // stale
                                                         const res = await fetch(`/api/audio-local-path?url=${encodeURIComponent(audioUrl)}`);
                                                         if (!res.ok) throw new Error('HTTP ' + res.status);

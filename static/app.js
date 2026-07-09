@@ -4864,6 +4864,47 @@ window.jucePlayer = jucePlayer;
     // (a network blip on /api/audio-local-path, an isAudioRunning() race
     // during a device restart) are deliberately NOT memoised so they retry.
     let _rerouteRejectedUrl = null;
+    // Exclusive-style output backends silence every other client on the
+    // endpoint — including our own <audio> element. The share mode IS the
+    // JUCE output device type: "Windows Audio (Exclusive Mode)" is a
+    // hardcoded, unlocalised JUCE type name; ASIO drivers typically hold
+    // the endpoint exclusively too. "Windows Audio (Low Latency Mode)" is
+    // shared and must NOT match.
+    function _isExclusiveOutputType(t) {
+        return t === 'Windows Audio (Exclusive Mode)' || t === 'ASIO';
+    }
+    // [feedpak-route] diagnostics: log the raw outputType string once per
+    // value change (this runs on a 350ms poll — logging every tick would
+    // flood the diagnostics buffer).
+    let _loggedOutputType;
+    async function _outputIsExclusive() {
+        if (typeof juceApi.getCurrentDevice !== 'function') {
+            if (_loggedOutputType !== '<no-getCurrentDevice>') {
+                _loggedOutputType = '<no-getCurrentDevice>';
+                console.warn('[feedpak-route] juceApi.getCurrentDevice missing — cannot detect exclusive output');
+            }
+            return false;
+        }
+        try {
+            const dev = await juceApi.getCurrentDevice();
+            const t = dev?.outputType || dev?.type || '';
+            const excl = _isExclusiveOutputType(t);
+            if (t !== _loggedOutputType) {
+                _loggedOutputType = t;
+                console.log('[feedpak-route] outputType=', JSON.stringify(t), '→ exclusive=', excl);
+            }
+            return excl;
+        } catch (e) {
+            if (_loggedOutputType !== '<getCurrentDevice-failed>') {
+                _loggedOutputType = '<getCurrentDevice-failed>';
+                console.warn('[feedpak-route] getCurrentDevice failed:', e);
+            }
+            return false;
+        }
+    }
+    // highway.js's initial song-load routing consults this for the same
+    // feedpak-under-exclusive decision the watcher makes below.
+    window._juceOutputIsExclusive = _outputIsExclusive;
     // Returns true when window._currentSongAudio no longer references the exact
     // snapshot object captured at reroute entry — i.e. the song was swapped (or
     // cleared) mid-flight. Staleness is detected by object-reference identity,
@@ -4904,8 +4945,12 @@ window.jucePlayer = jucePlayer;
         audio.pause();
         try {
             const res = await fetch(`/api/audio-local-path?url=${encodeURIComponent(url)}`);
-            if (!res.ok) throw new Error('HTTP ' + res.status);
+            if (!res.ok) {
+                console.warn('[feedpak-route] audio-local-path HTTP', res.status, 'for', url);
+                throw new Error('HTTP ' + res.status);
+            }
             const { path } = await res.json();
+            console.log('[feedpak-route] audio-local-path resolved:', (typeof path === 'string' && path.split(/[\\/]/).pop()) || '<missing>');
             if (_isStale(songAudio)) return 'stale';   // song changed mid-fetch
             const ok = await juceApi.loadBackingTrack(path);
             if (ok === false) {
@@ -5123,8 +5168,12 @@ window.jucePlayer = jucePlayer;
     async function _reevaluateJuceRouting() {
         if (_rerouteInFlight) return;
         const songAudio = window._currentSongAudio;
-        // Only /audio/ songs are JUCE-routable; sloppak stems stay on HTML5.
-        if (!songAudio || !songAudio.juceEligible) return;
+        // /audio/ songs are always JUCE-routable. A feedpak full-mix
+        // (single-mix pack, no stems) is routable ONLY under an
+        // exclusive-style output — in shared mode it must stay on HTML5 so
+        // the stem mixer / WebAudio path keeps working. Sloppak stem URLs
+        // are never routable (per-stem mix can't ride a single transport).
+        if (!songAudio || (!songAudio.juceEligible && !songAudio.feedpakFullMix)) return;
         // Don't race highway.js's own initial song-load routing: it owns
         // _juceMode until _juceRoutingPromise settles. Re-running our switch
         // concurrently would double-call loadBackingTrack for the same URL.
@@ -5142,13 +5191,30 @@ window.jucePlayer = jucePlayer;
             try { running = await juceApi.isAudioRunning(); }
             catch (_) { return; }
             if (_isStale(songAudio)) return;               // song changed during IPC
-            if (!!running === !!window._juceMode) return;  // routing already consistent
-
-            const wantJuce = running && !window._juceMode;
+            // Eligibility is evaluated per tick, not snapshotted at song load:
+            // the output share mode can change mid-song (device switch in the
+            // Audio Engine panel), and a feedpak full-mix must follow it —
+            // exclusive → ride the engine; back to shared → return to HTML5.
+            let eligible = !!songAudio.juceEligible;
+            if (!eligible && songAudio.feedpakFullMix && running) {
+                eligible = await _outputIsExclusive();
+                if (_isStale(songAudio)) return;           // song changed during IPC
+            }
+            const wantJuce = !!(running && eligible);
+            // [feedpak-route] diagnostics: one line per decision change (the
+            // watcher polls at 350ms; steady state must not spam the buffer).
+            const _decision = 'running=' + running + ' eligible=' + eligible
+                + ' feedpakFullMix=' + !!songAudio.feedpakFullMix
+                + ' juceMode=' + !!window._juceMode + ' url=' + songAudio.url;
+            if (_decision !== window._lastFeedpakRouteDecision) {
+                window._lastFeedpakRouteDecision = _decision;
+                console.log('[feedpak-route] watcher:', _decision);
+            }
+            if (wantJuce === !!window._juceMode) return;   // routing already consistent
             // Don't keep retrying a track JUCE explicitly rejected.
             if (wantJuce && songAudio.url === _rerouteRejectedUrl) return;
 
-            if (running) {
+            if (wantJuce) {
                 const outcome = await _switchHtml5ToJuce(songAudio);
                 // Memoise ONLY an explicit hard JUCE reject. A successful
                 // switch clears the memo; a 'stale' abort (song changed
@@ -5163,9 +5229,10 @@ window.jucePlayer = jucePlayer;
                 // outcome === 'stale': leave _rerouteRejectedUrl as-is.
             } else {
                 await _switchJuceToHtml5(songAudio);
-                // The engine just stopped. Clear any hard-reject memo so a
-                // later engine restart re-evaluates the track at least once —
-                // the rejection may have been a transient device/decoder state.
+                // The engine stopped (or a feedpak's output left exclusive
+                // mode). Clear any hard-reject memo so a later engine restart
+                // or mode change re-evaluates the track at least once — the
+                // rejection may have been a transient device/decoder state.
                 _rerouteRejectedUrl = null;
             }
         } catch (e) {

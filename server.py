@@ -12941,53 +12941,57 @@ _extract_cache = {}  # filename -> (tmp_dir, song, timestamp)
 _extract_cache_lock = threading.Lock()
 
 
-@app.get("/api/sloppak/{filename:path}/file/{rel_path:path}")
-def serve_sloppak_file(filename: str, rel_path: str):
-    """Serve a file from inside a sloppak (stems, cover, etc.)."""
+def _resolve_sloppak_local_file(filename: str, rel_path: str):
+    """Resolve a file inside a sloppak to its on-disk path.
+
+    Applies the same containment guards as ``serve_sloppak_file``. Returns the
+    resolved ``Path`` on success, or an ``(error, status)`` tuple on failure so
+    callers can produce their endpoint-appropriate response.
+    """
     dlc = _get_dlc_dir()
     if not dlc:
-        return JSONResponse({"error": "not configured"}, 404)
-    # `filename` is an attacker-controlled `:path` param. Contain it under
-    # DLC_DIR before it reaches the resolver, which does a bare
-    # `dlc_root / filename`. Without this, `../../../etc` escapes the root
-    # and the rel_path guard below validates `target` against the already-
-    # escaped `src`, which trivially passes — yielding arbitrary file reads
-    # (e.g. /api/sloppak/../../../../etc/file/passwd). Mirrors the guard
-    # `get_song_art` applies to the same filename param.
+        return ("not configured", 404)
+    # `filename` is caller-controlled. Contain it under DLC_DIR before it
+    # reaches the resolver (see serve_sloppak_file for the traversal rationale).
     resolved = _resolve_dlc_path(dlc, filename)
     if resolved is None:
-        return JSONResponse({"error": "forbidden"}, 403)
-    # Confine the endpoint to actual sloppak bundles. Without this, a
-    # contained-but-non-sloppak `filename` (e.g. `.` → DLC_DIR itself, or
-    # any plain subdirectory) would make `resolve_source_dir` hand back a
-    # directory and turn this into a read-any-file-under-DLC_DIR endpoint.
-    # Mirrors get_song_art's `is_sloppak` dispatch.
+        return ("forbidden", 403)
+    # Confine to actual sloppak bundles — otherwise any plain subdirectory
+    # would become a read-any-file-under-DLC_DIR source.
     if not sloppak_mod.is_sloppak(resolved):
-        return JSONResponse({"error": "not found"}, 404)
-    # Canonicalise the cache key against the resolved path so equivalent
-    # URL forms of the same sloppak (e.g. `A/../B/x.sloppak` vs
-    # `B/x.sloppak`) converge on one `_source_cache` entry instead of
-    # fragmenting / re-unpacking — mirrors get_song_info's keying.
+        return ("not found", 404)
+    # Canonicalise the cache key against the resolved path so equivalent URL
+    # forms of the same sloppak converge on one _source_cache entry.
     try:
         filename = resolved.relative_to(dlc.resolve()).as_posix()
     except ValueError:
-        # safe_join already proved containment, so this is unreachable in
-        # practice; fail closed rather than fall back to the raw param.
-        return JSONResponse({"error": "forbidden"}, 403)
+        # safe_join already proved containment; fail closed regardless.
+        return ("forbidden", 403)
     src = sloppak_mod.get_cached_source_dir(filename)
     if src is None:
         try:
             src = sloppak_mod.resolve_source_dir(filename, dlc, SLOPPAK_CACHE_DIR)
         except Exception:
-            return JSONResponse({"error": "not found"}, 404)
+            return ("not found", 404)
     # Prevent path traversal within the sloppak.
     target = (src / rel_path).resolve()
     try:
         target.relative_to(src.resolve())
     except ValueError:
-        return JSONResponse({"error": "forbidden"}, 403)
+        return ("forbidden", 403)
     if not target.exists() or not target.is_file():
-        return JSONResponse({"error": "not found"}, 404)
+        return ("not found", 404)
+    return target
+
+
+@app.get("/api/sloppak/{filename:path}/file/{rel_path:path}")
+def serve_sloppak_file(filename: str, rel_path: str):
+    """Serve a file from inside a sloppak (stems, cover, etc.)."""
+    result = _resolve_sloppak_local_file(filename, rel_path)
+    if isinstance(result, tuple):
+        error, status = result
+        return JSONResponse({"error": error}, status)
+    target = result
     ext = target.suffix.lower()
     mt = {
         ".ogg": "audio/ogg", ".opus": "audio/ogg", ".oga": "audio/ogg",
@@ -13910,12 +13914,18 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
 
 @app.get("/api/audio-local-path")
 def audio_local_path(url: str, request: Request):
-    """Return absolute local filesystem path for an /audio/… URL (Electron desktop only).
+    """Return absolute local filesystem path for a song URL (Electron desktop only).
 
     Accepts ``/audio/<path>`` where ``<path>`` may include subdirectory segments —
     no scheme, no host, no query string, no fragment.  The resolved path must stay
     inside AUDIO_CACHE_DIR or STATIC_DIR; ``..`` traversal, backslashes, and
     absolute ``filename`` values are rejected.
+
+    Also accepts ``/api/sloppak/<filename>/file/<rel>`` (percent-encoded, as
+    emitted by the highway song payload) and resolves it to the unpacked
+    sloppak cache file via the same containment guards as
+    ``serve_sloppak_file`` — this lets the desktop engine play a feedpak
+    full-mix natively under WASAPI-exclusive output.
 
     This endpoint returns a raw filesystem path and is intended exclusively for
     the Electron desktop process (which runs on loopback). Requests from non-
@@ -13929,6 +13939,21 @@ def audio_local_path(url: str, request: Request):
         is_loopback = client_host == "localhost"
     if not is_loopback:
         return JSONResponse({"error": "forbidden"}, status_code=403)
+    # Sloppak in-pack file (feedpak full-mix): /api/sloppak/<fn>/file/<rel>.
+    # Both segments arrive percent-encoded (built with urllib quote() in the
+    # highway payload); decode before handing to the shared resolver, which
+    # re-applies all containment guards on the decoded values.
+    slop_match = re.fullmatch(r"/api/sloppak/([^?#]+)/file/([^?#]+)", url)
+    if slop_match:
+        from urllib.parse import unquote
+
+        result = _resolve_sloppak_local_file(
+            unquote(slop_match.group(1)), unquote(slop_match.group(2))
+        )
+        if isinstance(result, tuple):
+            error, status = result
+            return JSONResponse({"error": error}, status_code=status)
+        return JSONResponse({"path": str(result)})
     # Accept only simple /audio/<filename> — no scheme, no host, no query/fragment
     if not re.fullmatch(r"/audio/[^?#]+", url):
         return JSONResponse({"error": "invalid url"}, status_code=400)
