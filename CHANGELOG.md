@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`routers/` — the first extracted route module (R3).** The five audio-effects mapping
+  endpoints move out of `server.py` into `routers/audio_effects.py` as a
+  `fastapi.APIRouter`, mounted with `app.include_router(...)` **at the point in the file
+  where they used to be defined** — FastAPI matches routes in registration order, so the
+  mount site preserves it. Verified: the full 143-route table (paths, methods, *and*
+  order) is byte-for-byte identical to `main`. Bodies are verbatim; the only edits are
+  the decorator receiver (`@app.get` → `@router.get`) and the singleton read
+  (`audio_effect_mappings` → `appstate.audio_effect_mappings`, a module attribute
+  resolved at call time). This proves the seam from #833 under a real consumer, including
+  the second slot. The `_demo_mode_guard` middleware still blocks all four moved write
+  routes with 403, and `Query(...)` validation still 422s — both checked against a running
+  server. Ships via `COPY routers/ /app/routers/` plus `!routers/` + `!routers/**` in
+  `.dockerignore`. `server.py`: **9,445 → 9,386 lines**.
 - **`appstate.py` — the router seam (R3).** Route modules moving out of `server.py`
   need `meta_db` and friends but must not `import server`, or the import graph goes
   circular the moment `server` imports them back. So `server.py` keeps *constructing*

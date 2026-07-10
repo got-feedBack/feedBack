@@ -12,6 +12,7 @@ services:
       - ./static:/app/static
       - ./server.py:/app/server.py
       - ./appstate.py:/app/appstate.py
+      - ./routers:/app/routers
       - ./VERSION:/app/VERSION
       - ./ug_browser.py:/app/ug_browser.py
       - ./lib:/app/lib

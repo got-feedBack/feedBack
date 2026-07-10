@@ -209,6 +209,7 @@ COPY server.py /app/
 # The router seam server.py injects its singletons into (R3). Root-level, like
 # server.py, so `import appstate` resolves off PYTHONPATH=/app.
 COPY appstate.py /app/
+COPY routers/ /app/routers/
 COPY main.py /app/
 COPY VERSION /app/
 # Built-in diagnostic sloppaks seeded into DLC_DIR/diagnostics-builtin/ at scan

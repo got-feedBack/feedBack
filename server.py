@@ -21,7 +21,7 @@ configure_logging()
 
 log = logging.getLogger("feedBack.server")
 
-from fastapi import Body, FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException, Query
+from fastapi import Body, FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
@@ -69,6 +69,8 @@ from audio_effects_db import AudioEffectsMappingDB
 # The router seam. Imported as a module (never `from appstate import ...`) so
 # `appstate.configure(...)` below publishes into the same namespace routers read.
 import appstate
+# Extracted route modules. They import `appstate`, never `server` — one-way graph.
+from routers import audio_effects
 import sloppak as sloppak_mod
 import drums as drums_mod
 import notation as notation_mod
@@ -5991,70 +5993,9 @@ def delete_loop(loop_id: int):
 
 
 # ── Audio Effects Mapping API ───────────────────────────────────────────────
-
-def _audio_effects_error(exc: Exception):
-    return JSONResponse({"error": str(exc)}, status_code=400)
-
-
-@app.get("/api/audio-effects/mappings")
-def list_audio_effect_mappings(
-    song_key: str = Query(""),
-    filename: str = Query(""),
-    tone_key: str = Query(""),
-    provider_id: str = Query(""),
-):
-    try:
-        return {
-            "mappings": audio_effect_mappings.list(
-                song_key=song_key,
-                filename=filename,
-                tone_key=tone_key,
-                provider_id=provider_id,
-            )
-        }
-    except ValueError as exc:
-        return _audio_effects_error(exc)
-
-
-@app.post("/api/audio-effects/mappings")
-def upsert_audio_effect_mapping(data: dict = Body(...)):
-    try:
-        mapping = audio_effect_mappings.upsert(data)
-    except ValueError as exc:
-        return _audio_effects_error(exc)
-    return {"ok": True, "mapping": mapping}
-
-
-@app.delete("/api/audio-effects/mappings/{mapping_id}")
-def delete_audio_effect_mapping(mapping_id: int, provider_id: str = Query("")):
-    try:
-        deleted = audio_effect_mappings.delete(mapping_id, provider_id=provider_id)
-    except ValueError as exc:
-        return _audio_effects_error(exc)
-    if not deleted:
-        return JSONResponse({"error": "mapping not found"}, status_code=404)
-    return {"ok": True}
-
-
-@app.post("/api/audio-effects/mappings/{mapping_id}/activate")
-def activate_audio_effect_mapping(mapping_id: int, data: dict = Body(default_factory=dict)):
-    try:
-        provider_id = data.get("provider_id") if "provider_id" in data else data.get("providerId")
-        mapping = audio_effect_mappings.activate(mapping_id, provider_id="" if provider_id is None else provider_id)
-    except ValueError as exc:
-        return _audio_effects_error(exc)
-    if not mapping:
-        return JSONResponse({"error": "mapping not found"}, status_code=404)
-    return {"ok": True, "mapping": mapping}
-
-
-@app.delete("/api/audio-effects/active-mapping")
-def clear_audio_effect_active_mapping(song_key: str = Query(...), tone_key: str = Query("")):
-    try:
-        cleared = audio_effect_mappings.clear_active(song_key=song_key, tone_key=tone_key)
-    except ValueError as exc:
-        return _audio_effects_error(exc)
-    return {"ok": True, "cleared": cleared}
+# Mounted here, where these routes used to be defined: FastAPI matches in
+# registration order, so the mount site preserves it.
+app.include_router(audio_effects.router)
 
 
 # ── Settings API ──────────────────────────────────────────────────────────────
