@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **`AudioEffectsMappingDB` moved out of `server.py` into `lib/audio_effects_db.py`
+  (R3, move-only).** The core-owned song/tone → provider routing index follows
+  `MetadataDB` out of the host file, byte-identical apart from the same constructor
+  seam (`__init__` takes `config_dir`; `audio_effect_mappings = AudioEffectsMappingDB(CONFIG_DIR)`),
+  so the module does no IO at import. The singleton stays in `server.py`; no route,
+  no test and no `monkeypatch.setattr(server, …)` target moves. `server.py`:
+  **9,705 → 9,433 lines**.
 - **`MetadataDB` moved out of `server.py` into `lib/metadata_db.py` (R3, move-only).**
   The library metadata cache — the `MetadataDB` class (4,018 lines) plus the query
   helpers it owns (keyset paging cursors, the tuning grouping key, smart-arrangement
