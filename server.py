@@ -55,7 +55,7 @@ from dlc_paths import _get_dlc_dir, _resolve_dlc_path
 # Lives in lib/ because that is the one core dir every packaging path copies.
 import appstate
 # Extracted route modules. They import `appstate`, never `server` — one-way graph.
-from routers import audio_effects, artist_aliases, loops, playlists, ws_highway, chart
+from routers import audio_effects, artist_aliases, loops, playlists, ws_highway, chart, wanted
 import sloppak as sloppak_mod
 import loosefolder as loosefolder_mod
 # Pure text-matching engine for MusicBrainz enrichment (P8): denoise/score/
@@ -5375,37 +5375,8 @@ def api_session_continue():
 
 
 # ── Wishlist / "wanted" API (feedBack#636 item 4) ─────────────────────────────
-
-@app.get("/api/wanted")
-def api_list_wanted():
-    """The wishlist — songs the user wants but doesn't own yet (newest first)."""
-    return {"wanted": meta_db.list_wanted()}
-
-
-@app.post("/api/wanted")
-def api_add_wanted(data: dict):
-    """Add a not-owned song to the wishlist. `artist`/`title` are required (at
-    least one non-empty); `source`/`source_ref`/`note` are optional. Idempotent
-    on identity so producers (find_more ownership-diff, manual add) can re-post."""
-    if not isinstance(data, dict):
-        return JSONResponse({"error": "body must be an object"}, status_code=400)
-    artist = _clean_str(data.get("artist"))
-    title = _clean_str(data.get("title"))
-    if not artist and not title:
-        return JSONResponse({"error": "artist or title required"}, status_code=400)
-    row = meta_db.add_wanted(
-        artist=artist, title=title,
-        source=_clean_str(data.get("source")) or "manual",
-        source_ref=_clean_str(data.get("source_ref")),
-        note=_clean_str(data.get("note")),
-    )
-    return {"ok": True, "wanted": row}
-
-
-@app.delete("/api/wanted/{wanted_id}")
-def api_remove_wanted(wanted_id: int):
-    """Remove a wishlist entry by id."""
-    return {"ok": meta_db.remove_wanted(wanted_id)}
+# Mounted here (registration order). Implementation in lib/routers/wanted.py.
+app.include_router(wanted.router)
 
 
 # ── Loops API ────────────────────────────────────────────────────────────────
