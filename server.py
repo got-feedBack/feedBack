@@ -26,10 +26,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 
 from safepath import safe_join
+from appconfig import _load_config
 from tunings import (
     DEFAULT_REFERENCE_PITCH, DEFAULT_TUNINGS, PROFILE_IDS, PROFILE_PATHWAYS,
-    TUNING_PRESET_MIDIS, apply_flat_instrument_patch_to_profiles,
-    apply_reference_pitch, freqs_to_midis, normalize_instrument_profile,
+    apply_flat_instrument_patch_to_profiles,
+    apply_reference_pitch, normalize_instrument_profile,
     normalize_instrument_profiles, settings_with_instrument_profiles,
     tuning_name,
 )
@@ -56,6 +57,7 @@ from dlc_paths import _get_dlc_dir, _resolve_dlc_path
 import appstate
 # Extracted route modules. They import `appstate`, never `server` — one-way graph.
 from routers import audio_effects, artist_aliases, loops, playlists, ws_highway, chart, wanted, library_extras, shop, progression, profile, stats, version, diagnostics
+from routers import tunings as tunings_router
 import sloppak as sloppak_mod
 import loosefolder as loosefolder_mod
 # Pure text-matching engine for MusicBrainz enrichment (P8): denoise/score/
@@ -1171,6 +1173,7 @@ def _get_progression_content() -> dict:
 appstate.configure(
     get_progression_content=_get_progression_content,
     builtin_diagnostic_filename=_builtin_diagnostic_filename,
+    tuning_providers=tuning_providers,
 )
 
 
@@ -4816,54 +4819,8 @@ def _default_settings():
     }
 
 
-def _load_config(config_file):
-    """Read and parse config.json. Returns the parsed dict, or None if
-    the file is missing, unreadable, invalid JSON, or parses to a
-    non-dict (e.g. the file contains `[]` or `42`). Callers treat None
-    as "fall back to defaults". Shared between GET and POST so both
-    handle bad files the same way."""
-    if not config_file.exists():
-        return None
-    try:
-        # Explicit UTF-8: save_settings()/import write config.json as
-        # UTF-8 bytes, so the read must not depend on the platform's
-        # default text encoding (cp1252 on Windows would mojibake or
-        # UnicodeDecodeError on a non-ASCII DLC path).
-        parsed = json.loads(config_file.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    return parsed if isinstance(parsed, dict) else None
-
-
-@app.get("/api/tunings")
-def get_tunings():
-    cfg = _load_config(CONFIG_DIR / "config.json") or {}
-    ref = cfg.get("reference_pitch", DEFAULT_REFERENCE_PITCH)
-    try:
-        ref = float(ref)
-        if not (430.0 <= ref <= 450.0):
-            ref = DEFAULT_REFERENCE_PITCH
-    except (TypeError, ValueError):
-        ref = DEFAULT_REFERENCE_PITCH
-    merged = tuning_providers.get_merged(ref)
-    # tuningMidis: the same catalog as exact integer MIDI notes (low → high).
-    # Built-ins come straight from TUNING_PRESET_MIDIS (no float round-trip);
-    # provider-contributed entries are recovered from their frequencies at the
-    # served reference pitch. Every consumer today (the v3 badges, plugins)
-    # reconstructs midis client-side via log2 — a rounding footgun at non-440
-    # references — so serve the integers once, host-side. Additive: the
-    # existing referencePitch/tunings shape is unchanged.
-    tuning_midis: dict[str, dict[str, list[int]]] = {}
-    for key, names in merged.items():
-        builtin = TUNING_PRESET_MIDIS.get(key, {})
-        resolved: dict[str, list[int]] = {}
-        for name, freqs in names.items():
-            midis = builtin.get(name) or freqs_to_midis(freqs, ref)
-            if midis:
-                resolved[name] = list(midis)
-        if resolved:
-            tuning_midis[key] = resolved
-    return {"referencePitch": ref, "tunings": merged, "tuningMidis": tuning_midis}
+# GET /api/tunings → routers/tunings.py (R3, reads config + appstate.tuning_providers)
+app.include_router(tunings_router.router)
 
 
 @app.get("/api/settings")

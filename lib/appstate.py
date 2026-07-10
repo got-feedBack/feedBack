@@ -61,6 +61,10 @@ copies a hardcoded file list — that regression is what moved this file here.
 # The singletons routers may read. Every name here must also be a `_SLOTS` key.
 meta_db = None
 audio_effect_mappings = None
+# The tuning-provider registry instance (built-ins + plugin-contributed). A
+# stable object mutated in place via register()/unregister() — injected here by
+# reference so routers read the same registry plugins populate.
+tuning_providers = None
 
 # Config paths. server.py derives these from the environment (fresh on every
 # import, so the ~49 pop-and-reimport fixtures keep working) and injects them
@@ -90,7 +94,7 @@ builtin_diagnostic_filename = None
 running_version = None
 
 _SLOTS = frozenset({
-    "meta_db", "audio_effect_mappings",
+    "meta_db", "audio_effect_mappings", "tuning_providers",
     "config_dir", "dlc_dir", "dlc_dir_env",
     "static_dir", "sloppak_cache_dir", "audio_cache_dir",
     "get_progression_content", "builtin_diagnostic_filename",
