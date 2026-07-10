@@ -87,12 +87,14 @@ audio_cache_dir = None
 # in server.py (its `setattr(server, "_progression_content")` test is untouched).
 get_progression_content = None
 builtin_diagnostic_filename = None
+running_version = None
 
 _SLOTS = frozenset({
     "meta_db", "audio_effect_mappings",
     "config_dir", "dlc_dir", "dlc_dir_env",
     "static_dir", "sloppak_cache_dir", "audio_cache_dir",
     "get_progression_content", "builtin_diagnostic_filename",
+    "running_version",
 })
 
 
