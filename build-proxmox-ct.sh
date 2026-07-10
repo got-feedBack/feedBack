@@ -438,9 +438,10 @@ info "Setting up Python application …"
 mkdir -p \
   "${ROOTFS}${APP_DIR}/lib" \
   "${ROOTFS}${APP_DIR}/static" \
+  "${ROOTFS}${APP_DIR}/routers" \
   "${ROOTFS}${APP_DIR}/plugins"
 
-for d in lib static plugins; do
+for d in lib static routers plugins; do
   if [[ -d "$d" ]]; then
     cp -r "${d}/." "${ROOTFS}${APP_DIR}/${d}/"
     info "  Copied ${d}/"
@@ -454,14 +455,14 @@ for d in lib static plugins; do
   fi
 done
 
-for f in requirements.txt server.py VERSION main.py tailwind.config.js; do
+for f in requirements.txt server.py VERSION main.py tailwind.config.js appstate.py; do
   if [[ -f "$f" ]]; then
     cp "$f" "${ROOTFS}${APP_DIR}/"
     info "  Copied ${f}"
   else
     # main.py imports `server:app`, so without server.py the service unit
     # would boot but fail on first request — make it fail-fast at build.
-    if [[ "$f" == "requirements.txt" || "$f" == "main.py" || "$f" == "server.py" ]]; then
+    if [[ "$f" == "requirements.txt" || "$f" == "main.py" || "$f" == "server.py" || "$f" == "appstate.py" ]]; then
       die "  '${f}' not found — required for the service to start."
     fi
     warn "  '${f}' not found – skipping."
