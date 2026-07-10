@@ -16,6 +16,16 @@ import pytest
 import appstate
 
 
+def _close_server_dbs(mod):
+    conn = getattr(getattr(mod, "meta_db", None), "conn", None)
+    if conn is not None:
+        getattr(mod, "_join_background_db_threads", lambda: None)()
+        conn.close()
+    ae_conn = getattr(getattr(mod, "audio_effect_mappings", None), "conn", None)
+    if ae_conn is not None:
+        ae_conn.close()
+
+
 @pytest.fixture()
 def isolated_server(tmp_path, monkeypatch):
     """A freshly imported `server` bound to a throwaway CONFIG_DIR.
@@ -25,20 +35,20 @@ def isolated_server(tmp_path, monkeypatch):
     unguarded `import server` would create/mutate the developer's real
     `~/.local/share/feedback` databases. Same idiom as the other ~49
     server-importing suites.
+
+    Teardown restores the appstate slots as well as closing the connections:
+    leaving `appstate.meta_db` published but pointing at a closed sqlite handle
+    would hand a later test (or router) a live-looking, dead singleton.
     """
+    previous = (appstate.meta_db, appstate.audio_effect_mappings)
     monkeypatch.setenv("CONFIG_DIR", str(tmp_path))
     sys.modules.pop("server", None)
     mod = importlib.import_module("server")
     yield mod
-    conn = getattr(getattr(mod, "meta_db", None), "conn", None)
-    if conn is not None:
-        getattr(mod, "_join_background_db_threads", lambda: None)()
-        conn.close()
-    ae_conn = getattr(getattr(mod, "audio_effect_mappings", None), "conn", None)
-    if ae_conn is not None:
-        ae_conn.close()
+    _close_server_dbs(mod)
     # Leave no half-torn-down `server` behind: the next fixture re-imports it.
     sys.modules.pop("server", None)
+    appstate.configure(meta_db=previous[0], audio_effect_mappings=previous[1])
 
 
 def test_import_is_side_effect_free():
@@ -114,9 +124,30 @@ def test_server_wires_the_seam(isolated_server):
     assert appstate.meta_db is not None
 
 
-def test_reimporting_server_republishes_the_fresh_singletons(isolated_server, tmp_path):
-    """The 49-fixture contract: re-importing server under a new CONFIG_DIR must
-    leave the seam pointing at the NEW meta_db, without those fixtures having to
-    know appstate exists."""
-    assert appstate.meta_db is isolated_server.meta_db
-    assert str(tmp_path) in isolated_server.meta_db.db_path
+def test_reimporting_server_republishes_the_fresh_singletons(
+    isolated_server, tmp_path, monkeypatch
+):
+    """The 49-fixture contract, exercised end to end.
+
+    Those fixtures `sys.modules.pop("server")` + re-import to rebuild `meta_db`
+    under a new CONFIG_DIR, and know nothing about appstate. So the seam must
+    re-publish on that second import. This is the test that would fail if
+    `appstate` ever *owned* the singletons: a module-level `meta_db` there
+    survives the pop and the assertions below would still see the FIRST DB.
+    """
+    first_db = isolated_server.meta_db
+    assert appstate.meta_db is first_db
+    assert str(tmp_path) in first_db.db_path
+
+    second_config = tmp_path / "second"
+    monkeypatch.setenv("CONFIG_DIR", str(second_config))
+    sys.modules.pop("server", None)
+    second_server = importlib.import_module("server")
+    try:
+        assert second_server.meta_db is not first_db          # genuinely rebuilt
+        assert str(second_config) in second_server.meta_db.db_path
+        assert appstate.meta_db is second_server.meta_db      # ...and re-published
+        assert appstate.audio_effect_mappings is second_server.audio_effect_mappings
+    finally:
+        _close_server_dbs(second_server)
+        sys.modules.pop("server", None)
