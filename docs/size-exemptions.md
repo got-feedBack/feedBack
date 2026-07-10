@@ -55,7 +55,7 @@ without a *signed* exemption" is unenforceable.
 ## Planned, NOT exempt (owned by split plans — listed so nothing falls between states)
 
 core `static/app.js` (11,852) · `static/highway.js` (4,168, whole file) · `server.py`
-(9,085 — was 14,037; ratcheted by the R3 `MetadataDB` + `AudioEffectsMappingDB`
+(9,008 — was 14,037; ratcheted by the R3 `MetadataDB` + `AudioEffectsMappingDB`
 extractions and four `routers/` modules) ·
 `lib/metadata_db.py` (4,373 — new in R3; the `MetadataDB` class alone is 4,018 lines
 and is a monolith in its own right, to be split per-table once the router train

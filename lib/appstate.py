@@ -70,8 +70,11 @@ audio_effect_mappings = None
 # `setattr(server, …)` in a few tests, so those slots (when added) need their
 # tests retargeted to appstate in the same PR.
 config_dir = None
+dlc_dir = None          # the DLC_DIR env value as a Path (Path("") if unset)
+dlc_dir_env = None      # the raw DLC_DIR env string, "" if unset — distinguishes
+                        # "unset" from Path("")→"." (see dlc_paths._get_dlc_dir)
 
-_SLOTS = frozenset({"meta_db", "audio_effect_mappings", "config_dir"})
+_SLOTS = frozenset({"meta_db", "audio_effect_mappings", "config_dir", "dlc_dir", "dlc_dir_env"})
 
 
 def configure(**kwargs) -> None:
