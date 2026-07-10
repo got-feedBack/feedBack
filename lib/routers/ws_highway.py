@@ -1036,6 +1036,13 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
         except WebSocketDisconnect:
             pass
 
+    except WebSocketDisconnect:
+        # A client that navigates away / closes the tab mid-stream is routine,
+        # not an error. Without this, the disconnect falls through to the blanket
+        # handler below and logs `highway_ws unhandled error` for every send point
+        # (the inner guard only covers the post-`ready` keep-alive loop). Matches
+        # the two localized WebSocketDisconnect guards in the streaming body.
+        return
     except Exception as e:
         log.exception("highway_ws unhandled error for %s", filename)
         try:
