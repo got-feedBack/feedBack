@@ -53,6 +53,7 @@ from routers import settings as settings_router
 from routers import song as song_router
 from routers import library as library_router
 from routers import enrichment as enrichment_routes
+from routers import media as media_router
 import sloppak as sloppak_mod
 import loosefolder as loosefolder_mod
 # Pure text-matching engine for MusicBrainz enrichment (P8): denoise/score/
@@ -65,7 +66,6 @@ from scan_worker import _extract_meta_for_file, _relpath, _scan_one
 
 import concurrent.futures
 import inspect
-import ipaddress
 import multiprocessing
 import re
 import threading
@@ -2460,67 +2460,10 @@ _extract_cache = {}  # filename -> (tmp_dir, song, timestamp)
 _extract_cache_lock = threading.Lock()
 
 
-def _resolve_sloppak_local_file(filename: str, rel_path: str):
-    """Resolve a file inside a sloppak to its on-disk path.
-
-    Applies the same containment guards as ``serve_sloppak_file``. Returns the
-    resolved ``Path`` on success, or an ``(error, status)`` tuple on failure so
-    callers can produce their endpoint-appropriate response.
-    """
-    dlc = _get_dlc_dir()
-    if not dlc:
-        return ("not configured", 404)
-    # `filename` is caller-controlled. Contain it under DLC_DIR before it
-    # reaches the resolver (see serve_sloppak_file for the traversal rationale).
-    resolved = _resolve_dlc_path(dlc, filename)
-    if resolved is None:
-        return ("forbidden", 403)
-    # Confine to actual sloppak bundles — otherwise any plain subdirectory
-    # would become a read-any-file-under-DLC_DIR source.
-    if not sloppak_mod.is_sloppak(resolved):
-        return ("not found", 404)
-    # Canonicalise the cache key against the resolved path so equivalent URL
-    # forms of the same sloppak converge on one _source_cache entry.
-    try:
-        filename = resolved.relative_to(dlc.resolve()).as_posix()
-    except ValueError:
-        # safe_join already proved containment; fail closed regardless.
-        return ("forbidden", 403)
-    src = sloppak_mod.get_cached_source_dir(filename)
-    if src is None:
-        try:
-            src = sloppak_mod.resolve_source_dir(filename, dlc, SLOPPAK_CACHE_DIR)
-        except Exception:
-            return ("not found", 404)
-    # Prevent path traversal within the sloppak.
-    target = (src / rel_path).resolve()
-    try:
-        target.relative_to(src.resolve())
-    except ValueError:
-        return ("forbidden", 403)
-    if not target.exists() or not target.is_file():
-        return ("not found", 404)
-    return target
+# ── Media/file-serving routes → routers/media.py (R3) ───────────────────────
+app.include_router(media_router.router)
 
 
-@app.get("/api/sloppak/{filename:path}/file/{rel_path:path}")
-def serve_sloppak_file(filename: str, rel_path: str):
-    """Serve a file from inside a sloppak (stems, cover, etc.)."""
-    result = _resolve_sloppak_local_file(filename, rel_path)
-    if isinstance(result, tuple):
-        error, status = result
-        return JSONResponse({"error": error}, status)
-    target = result
-    ext = target.suffix.lower()
-    mt = {
-        ".ogg": "audio/ogg", ".opus": "audio/ogg", ".oga": "audio/ogg",
-        ".mp3": "audio/mpeg", ".wav": "audio/wav", ".flac": "audio/flac",
-        ".m4a": "audio/mp4",
-        ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-        ".png": "image/png", ".webp": "image/webp",
-        ".json": "application/json",
-    }.get(ext)
-    return FileResponse(str(target), media_type=mt) if mt else FileResponse(str(target))
 
 
 # ── Highway chart WebSocket ──────────────────────────────────────────────────
@@ -2532,82 +2475,8 @@ app.include_router(ws_highway.router)
 # ── Audio serving ─────────────────────────────────────────────────────────────
 
 
-@app.get("/api/audio-local-path")
-def audio_local_path(url: str, request: Request):
-    """Return absolute local filesystem path for a song URL (Electron desktop only).
-
-    Accepts ``/audio/<path>`` where ``<path>`` may include subdirectory segments —
-    no scheme, no host, no query string, no fragment.  The resolved path must stay
-    inside AUDIO_CACHE_DIR or STATIC_DIR; ``..`` traversal, backslashes, and
-    absolute ``filename`` values are rejected.
-
-    Also accepts ``/api/sloppak/<filename>/file/<rel>`` (percent-encoded, as
-    emitted by the highway song payload) and resolves it to the unpacked
-    sloppak cache file via the same containment guards as
-    ``serve_sloppak_file`` — this lets the desktop engine play a feedpak
-    full-mix natively under WASAPI-exclusive output.
-
-    This endpoint returns a raw filesystem path and is intended exclusively for
-    the Electron desktop process (which runs on loopback). Requests from non-
-    loopback clients are rejected with 403.
-    """
-    # Loopback-only — only the local Electron process should call this
-    client_host = request.client.host if request.client else None
-    try:
-        is_loopback = bool(client_host and ipaddress.ip_address(client_host).is_loopback)
-    except ValueError:
-        is_loopback = client_host == "localhost"
-    if not is_loopback:
-        return JSONResponse({"error": "forbidden"}, status_code=403)
-    # Sloppak in-pack file (feedpak full-mix): /api/sloppak/<fn>/file/<rel>.
-    # Both segments arrive percent-encoded (built with urllib quote() in the
-    # highway payload); decode before handing to the shared resolver, which
-    # re-applies all containment guards on the decoded values.
-    slop_match = re.fullmatch(r"/api/sloppak/([^?#]+)/file/([^?#]+)", url)
-    if slop_match:
-        from urllib.parse import unquote
-
-        result = _resolve_sloppak_local_file(
-            unquote(slop_match.group(1)), unquote(slop_match.group(2))
-        )
-        if isinstance(result, tuple):
-            error, status = result
-            return JSONResponse({"error": error}, status_code=status)
-        return JSONResponse({"path": str(result)})
-    # Accept only simple /audio/<filename> — no scheme, no host, no query/fragment
-    if not re.fullmatch(r"/audio/[^?#]+", url):
-        return JSONResponse({"error": "invalid url"}, status_code=400)
-    filename = url[len("/audio/"):]
-    # Reject traversal, absolute paths, and backslash separators
-    if ".." in filename.split("/") or filename.startswith("/") or "\\" in filename:
-        return JSONResponse({"error": "invalid url"}, status_code=400)
-    for d in [AUDIO_CACHE_DIR, STATIC_DIR]:
-        candidate = (d / filename).resolve()
-        # Ensure resolved path is inside the allowed directory
-        try:
-            candidate.relative_to(d.resolve())
-        except ValueError:
-            continue
-        if candidate.is_file():
-            return JSONResponse({"path": str(candidate)})
-    return JSONResponse({"error": "not found"}, status_code=404)
 
 
-@app.get("/audio/{filename:path}")
-def serve_audio(filename: str):
-    """Serve audio files from the writable audio cache directory."""
-    # Reject traversal attempts and absolute-path components
-    if ".." in filename.split("/") or filename.startswith("/") or "\\" in filename:
-        return JSONResponse({"error": "not found"}, status_code=404)
-    for d in [AUDIO_CACHE_DIR, STATIC_DIR]:
-        candidate = (d / filename).resolve()
-        try:
-            candidate.relative_to(d.resolve())
-        except ValueError:
-            continue
-        if candidate.is_file():
-            return FileResponse(str(candidate))
-    return JSONResponse({"error": "not found"}, status_code=404)
 
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

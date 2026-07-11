@@ -25,6 +25,7 @@ def client_and_server(tmp_path, monkeypatch):
     static_tmp = tmp_path / "static"
     static_tmp.mkdir()
     monkeypatch.setattr(server, "STATIC_DIR", static_tmp)
+    monkeypatch.setattr(server.appstate, "static_dir", static_tmp)
     # Pass client=("127.0.0.1", 50000) so request.client.host is a loopback address
     test_client = TestClient(server.app, client=("127.0.0.1", 50000))
     try:
@@ -123,6 +124,7 @@ def dlc_client(tmp_path, monkeypatch):
     static_tmp = tmp_path / "static"
     static_tmp.mkdir()
     monkeypatch.setattr(server, "STATIC_DIR", static_tmp)
+    monkeypatch.setattr(server.appstate, "static_dir", static_tmp)
     tc = TestClient(server.app, client=("127.0.0.1", 50000))
     try:
         yield tc, server, dlc
