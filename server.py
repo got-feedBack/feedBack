@@ -7770,7 +7770,25 @@ def serve_audio(filename: str):
     return JSONResponse({"error": "not found"}, status_code=404)
 
 
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+class _RevalidatedStaticFiles(StaticFiles):
+    """StaticFiles that forces conditional revalidation on every request.
+
+    Without Cache-Control, Chromium applies heuristic freshness (10% of the
+    file's age since Last-Modified) and serves /static/app.js from its disk
+    cache for hours-to-days without asking the server. In the desktop app that
+    meant a new build's renderer ran the PREVIOUS build's app.js — the
+    2026-07-11 ASIO investigation lost a day to a stale loader that couldn't
+    even load module plugins. `no-cache` does NOT disable caching: the browser
+    keeps the cached copy and revalidates with If-None-Match; unchanged files
+    still cost only a 304."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers.setdefault("Cache-Control", "no-cache")
+        return response
+
+
+app.mount("/static", _RevalidatedStaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 @app.get("/")
