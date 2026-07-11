@@ -368,6 +368,7 @@ function _strip(spec) {
         fill.style.height = pct;
         thumb.style.bottom = pct;
         fader.setAttribute('aria-valuenow', String(value));
+        fader.setAttribute('aria-valuetext', _formatValue(value, spec.unit));
     }
     _paint(cur);
 
@@ -436,7 +437,11 @@ function _strip(spec) {
         _dragging = true;
         _interacting = true;
         try { fader.setPointerCapture(e.pointerId); } catch (_) { /* capture unsupported */ }
+        // preventDefault stops text-selection/native drag, but it also cancels
+        // the default focus, so focus the fader explicitly — otherwise a click
+        // leaves it unfocused and the arrow/Home/End keys do nothing until Tab.
         e.preventDefault();
+        fader.focus();
         _commit(_valueFromClientY(e.clientY), true);
     });
     fader.addEventListener('pointermove', (e) => {
