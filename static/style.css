@@ -693,74 +693,73 @@ html { scroll-behavior: smooth; }
     font-size: 11px; color: #9ca3af; max-width: 80px;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center;
 }
+/* Custom vertical mixer fader.
+   HISTORY: this went through a rotate(-90deg) hack, then a native writing-mode
+   vertical <input type=range>. Both failed in this app's Electron/Chromium:
+   the native vertical range neither tracks the pointer on drag nor reflects
+   programmatic .value changes. So the visible control is now a plain div —
+   a track groove (::before), a bottom-anchored fill, and a thumb positioned by
+   value — driven entirely from JS pointer math in audio-mixer.js. A hidden
+   <input type=range> (.mixer-strip-fader-input) backs it as the value store. */
 #mixer-popover .mixer-strip-fader {
-    width: 110px;
-    height: 24px;
-    margin: 55px 0 0 0; /* Push the fader down so the track is centered under the label text */
-    padding: 0;
-    vertical-align: middle;
-    transform: rotate(-90deg);
-    transform-origin: center;
-    -webkit-appearance: none;
-    background: transparent;
+    position: relative;
+    width: 24px;
+    height: 110px;
+    margin: 0 auto;
     cursor: pointer;
+    touch-action: none; /* pointer drags shouldn't scroll/gesture the popover */
+    box-sizing: border-box;
+    outline: none;
 }
-#mixer-popover .mixer-strip-fader::-webkit-slider-runnable-track {
-  height: 16px; /* Match the Firefox ::-moz-range-track height so the fader renders consistently across browsers */
-  background: linear-gradient(to right, rgb(var(--sm-accent, 64, 128, 224)) var(--range-pct, 0%), rgb(var(--sm-bg-900, 10, 10, 18)) var(--range-pct, 0%));
-  border-radius: 8px;
-  border: 1px solid rgb(55 65 81 / var(--tw-border-opacity, 1));
+#mixer-popover .mixer-strip-fader::before { /* track groove */
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 0;
+    bottom: 0;
+    width: 5px;
+    transform: translateX(-50%);
+    background: rgb(var(--sm-bg-900, 10, 10, 18));
+    border: 1px solid rgb(55 65 81 / var(--tw-border-opacity, 1));
+    border-radius: 5px;
+    box-sizing: border-box;
 }
-#mixer-popover .mixer-strip-fader::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  height: 0px;
-  width: 0px;
-  background: #ffffff;
-  border-radius: 0px;
-  margin-top: 9px;
-  opacity: 0;
+#mixer-popover .mixer-strip-fill {
+    position: absolute;
+    left: 50%;
+    bottom: 0;
+    width: 5px;
+    height: 0%;
+    transform: translateX(-50%);
+    background: rgb(var(--sm-accent, 64, 128, 224));
+    border-radius: 5px;
+    pointer-events: none;
 }
-/* --- Firefox --- */
-#mixer-popover .mixer-strip-fader::-moz-range-track {
-  height: 16px;
-  background: linear-gradient(to right, rgb(var(--sm-accent, 64, 128, 224)) var(--range-pct, 0%), rgb(var(--sm-bg-900, 10, 10, 18)) var(--range-pct, 0%));
-  border-radius: 8px;
-  border: 1px solid rgb(55 65 81 / var(--tw-border-opacity, 1));
+#mixer-popover .mixer-strip-thumb {
+    position: absolute;
+    left: 50%;
+    bottom: 0%;
+    width: 11px;
+    height: 20px;
+    transform: translate(-50%, 50%);
+    background: #ffffff;
+    border-radius: 5px;
+    box-shadow: 0 1px 3px rgb(0 0 0 / 0.5);
+    pointer-events: none;
 }
-
-#mixer-popover .mixer-strip-fader::-moz-range-thumb {
-  height: 0px;
-  width: 0px;
-  background: #ffffff;
-  border-radius: 0px;
-  border: 0;
+#mixer-popover .mixer-strip-fader:focus-visible {
+    outline: 2px solid rgb(var(--sm-accent, 64, 128, 224));
+    outline-offset: 2px;
+    border-radius: 8px;
 }
-#mixer-popover .mixer-strip-value { 
+#mixer-popover .mixer-strip-fader-disabled { opacity: 0.4; cursor: default; }
+#mixer-popover .mixer-strip-fader-failed .mixer-strip-fill { background: #b91c1c; }
+#mixer-popover .mixer-strip-fader-input { display: none; }
+#mixer-popover .mixer-strip-value {
     font-size: 10px;
     color: #6b7280;
     font-variant-numeric: tabular-nums;
-    margin-top: 55px;
-}
-@supports ((-webkit-appearance: slider-vertical) or (appearance: slider-vertical)) {
-    #mixer-popover .mixer-strip-fader {
-        width: 24px;
-        height: 110px;
-        transform: none;
-        transform-origin: center;
-        writing-mode: vertical-lr;
-        direction: rtl;
-        -webkit-appearance: slider-vertical;
-        appearance: slider-vertical;
-        margin: 0;
-    }
-    #mixer-popover .mixer-strip-fader::-webkit-slider-runnable-track {
-        height: auto; /* Vertical slider: let the track span the full length instead of the fixed 16px used by the rotated fallback */
-        background: linear-gradient(to top, rgb(var(--sm-accent, 64, 128, 224)) var(--range-pct, 0%), rgb(var(--sm-bg-900, 10, 10, 18)) var(--range-pct, 0%));
-        border-radius: 8px;
-    }
-    #mixer-popover .mixer-strip-value { 
-        margin-top: 0;
-    }
+    margin-top: 0;
 }
 #mixer-popover .mixer-row {
     display: flex;

@@ -20,6 +20,13 @@ let _popoverEl = null;
 let _btnEl = null;
 let _open = false;
 let _openTimer = null;
+// True while the user is actively manipulating a fader (pointer down, or the
+// input focused for keyboard). A successful set-fader-value emits
+// 'audio-mix:fader-value-changed', whose handler re-renders the whole popover
+// — which would destroy the slider the user is currently dragging and abort
+// the drag after a single step. We suppress that self-inflicted re-render
+// while interacting; the strip already updates its own value inline.
+let _interacting = false;
 
 function _audioEl() { return document.getElementById('audio'); }
 
@@ -312,33 +319,156 @@ function _strip(spec) {
     labelEl.title = spec.label || spec.faderLabel;
     labelEl.textContent = spec.label || spec.faderLabel;
 
+    // Custom vertical fader. In this app's Electron/Chromium build a native
+    // vertical <input type=range> (writing-mode: vertical-lr) neither drags with
+    // the pointer nor reflects programmatic .value changes, so we render our own
+    // track/fill/thumb and drive the value from the pointer's Y position. A
+    // hidden <input> stays as the value store so the existing 'input' commit +
+    // response logic below is reused unchanged. _interacting blocks the
+    // 'fader-value-changed' re-render (fired by our own commits) from tearing
+    // down the fader mid-drag.
     const slider = document.createElement('input');
     slider.type = 'range';
-    slider.className = 'mixer-strip-fader accent-accent';
+    slider.className = 'mixer-strip-fader-input';
     slider.min = String(spec.min);
     slider.max = String(spec.max);
     slider.step = String(spec.step);
     slider.value = String(cur);
     slider.disabled = !available;
-    slider.setAttribute('aria-label', (spec.label || spec.faderLabel) + ' volume');
-    if (!available) slider.setAttribute('aria-disabled', 'true');
-    window.handleSliderInput?.(slider); //initialize the slider's background fill based on the initial value
+    slider.tabIndex = -1;
+
+    const fader = document.createElement('div');
+    fader.className = 'mixer-strip-fader';
+    fader.setAttribute('role', 'slider');
+    fader.setAttribute('tabindex', available ? '0' : '-1');
+    fader.setAttribute('aria-label', (spec.label || spec.faderLabel) + ' volume');
+    fader.setAttribute('aria-valuemin', String(spec.min));
+    fader.setAttribute('aria-valuemax', String(spec.max));
+    if (!available) {
+        fader.setAttribute('aria-disabled', 'true');
+        fader.classList.add('mixer-strip-fader-disabled');
+    }
+    const fill = document.createElement('div');
+    fill.className = 'mixer-strip-fill';
+    const thumb = document.createElement('div');
+    thumb.className = 'mixer-strip-thumb';
+    fader.appendChild(fill);
+    fader.appendChild(thumb);
 
     const valueEl = document.createElement('span');
     valueEl.className = 'mixer-strip-value';
     valueEl.textContent = available ? _formatValue(cur, spec.unit) : 'Unavailable';
 
-    slider.addEventListener('keydown', (e) => {
-        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' ||
-            e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-            e.stopPropagation();
-            return;
-        }
-        if (e.code === 'Space' || e.key === ' ') {
-            e.preventDefault();
-            e.stopPropagation();
-        }
+    // Single source of truth for the visual: position fill + thumb for a value.
+    function _paint(value) {
+        const span = spec.max - spec.min;
+        let frac = span > 0 ? (value - spec.min) / span : 0;
+        frac = Math.min(1, Math.max(0, frac));
+        const pct = (frac * 100) + '%';
+        fill.style.height = pct;
+        thumb.style.bottom = pct;
+        fader.setAttribute('aria-valuenow', String(value));
+    }
+    _paint(cur);
+
+    let _dragging = false;
+    // Vertical fader: top edge = max, bottom edge = min. Coerce min/max/step to
+    // numbers first — a fader registered with string bounds (e.g. min:"0") would
+    // otherwise make `min + ...` do string concatenation and snap the value to a
+    // garbage number.
+    function _valueFromClientY(clientY) {
+        const rect = fader.getBoundingClientRect();
+        if (!rect.height) return cur;
+        const min = Number(spec.min), max = Number(spec.max);
+        const step = Number(spec.step) > 0 ? Number(spec.step) : 1;
+        let frac = (rect.bottom - clientY) / rect.height;
+        frac = Math.min(1, Math.max(0, frac));
+        let v = min + frac * (max - min);
+        v = min + Math.round((v - min) / step) * step;
+        return _clampToSpec(v, spec);
+    }
+    // Dragging fires pointermove many times a second; committing the volume on
+    // every one floods the audio engine — for the Song fader each commit re-runs
+    // the whole _applySongVolume path (native/JUCE gain IPC, stems master, fader
+    // re-registration) — which audibly stutters playback. So we PAINT the thumb
+    // on every move (cheap, keeps it glued to the mouse) but THROTTLE the actual
+    // volume commit to ~20/sec. pointerdown/keys commit immediately (leading
+    // edge) and _endDrag flushes, so the click target and resting value are
+    // always exact — only the in-between churn is thinned out.
+    const _COMMIT_THROTTLE_MS = 50;
+    let _pendingVal = null;
+    let _commitTimer = null;
+    function _sendCommit() {
+        _commitTimer = null;
+        if (_pendingVal == null) return;
+        const v = _pendingVal;
+        _pendingVal = null;
+        if (String(v) === slider.value) return;
+        slider.value = String(v);
+        slider.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    function _flushCommit() {
+        if (_commitTimer) { clearTimeout(_commitTimer); _commitTimer = null; }
+        _sendCommit();
+    }
+    // immediate=true commits now (click / keyboard); otherwise the value is
+    // painted instantly and the commit is coalesced onto the throttle timer.
+    function _commit(v, immediate) {
+        _paint(v);
+        _pendingVal = v;
+        if (immediate) { _flushCommit(); return; }
+        if (_commitTimer == null) _commitTimer = setTimeout(_sendCommit, _COMMIT_THROTTLE_MS);
+    }
+    // Re-sync from an authoritative committed value (used by _renderPopover's
+    // post-render get-fader-value sync). Skip while this fader is being dragged
+    // so a late-arriving stale value can't yank the thumb back under the mouse.
+    wrap._applyCommitted = function (value) {
+        if (_dragging) return;
+        cur = _clampToSpec(value, spec);
+        slider.value = String(cur);
+        _paint(cur);
+        valueEl.textContent = _formatValue(cur, spec.unit);
+    };
+
+    fader.addEventListener('pointerdown', (e) => {
+        if (!available) return;
+        if (typeof e.button === 'number' && e.button !== 0) return;
+        _dragging = true;
+        _interacting = true;
+        try { fader.setPointerCapture(e.pointerId); } catch (_) { /* capture unsupported */ }
+        e.preventDefault();
+        _commit(_valueFromClientY(e.clientY), true);
     });
+    fader.addEventListener('pointermove', (e) => {
+        if (!_dragging) return;
+        e.preventDefault();
+        _commit(_valueFromClientY(e.clientY), false);
+    });
+    function _endDrag(e) {
+        if (!_dragging) return;
+        _dragging = false;
+        _flushCommit(); // send the exact resting value even if mid-throttle
+        _interacting = false;
+        try { fader.releasePointerCapture(e.pointerId); } catch (_) { /* already released */ }
+    }
+    fader.addEventListener('pointerup', _endDrag);
+    fader.addEventListener('pointercancel', _endDrag);
+    fader.addEventListener('keydown', (e) => {
+        if (!available) return;
+        const step = Number(spec.step) > 0 ? Number(spec.step) : 1;
+        let v = parseFloat(slider.value);
+        if (!Number.isFinite(v)) v = cur;
+        if (e.key === 'ArrowUp' || e.key === 'ArrowRight') v += step;
+        else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') v -= step;
+        else if (e.key === 'Home') v = spec.max;
+        else if (e.key === 'End') v = spec.min;
+        else return;
+        e.preventDefault();
+        e.stopPropagation();
+        _interacting = true;
+        _commit(_clampToSpec(v, spec), true);
+    });
+    fader.addEventListener('blur', () => { if (!_dragging) _interacting = false; });
 
     slider.addEventListener('input', () => {
         if (slider.disabled) return;
@@ -356,20 +486,23 @@ function _strip(spec) {
             const actual = Number.isFinite(Number(payload.committedValue)) ? Number(payload.committedValue) : cur;
             cur = _clampToSpec(actual, spec);
             slider.value = String(cur);
-            window.handleSliderInput?.(slider); //update the slider's background fill on input
+            // Don't repaint from the (slightly stale) committed value while the
+            // user is still dragging — the live pointer paint is the truth.
+            if (!_dragging) _paint(cur);
             valueEl.textContent = result && result.outcome === 'handled' ? _formatValue(cur, spec.unit) : 'Failed';
-            if (result && result.outcome !== 'handled') slider.classList.add('mixer-strip-fader-failed');
+            fader.classList.toggle('mixer-strip-fader-failed', !!(result && result.outcome !== 'handled'));
         }).catch(err => {
             if (seq !== writeSeq) return; // a newer input superseded this response
             console.error('[mixer] audio-mix set-fader-value failed', spec.id, err);
             slider.value = String(cur);
-            window.handleSliderInput?.(slider);
+            _paint(cur);
             valueEl.textContent = 'Failed';
-            slider.classList.add('mixer-strip-fader-failed');
+            fader.classList.add('mixer-strip-fader-failed');
         });
     });
 
     wrap.appendChild(labelEl);
+    wrap.appendChild(fader);
     wrap.appendChild(slider);
     wrap.appendChild(valueEl);
     return wrap;
@@ -404,14 +537,10 @@ function _renderPopover() {
                     if (!valueResult || valueResult.outcome !== 'handled' || !_open) return;
                     const fresh = valueResult.payload;
                     const strip = row.children && Array.from(row.children).find(child => child.getAttribute && child.getAttribute('data-fader-key') === (fresh.faderKey || `${fresh.participantId}:${fresh.faderId || fresh.id}`));
-                    if (!strip || !strip.children || strip.children.length < 3) return;
-                    const slider = strip.children[1];
-                    const valueEl = strip.children[2];
+                    if (!strip || typeof strip._applyCommitted !== 'function') return;
                     const committed = Number(fresh.committedValue ?? fresh.currentValue);
                     if (!Number.isFinite(committed)) return;
-                    slider.value = String(_clampToSpec(committed, spec));
-                    window.handleSliderInput?.(slider);
-                    valueEl.textContent = _formatValue(Number(slider.value), spec.unit);
+                    strip._applyCommitted(committed);
                 }).catch(() => {});
             }
         }
@@ -440,6 +569,7 @@ function _onDocKeydown(e) {
 function openMixer() {
     if (!_popoverEl) _init();
     if (!_popoverEl || _open) return;
+    _interacting = false;
     _renderPopover();
     _popoverEl.classList.remove('hidden');
     if (_btnEl) _btnEl.setAttribute('aria-expanded', 'true');
@@ -462,6 +592,7 @@ function closeMixer(restoreFocus) {
     _popoverEl.classList.add('hidden');
     if (_btnEl) _btnEl.setAttribute('aria-expanded', 'false');
     _open = false;
+    _interacting = false;
     document.removeEventListener('click', _onDocClick, true);
     document.removeEventListener('keydown', _onDocKeydown, true);
     // Restore focus to the toggle button when the popover was dismissed via
@@ -504,10 +635,15 @@ function _init() {
     _registerSongFader();
     if (window.feedBack && window.feedBack.on) {
         window.feedBack.on('screen:changed', _onScreenChanged);
-        window.feedBack.on('audio-mix:fader-value-changed', () => { if (_open) _renderPopover(); });
-        window.feedBack.on('audio-mix:fader-unavailable', () => { if (_open) _renderPopover(); });
-        window.feedBack.on('audio-mix:participant-registered', () => { if (_open) _renderPopover(); });
-        window.feedBack.on('audio-mix:participant-removed', () => { if (_open) _renderPopover(); });
+        window.feedBack.on('audio-mix:fader-value-changed', () => { if (_open && !_interacting) _renderPopover(); });
+        window.feedBack.on('audio-mix:fader-unavailable', () => { if (_open && !_interacting) _renderPopover(); });
+        // Guarded by !_interacting like the value events: the song fader
+        // re-registers itself on every volume change (_applySongVolume), which
+        // fires participant-registered — without this guard, dragging Song
+        // rebuilds the popover mid-drag and aborts it (other faders don't
+        // re-register, which is why only Song was affected).
+        window.feedBack.on('audio-mix:participant-registered', () => { if (_open && !_interacting) _renderPopover(); });
+        window.feedBack.on('audio-mix:participant-removed', () => { if (_open && !_interacting) _renderPopover(); });
     }
     window.dispatchEvent(new Event('feedBack:audio:ready'));
 }
