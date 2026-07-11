@@ -14,7 +14,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const APP_JS = path.join(__dirname, '..', '..', 'static', 'app.js');
+// startCountIn was carved out of app.js into its own module (R3a).
+const APP_JS = path.join(__dirname, '..', '..', 'static', 'js', 'count-in.js');
 
 // Pull a function body by declaration prefix (e.g. `async function startCountIn`)
 // and brace-matching to the closing brace. Skips an optional `( ... )` param
@@ -111,12 +112,23 @@ function buildSandbox() {
         __emitCalls: emitCalls,
         queueMicrotask,
     };
+    // startCountIn was carved into static/js/count-in.js and now reaches back into
+    // app.js through the host seam (static/js/host.js). Point the seam at the SAME
+    // stubs the sandbox already had: the assertions below are unchanged, they just
+    // travel through the indirection the real code now uses.
+    sandbox.host = {
+        _audioSeek: (...a) => sandbox._audioSeek(...a),
+        setPlayButtonState: () => {},
+        _songEventPayload: () => ({}),
+        togglePlay: () => {},
+        jucePlayer: () => sandbox.jucePlayer,
+    };
     vm.createContext(sandbox);
     return sandbox;
 }
 
 test('loop:restart fires once when wrap path runs', async () => {
-    const src = fs.readFileSync(APP_JS, 'utf8');
+    const src = fs.readFileSync(APP_JS, 'utf8').replace(/^export /gm, '');
     const startCountInSrc = extractFunction(src, 'async function startCountIn');
 
     // Sanity check: the change under test is present at all. Catches
@@ -167,7 +179,7 @@ test('loop:restart aborts when seek lands far from loopA (JUCE rollback)', async
     // _audioSeek resolves with completed:true but r.to !== loopA. The
     // wrap handler must abort instead of running beginCount on the wrong
     // position and emitting a misleading loop:restart.
-    const src = fs.readFileSync(APP_JS, 'utf8');
+    const src = fs.readFileSync(APP_JS, 'utf8').replace(/^export /gm, '');
     const startCountInSrc = extractFunction(src, 'async function startCountIn');
 
     const sandbox = buildSandbox();
@@ -202,7 +214,7 @@ test('count-in cancellation token bails delayed callbacks (rewindStep + tick)', 
     // teardown can interrupt an in-flight count-in. Behavioral simulation
     // of timer cancellation is out of scope for the static extractor; this
     // verifies the contract is wired into the source.
-    const src = fs.readFileSync(APP_JS, 'utf8');
+    const src = fs.readFileSync(APP_JS, 'utf8').replace(/^export /gm, '');
     const fn = extractFunction(src, 'async function startCountIn');
     // Captures gen at entry
     assert.match(fn, /const gen = _countInGen/, 'startCountIn must capture _countInGen at entry');
@@ -218,7 +230,7 @@ test('loop:restart fires after highway.setTime, before beginCount', () => {
     // Source-order assertion on the A-B wrap path only. Section-practice
     // `opts.immediate` also emits loop:restart but is a separate entry path;
     // the wrap handler lives inside the `_audioSeek(loopA, 'loop-wrap')` then.
-    const src = fs.readFileSync(APP_JS, 'utf8');
+    const src = fs.readFileSync(APP_JS, 'utf8').replace(/^export /gm, '');
     const fn = extractFunction(src, 'async function startCountIn');
     const wrapMarker = "_audioSeek(loopA, 'loop-wrap')";
     const wrapStart = fn.indexOf(wrapMarker);

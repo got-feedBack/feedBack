@@ -14,8 +14,9 @@ const vm = require('node:vm');
 
 const { extractFunction } = require('./test_utils');
 
-const APP_JS = path.join(__dirname, '..', '..', 'static', 'app.js');
-const SRC = fs.readFileSync(APP_JS, 'utf8');
+// the song-credits overlay was carved out of app.js into its own module (R3a).
+const APP_JS = path.join(__dirname, '..', '..', 'static', 'js', 'count-in.js');
+const SRC = fs.readFileSync(APP_JS, 'utf8').replace(/^export /gm, '');
 
 // Minimal fake DOM element: records className, children, and textContent.
 // Setting textContent clears children (matching real DOM) so we can assert
