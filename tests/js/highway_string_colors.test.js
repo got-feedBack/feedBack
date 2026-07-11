@@ -13,7 +13,9 @@ const path = require('node:path');
 
 const highwayJs = path.join(__dirname, '..', '..', 'static', 'highway.js');
 const highway3dJs = path.join(__dirname, '..', '..', 'plugins', 'highway_3d', 'screen.js');
-const appJs = path.join(__dirname, '..', '..', 'static', 'app.js');
+// The highway string-colour manager was carved out of app.js into its own
+// module (R3a).
+const appJs = path.join(__dirname, '..', '..', 'static', 'js', 'highway-colors.js');
 
 // Brace-balanced extraction (same helper shape as highway_note_state.test.js).
 function extractBlock(src, signature) {
@@ -86,7 +88,7 @@ test('3D gem-body gradients follow the active palette (not hardcoded)', () => {
     assert.match(apply, /_recolorGemGradients\(\)/, '_applyPaletteToMaterials must recolor gems on palette change');
 });
 
-// ── Core color manager (static/app.js) ────────────────────────────────────
+// ── Core color manager (static/js/highway-colors.js) ──────────────────────
 
 test('app.js color manager name-maps to both highways, with identity no-op + builtin guard', () => {
     const src = fs.readFileSync(appJs, 'utf8');

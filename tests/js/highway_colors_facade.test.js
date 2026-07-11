@@ -8,7 +8,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const appJs = path.join(__dirname, '..', '..', 'static', 'app.js');
+// The highway string-colour manager was carved out of app.js into its own
+// module (R3a).
+const appJs = path.join(__dirname, '..', '..', 'static', 'js', 'highway-colors.js');
 
 function extractBlock(src, signature) {
     const start = src.indexOf(signature);
