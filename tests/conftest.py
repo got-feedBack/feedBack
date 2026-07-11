@@ -22,7 +22,7 @@ def _reset_enrichment_state():
     """
     try:
         import enrichment
-    except Exception:
+    except ImportError:
         yield
         return
     enrichment._enrich_cancel.clear()
@@ -32,7 +32,10 @@ def _reset_enrichment_state():
          "total": 0, "matched": 0, "current": None})
     enrichment._enrich_last_fetch = 0.0
     enrichment._artist_alias_cache.clear()
-    enrichment._caa_index_locks.clear()
+    # _caa_index_locks is deliberately left alone: it's guarded by
+    # _caa_index_locks_guard, so clearing it here (unlocked) would race a
+    # still-alive worker thread, and its entries are stateless per-release
+    # mutexes that don't leak test state anyway.
     yield
 
 
