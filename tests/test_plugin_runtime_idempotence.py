@@ -189,8 +189,12 @@ def test_app_event_bus_dispatches_locally_and_preserves_juce_stop_state():
     # `isPlaying` moved onto the shared player-state container (static/js/player-state.js)
     # so a carved module can WRITE it — an imported binding is read-only.
     assert "const hadPlayableSong = !!audio.src || !!window._juceAudioUrl || S.isPlaying" in source
-    assert "sm.emit('song:resume', payload)" in source
     assert "window.feedBack.emit('song:resume', payload)" in source
+
+    # The JUCE audio-element shim — which re-emits song:resume through the session
+    # manager when JUCE owns the transport — was carved out into its own module (R3a).
+    juce = (ROOT / "static" / "js" / "juce-audio.js").read_text(encoding="utf-8")
+    assert "sm.emit('song:resume', payload)" in juce
 
 
 def test_nam_and_stems_use_owner_claim_dispatch_semantics():

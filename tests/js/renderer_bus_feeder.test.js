@@ -1,4 +1,4 @@
-// Behavioral tests for the renderer-audio bus feeder in static/app.js.
+// Behavioral tests for the renderer-audio bus feeder in static/js/juce-audio.js.
 //
 // The feeder (an IIFE, `_installRendererBusFeeder`) captures renderer-side
 // song audio (stems-plugin WebAudio master, or the core <audio> element) and
@@ -16,12 +16,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const APP_JS = path.join(__dirname, '..', '..', 'static', 'app.js');
+// The JUCE audio shims were carved out of app.js into their own module (R3a).
+const APP_JS = path.join(__dirname, '..', '..', 'static', 'js', 'juce-audio.js');
 
 function extractFeederIIFE(src) {
     const marker = '(function _installRendererBusFeeder() {';
     const start = src.indexOf(marker);
-    assert.ok(start !== -1, 'feeder IIFE not found in app.js');
+    assert.ok(start !== -1, 'feeder IIFE not found in static/js/juce-audio.js');
     const openBrace = src.indexOf('{', start);
     let depth = 1;
     let i = openBrace + 1;
@@ -123,6 +124,17 @@ function makeSandbox({ isAudioRunning = () => true, exclusive = () => true, disp
     sandbox.globalThis = sandbox;
 
     const src = fs.readFileSync(APP_JS, 'utf8');
+    // The shims reach back into app.js through the host seam (static/js/host.js).
+    // Route it at the SAME stubs this sandbox already had — a fresh `() => {}` would
+    // swallow the calls and the assertions below would pass vacuously.
+    sandbox.host = {
+        jucePlayer: () => sandbox.jucePlayer,
+        playSong: (...a) => (sandbox.playSong ? sandbox.playSong(...a) : undefined),
+        _audioSeek: (...a) => (sandbox._audioSeek ? sandbox._audioSeek(...a) : Promise.resolve({ completed: true })),
+        setPlayButtonState: (...a) => (sandbox.setPlayButtonState ? sandbox.setPlayButtonState(...a) : undefined),
+        _songEventPayload: (...a) => (sandbox._songEventPayload ? sandbox._songEventPayload(...a) : ({})),
+        showScreen: (...a) => (sandbox.showScreen ? sandbox.showScreen(...a) : undefined),
+    };
     vm.createContext(sandbox);
     vm.runInContext(extractFeederIIFE(src), sandbox);
     assert.equal(typeof sandbox.window._reevaluateRendererBus, 'function',

@@ -1,4 +1,4 @@
-// Behavioral tests for the JUCE engine-reroute watcher in static/app.js.
+// Behavioral tests for the JUCE engine-reroute watcher in static/js/juce-audio.js.
 //
 // The watcher (an IIFE, `_installJuceEngineRoutingWatcher`) migrates a loaded
 // song between the HTML5 <audio> element and the native JUCE backing transport
@@ -14,14 +14,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const APP_JS = path.join(__dirname, '..', '..', 'static', 'app.js');
+// The JUCE audio shims were carved out of app.js into their own module (R3a).
+const APP_JS = path.join(__dirname, '..', '..', 'static', 'js', 'juce-audio.js');
 
 // Brace-balanced extraction of the watcher IIFE, starting at its `(function`
 // and ending after the matching `})();`.
 function extractWatcherIIFE(src) {
     const marker = '(function _installJuceEngineRoutingWatcher() {';
     const start = src.indexOf(marker);
-    assert.ok(start !== -1, 'watcher IIFE not found in app.js');
+    assert.ok(start !== -1, 'watcher IIFE not found in static/js/juce-audio.js');
     const openBrace = src.indexOf('{', start);
     let depth = 1;
     let i = openBrace + 1;
@@ -100,6 +101,17 @@ function makeSandbox({ isAudioRunning, loadBackingTrack, outputType = 'Windows A
 
     const src = fs.readFileSync(APP_JS, 'utf8');
     const iife = extractWatcherIIFE(src);
+    // The shims reach back into app.js through the host seam (static/js/host.js).
+    // Route it at the SAME stubs this sandbox already had — a fresh `() => {}` would
+    // swallow the calls and the assertions below would pass vacuously.
+    sandbox.host = {
+        jucePlayer: () => sandbox.jucePlayer,
+        playSong: (...a) => (sandbox.playSong ? sandbox.playSong(...a) : undefined),
+        _audioSeek: (...a) => (sandbox._audioSeek ? sandbox._audioSeek(...a) : Promise.resolve({ completed: true })),
+        setPlayButtonState: (...a) => (sandbox.setPlayButtonState ? sandbox.setPlayButtonState(...a) : undefined),
+        _songEventPayload: (...a) => (sandbox._songEventPayload ? sandbox._songEventPayload(...a) : ({})),
+        showScreen: (...a) => (sandbox.showScreen ? sandbox.showScreen(...a) : undefined),
+    };
     vm.createContext(sandbox);
     vm.runInContext(iife, sandbox);
     return sandbox;
