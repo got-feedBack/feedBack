@@ -122,6 +122,18 @@
         return (p && CURATED[p.id]) || deriveFromType(p) || 'other';
     }
 
+    // Live search: substring match (case-insensitive) across name/id/description.
+    // Pure — unit-tested.
+    function pluginMatches(p, q) {
+        if (!q) return true;
+        var hay = ((p.name || '') + ' ' + (p.id || '') + ' ' + (p.description || '')).toLowerCase();
+        return hay.indexOf(q.toLowerCase().trim()) !== -1;
+    }
+
+    // Kept across render() re-runs (screen:changed, Reset) so the search box
+    // doesn't silently lose its value on a full DOM rebuild.
+    var searchQuery = '';
+
     function thumbUrl(p) {
         if (p && typeof p.icon === 'string' && p.icon) {
             var rel = p.icon.replace(/^assets\//, '');
@@ -329,17 +341,42 @@
         var saved = layout && layout[cat];
         if (!saved || typeof saved !== 'object' || Array.isArray(saved)) saved = Object.create(null);
         var maxBottom = 0;
+        var vis = 0; // visible-only index, so hidden (filtered-out) pedals don't leave gaps in the flow
         for (var i = 0; i < pedals.length; i++) {
             var el = pedals[i];
+            if (el.classList.contains('hidden')) continue;
             var id = el.getAttribute('data-id');
             el.style.width = d.w + 'px';
             el.style.height = d.h + 'px';
-            var pos = saved[id] ? clampToBoard(saved[id], boardW, d.w) : defaultSlot(i, boardW);
+            var pos = saved[id] ? clampToBoard(saved[id], boardW, d.w) : defaultSlot(vis, boardW);
             el.style.left = pos.x + 'px';
             el.style.top = pos.y + 'px';
             maxBottom = Math.max(maxBottom, pos.y + d.h);
+            vis++;
         }
         boardEl.style.minHeight = (maxBottom + PAD) + 'px';
+    }
+
+    // Hide non-matching pedals, hide boards with zero matches, and re-flow the
+    // rest. A null layout (while searching) makes matches compact into flow
+    // order instead of keeping sparse saved positions; the real layout (query
+    // cleared) restores saved drag positions exactly.
+    function applyFilter(root) {
+        var q = searchQuery.trim();
+        var layout = loadLayout();
+        root.querySelectorAll('.v3-board-section').forEach(function (sec) {
+            var board = sec.querySelector('.v3-pedalboard');
+            if (!board) return;
+            var any = false;
+            board.querySelectorAll('.v3-pedal').forEach(function (el) {
+                var hit = !q || pluginMatches(el._plugin || { id: el.getAttribute('data-id') }, q);
+                el.classList.toggle('hidden', !hit);
+                if (hit) any = true;
+            });
+            sec.classList.toggle('hidden', !any);
+            if (any) layoutBoard(board, sec.getAttribute('data-category'), q ? null : layout);
+        });
+        if (window.v3PedalCables) window.v3PedalCables.refresh();
     }
 
     var DRAG_THRESHOLD = 5;
@@ -451,6 +488,9 @@
             '<div class="v3-pedalboards-wrap px-6 md:px-8 pb-10">' +
             '<div class="flex items-center justify-between gap-3 mb-6 flex-wrap">' +
             '<span class="text-lg font-medium text-fb-good">' + active + ' active</span>' +
+            '<input id="v3-plugin-search" type="search" placeholder="Search plugins…" ' +
+            'class="flex-1 min-w-[200px] max-w-md text-sm bg-fb-card/60 border border-fb-border/50 rounded-md px-3 py-1.5 text-fb-text placeholder:text-fb-textDim outline-none focus:border-fb-primary/60" ' +
+            'value="' + esc(searchQuery) + '" aria-label="Search plugins">' +
             '<div class="flex items-center gap-2">' +
             '<button id="v3-pedal-reset" class="text-sm bg-fb-card/60 hover:bg-fb-card border border-fb-border/50 text-fb-textDim hover:text-fb-text px-3 py-1.5 rounded-md" title="Reset pedal positions and re-roll skins">Reset</button>' +
             (inspectorPresent
@@ -505,7 +545,7 @@
                 // has a real width.
                 if (!nowCollapsed) {
                     var board = sec.querySelector('.v3-pedalboard');
-                    if (board) layoutBoard(board, cat, loadLayout());
+                    if (board) layoutBoard(board, cat, searchQuery.trim() ? null : loadLayout());
                 }
                 if (window.v3PedalCables) window.v3PedalCables.refresh();
             });
@@ -541,13 +581,23 @@
                 window.showScreen('plugin-capability_inspector');
             }
         });
+
+        // Live search — no debounce (matches songs.js playlist-search precedent):
+        // dozens of in-memory items, DOM class toggles only, not a per-frame path.
+        var search = root.querySelector('#v3-plugin-search');
+        if (search) search.addEventListener('input', function (ev) {
+            searchQuery = ev.target.value;
+            applyFilter(root);
+        });
+        // Re-apply on every render() so the filter survives screen re-entry / Reset.
+        if (searchQuery) applyFilter(root);
     }
 
     window.v3PluginsPage = {
         render: render,
         // Pure helpers exposed for unit tests.
         _test: {
-            categoryOf: categoryOf, thumbUrl: thumbUrl, settingsTarget: settingsTarget,
+            categoryOf: categoryOf, thumbUrl: thumbUrl, settingsTarget: settingsTarget, pluginMatches: pluginMatches,
             clampToBoard: clampToBoard, defaultSlot: defaultSlot,
             loadLayout: loadLayout, saveLayout: saveLayout,
             frameFor: frameFor, pickFrame: pickFrame, frameUrl: frameUrl,
@@ -565,7 +615,9 @@
     function relayoutAll() {
         var root = document.getElementById('v3-plugins');
         if (!root || !root.classList.contains('active')) return;
-        var layout = loadLayout();
+        // While searching, keep the compact flow (null layout) instead of the
+        // sparse saved positions, so a resize mid-search doesn't reopen gaps.
+        var layout = searchQuery.trim() ? null : loadLayout();
         root.querySelectorAll('.v3-pedalboard').forEach(function (boardEl) {
             layoutBoard(boardEl, boardEl.getAttribute('data-category'), layout);
         });

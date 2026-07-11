@@ -152,3 +152,26 @@ test('DRAG_THRESHOLD is a small positive pixel budget', () => {
     assert.equal(typeof t.DRAG_THRESHOLD, 'number');
     assert.ok(t.DRAG_THRESHOLD > 0 && t.DRAG_THRESHOLD < 20);
 });
+
+test('pluginMatches: case-insensitive substring across name/id/description', () => {
+    const { t } = loadPage();
+    const p = { id: 'nam_tone', name: 'NAM Tone', description: 'Amp modeling via neural nets' };
+    assert.ok(t.pluginMatches(p, 'nam'), 'matches name');
+    assert.ok(t.pluginMatches(p, 'NAM_TONE'), 'matches id, case-insensitive');
+    assert.ok(t.pluginMatches(p, 'neural'), 'matches description');
+    assert.ok(!t.pluginMatches(p, 'flappy'), 'no match');
+});
+
+test('pluginMatches: empty/whitespace query matches everything', () => {
+    const { t } = loadPage();
+    const p = { id: 'x', name: 'X' };
+    assert.ok(t.pluginMatches(p, ''));
+    assert.ok(t.pluginMatches(p, '  '));
+    assert.ok(t.pluginMatches(p, null));
+});
+
+test('pluginMatches: plugin with no name/description does not crash', () => {
+    const { t } = loadPage();
+    assert.ok(t.pluginMatches({ id: 'bare_plugin' }, 'bare'));
+    assert.ok(!t.pluginMatches({ id: 'bare_plugin' }, 'nope'));
+});
