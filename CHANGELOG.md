@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- **The classic v2 UI shell is gone — v3 is the only UI (R3a).** `static/index.html`, the
+  `/v2` route, and the `FEEDBACK_UI` v2/legacy opt-out are deleted; `/` and `/v3` both serve
+  `static/v3/index.html`, which has been the default since 0.3.0. This is the first step of
+  the core-frontend ES-module migration (R3a): both shells load the same `static/app.js`, so
+  every subsequent step of that migration would otherwise have to be made, and verified,
+  twice. Removing the fallback now halves that surface before any of it is touched.
+  Incidentally fixes a latent bug in the old `index()` route — its guard read
+  `if getenv_compat("FEEDBACK_UI") or getenv_compat("FEEDBACK_UI") in ("v2", "legacy")`,
+  whose left operand is truthy for *any* non-empty value, so `FEEDBACK_UI=v3` actually served
+  the **v2** shell. `static/tailwind.min.css` is regenerated (the content globs scanned the
+  deleted file, so v2-only utility classes are now purged). Constitution amended to 1.3.0:
+  Principle II's frontend file list now names `static/v3/index.html`.
+  **Migration notes:** if you set `FEEDBACK_UI=v2` (or `=legacy`), or bookmarked `/v2`, there
+  is no longer a classic shell to fall back to — unset the variable and use `/`. The env var
+  itself is no longer read; the `SLOPSMITH_*`→`FEEDBACK_*` compat shim is unaffected. No
+  chart, settings, or plugin data changes, and no plugin API changes: v3 reuses the same
+  engine (`app.js`, `highway.js`, `playSong`, `showScreen`, the capability registry).
+
 ### Fixed
 - **The packaged desktop app could not start (`ModuleNotFoundError: No module named
   'appstate'`).** feedback-desktop's `scripts/bundle-slopsmith.sh` copies a *hardcoded

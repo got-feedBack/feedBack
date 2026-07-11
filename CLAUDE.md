@@ -125,13 +125,13 @@ Notes:
 
 ### v3 UI (fee[dB]ack v0.3.0) — player-chrome contract
 
-v0.3.0 ships a redesigned UI behind a flag (`FEEDBACK_UI=v3` or the `/v3` route);
-the classic UI (v2) stays the default until 0.3.0 ships, so **plugins must work in
-both**. v3 reuses the same engine (`server.py`, `app.js`, `highway.js`, `playSong`,
+v0.3.0's redesigned UI is **the only UI** — the classic v2 shell and its
+`FEEDBACK_UI` / `/v2` opt-outs are gone, so there is no second shell to support.
+v3 reuses the same engine (`server.py`, `app.js`, `highway.js`, `playSong`,
 `showScreen`, capabilities, library providers, the `window.feedBackViz_<id>` /
 `setRenderer` contract), so a plugin's **backend, capabilities, `nav`/`screen`,
 visualization renderers, diagnostics, and settings export work unchanged** — v3
-surfaces `nav` in its sidebar and mounts screens exactly as v2 does.
+surfaces `nav` in its sidebar and mounts screens as before.
 
 **The only thing that changed is the player chrome.** If your plugin injects a
 control into it, you must adapt:

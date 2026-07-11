@@ -2391,24 +2391,10 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 @app.get("/")
 def index():
-    # fee[dB]ack v0.3.0: the v3 shell is now the DEFAULT at `/`. The classic v2
-    # UI remains fully available as a fallback — opt back in with
-    # FEEDBACK_UI=v2 (or =legacy), or hit the dedicated /v2 route below (which
-    # serves it regardless of the env var).
-    if getenv_compat("FEEDBACK_UI") or getenv_compat("FEEDBACK_UI") in ("v2", "legacy"):
-        return FileResponse(str(STATIC_DIR / "index.html"))
     return FileResponse(str(STATIC_DIR / "v3" / "index.html"))
 
 
 @app.get("/v3")
 def index_v3():
-    # Always serve the v0.3.0 shell, independent of the env var (kept for
-    # explicit/back-compat links even though `/` now defaults to v3).
+    # Retained as a back-compat alias for links minted while v3 was opt-in.
     return FileResponse(str(STATIC_DIR / "v3" / "index.html"))
-
-
-@app.get("/v2")
-def index_v2():
-    # Always serve the classic v2 UI, independent of the env var, so the
-    # fallback is reachable without flipping FEEDBACK_UI.
-    return FileResponse(str(STATIC_DIR / "index.html"))

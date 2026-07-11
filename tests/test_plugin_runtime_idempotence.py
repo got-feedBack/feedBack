@@ -69,7 +69,7 @@ def test_capability_visualizer_waits_for_registry_instead_of_hard_error():
 
 
 def test_app_shell_loads_capability_registry_before_app_runtime():
-    source = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    source = (ROOT / "static" / "v3" / "index.html").read_text(encoding="utf-8")
 
     assert '<script src="/static/capabilities.js"></script>' in source
     assert '<script src="/static/capabilities/library.js"></script>' in source

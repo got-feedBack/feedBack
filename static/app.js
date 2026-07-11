@@ -9181,7 +9181,7 @@ function _ensureSectionPracticeDom() {
     ctrl.appendChild(bar);
     // Mount OUTSIDE #player-controls (in #player-footer, or as its sibling) so
     // the popover's chip <button>s can't be matched by a plugin injector that
-    // anchors on `#player-controls > button:last-of-type` (see static/index.html).
+    // anchors on `#player-controls > button:last-of-type` (see static/v3/index.html).
     _mountSectionPracticeControlSafe(ctrl);
     _placeSectionPracticeControlForChrome();
     return bar;

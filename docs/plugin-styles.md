@@ -1,9 +1,9 @@
 # Plugin styling — the `styles` capability
 
-> Building for the redesigned **v3 UI** (`FEEDBACK_UI=v3` / `/v3`)? v3 uses `fb-*`
-> design tokens and a restructured player chrome with a dedicated plugin-control
-> slot. See **[plugin-v3-ui.md](plugin-v3-ui.md)** for the player-chrome contract
-> plugins must follow in v3.
+> The **v3 UI** is the only UI — it uses `fb-*` design tokens and a restructured
+> player chrome with a dedicated plugin-control slot. See
+> **[plugin-v3-ui.md](plugin-v3-ui.md)** for the player-chrome contract plugins
+> must follow.
 
 FeedBack serves Tailwind as a **prebuilt** stylesheet
 (`static/tailwind.min.css`), never the runtime Play CDN. The CDN's on-the-fly

@@ -282,7 +282,7 @@ function createHighway() {
     // it's only "full resolution" when Quality is HD; otherwise it pins at the
     // chosen Quality. Read once here; live changes come through
     // api.setMinRenderScale(), surfaced as the "Min res" control next to Quality
-    // in the player controls (static/index.html).
+    // in the player controls (static/v3/index.html).
     hwState._autoScaleMin = (function () {
         const v = parseFloat(localStorage.getItem('highwayMinRenderScale'));
         return Number.isFinite(v) ? Math.max(_AUTO_SCALE_MIN, Math.min(1, v)) : _AUTO_SCALE_MIN;

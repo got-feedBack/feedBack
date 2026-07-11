@@ -1,14 +1,15 @@
 <!DOCTYPE html>
 <!--
-  fee[dB]ack v0.3.0 shell (FEEDBACK_UI=v3 / GET /v3).
+  fee[dB]ack v0.3.0 shell — the app's only UI, served at `/` (and `/v3`, a
+  back-compat alias). The classic v2 shell it was forked from is deleted.
 
-  This is a re-chromed copy of the legacy static/index.html: the v0.3.0
-  sidebar + topbar replace the (hidden) legacy navbar, new #v3-* screens are
-  added, and all the legacy screens (#home library, #favorites, #settings,
-  #player, #audio, plugin nav containers) are kept verbatim so static/app.js
-  boots UNMODIFIED and the whole engine — player/highway, plugin loader,
-  capabilities, audio, library, settings — is reused as-is. Navigation is the
-  shared window.showScreen across both #v3-* and legacy/#plugin-* screens.
+  Originally a re-chromed copy of that shell: the v0.3.0 sidebar + topbar
+  replace the (hidden) legacy navbar, new #v3-* screens are added, and all the
+  legacy screens (#home library, #favorites, #settings, #player, #audio, plugin
+  nav containers) are kept verbatim so static/app.js boots UNMODIFIED and the
+  whole engine — player/highway, plugin loader, capabilities, audio, library,
+  settings — is reused as-is. Navigation is the shared window.showScreen across
+  both #v3-* and legacy/#plugin-* screens.
   See ~/Repositories/feedBack-feedback-v030/prompts/12-app-shell.md.
 -->
 <html lang="en" class="dark scroll-smooth">
