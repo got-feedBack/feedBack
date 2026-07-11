@@ -96,6 +96,7 @@
         if (_active) {
             syncInstrumentPov();
             syncVenueMotion();
+            syncCrowd(true);
             return;
         }
         _active = true;

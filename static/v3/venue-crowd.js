@@ -105,6 +105,8 @@
     let _mix = 0;               // 0 → layer0 visible, 1 → layer1 visible
     let _fadeRaf = 0;
     let _loadToken = 0;         // invalidates in-flight canplaythrough waits
+    let _boundToRenderer = false;
+    let _pendingLoop = null;    // transition committed while a stinger played
     let _stingerUntilEnded = false;
     let _lastStingerAt = -Infinity;
     let _prevStreak = 0;
@@ -129,22 +131,36 @@
     }
 
     function ensureVideos() {
-        if (_videos[0] || typeof document === 'undefined') return;
-        for (let i = 0; i < 2; i++) {
-            const v = document.createElement('video');
-            // Same autoplay-safe recipe as the highway_3d video bg style:
-            // muted + playsInline bypasses gesture requirements; same-origin
-            // URLs so VideoTexture never taints.
-            v.muted = true;
-            v.playsInline = true;
-            v.preload = 'auto';
-            v.loop = true;
-            v.style.display = 'none';
-            document.body.appendChild(v);
-            _videos[i] = v;
-            const setVideo = h3d('h3dVenueBackdropSetVideo');
-            if (setVideo) setVideo(i, v);
+        if (!_videos[0] && typeof document !== 'undefined') {
+            for (let i = 0; i < 2; i++) {
+                const v = document.createElement('video');
+                // Same autoplay-safe recipe as the highway_3d video bg style:
+                // muted + playsInline bypasses gesture requirements; same-origin
+                // URLs so VideoTexture never taints.
+                v.muted = true;
+                v.playsInline = true;
+                v.preload = 'auto';
+                v.loop = true;
+                v.style.display = 'none';
+                document.body.appendChild(v);
+                _videos[i] = v;
+            }
         }
+        bindVideosToRenderer();
+    }
+
+    // The highway_3d plugin (and its globals) can register after the venue
+    // pack starts — e.g. Venue selected at page load, renderer ready later.
+    // Idempotent and retried from start() and the perf-event path so a late
+    // renderer still picks the videos up.
+    function bindVideosToRenderer() {
+        if (_boundToRenderer || !_videos[0]) return;
+        const setVideo = h3d('h3dVenueBackdropSetVideo');
+        if (!setVideo) return;
+        setVideo(0, _videos[0]);
+        setVideo(1, _videos[1]);
+        _boundToRenderer = true;
+        setMix(_mix); // re-push mix the renderer missed while unregistered
     }
 
     function setMix(v) {
@@ -236,6 +252,14 @@
             video.removeEventListener('ended', back);
             // Fade back to the loop layer (which kept playing underneath).
             fadeMixTo(_activeLayer === 1 ? 1 : 0, STINGER_FADE_MS);
+            // A crowd-state switch that committed mid-stinger was deferred;
+            // play it now or the old loop would linger indefinitely (the
+            // machine already advanced, so no later event re-triggers it).
+            if (_pendingLoop) {
+                const pending = _pendingLoop;
+                _pendingLoop = null;
+                showLoop(pending, FADE_MS);
+            }
         };
         loadAndPlay(video, _manifest.stingers[name], false, (ok) => {
             if (!ok || !_venueActive) { _stingerUntilEnded = false; return; }
@@ -249,6 +273,7 @@
 
     function onPerformanceState(e) {
         if (!_venueActive || !_manifest) return;
+        bindVideosToRenderer();
         const d = (e && e.detail) || {};
         const streak = Number(d.streak) || 0;
         const sting = stingerForStreak(_prevStreak, streak);
@@ -257,8 +282,11 @@
             playStinger(sting);
         }
         const next = machine.update(d.state, now());
-        // A stinger owns the idle layer; the hysteresis re-fires soon after.
-        if (next && !_stingerUntilEnded) showLoop(next, FADE_MS);
+        if (next) {
+            // A stinger owns the idle layer; defer the switch until it ends.
+            if (_stingerUntilEnded) _pendingLoop = next;
+            else showLoop(next, FADE_MS);
+        }
     }
 
     function onStatsRecorded(e) {
@@ -287,6 +315,7 @@
         cancelFade();
         _loadToken++;
         _stingerUntilEnded = false;
+        _pendingLoop = null;
         for (const v of _videos) {
             if (v && !v.paused) v.pause();
         }
@@ -294,7 +323,12 @@
 
     function setVenueActive(on) {
         const next = !!on;
-        if (next === _venueActive) return;
+        if (next === _venueActive) {
+            // Re-activation (e.g. viz:renderer:ready after a late plugin
+            // load): don't restart the loop, but do retry renderer binding.
+            if (next && _manifest) bindVideosToRenderer();
+            return;
+        }
         _venueActive = next;
         if (_venueActive && _manifest) start();
         else stop();
