@@ -77,6 +77,11 @@ const PLUGIN_LOADER_JS = path.join(ROOT, 'static', 'js', 'plugin-loader.js');
 // The viz layer was carved out of app.js too (R3a).
 const VIZ_JS = path.join(ROOT, 'static', 'js', 'viz.js');
 const LIBRARY_JS = path.join(ROOT, 'static', 'capabilities', 'library.js');
+// The library itself was carved out of app.js into ./static/js/library.js (R3a). Note the
+// two are DIFFERENT files: LIBRARY_JS above is the capability; this is the UI module.
+// syncLibrarySong deliberately stayed behind in app.js — it reaches showScreen/playSong,
+// and moving it would have dragged the whole playback core into the library module.
+const LIBRARY_MODULE_JS = path.join(ROOT, 'static', 'js', 'library.js');
 
 function source(file) {
     // Normalize CRLF: region() slices fixed CHARACTER windows, so on a
@@ -100,9 +105,10 @@ test('plugin script hydration exposes the current plugin id for legacy registrat
 
 test('library providers route through native library capability', () => {
     const src = source(APP_JS);
+    const libModule = source(LIBRARY_MODULE_JS);
     const librarySrc = source(LIBRARY_JS);
-    const loader = region(src, 'async function loadLibraryProviders', 1800);
-    const selector = region(src, 'async function setLibraryProvider(providerId, options = {})', 1600);
+    const loader = region(libModule, 'async function loadLibraryProviders', 1800);
+    const selector = region(libModule, 'async function setLibraryProvider(providerId, options = {})', 1600);
     const sync = region(src, 'async function syncLibrarySong(providerId, songId', 1600);
 
     assert.match(librarySrc, /capabilities\.registerOwner\(['"]library['"]/);

@@ -16,7 +16,11 @@ const path = require('node:path');
 
 const root = path.join(__dirname, '..', '..');
 const SONGS = fs.readFileSync(path.join(root, 'static', 'v3', 'songs.js'), 'utf8');
-const APP = fs.readFileSync(path.join(root, 'static', 'app.js'), 'utf8');
+// The rescan path moved into ./static/js/library.js with the rest of the library (R3a).
+// Read BOTH: this asserts the emit exists SOMEWHERE in the app, and pinning it to one file
+// just means the test starts lying the next time the code moves.
+const APP = fs.readFileSync(path.join(root, 'static', 'app.js'), 'utf8')
+    + '\n' + fs.readFileSync(path.join(root, 'static', 'js', 'library.js'), 'utf8');
 
 test('app.js emits library:changed when a Settings rescan completes', () => {
     assert.match(APP, /emit\(\s*['"]library:changed['"]/,
