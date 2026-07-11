@@ -111,6 +111,7 @@
     let _stingerUntilEnded = false;
     let _lastStingerAt = -Infinity;
     let _prevStreak = 0;
+    let _lastAccuracyPct = null; // from perf events; stats:recorded carries none
     let _bound = false;
 
     function now() { return Date.now(); }
@@ -259,23 +260,29 @@
             _pendingLoop = _loadingLoop;
             _loadingLoop = null;
         }
+        // A loop switch deferred (or preempted) by this stinger must play
+        // once the stinger is done OR failed — the machine already advanced,
+        // so nothing re-triggers it later.
+        const flushPending = () => {
+            if (!_pendingLoop || !_venueActive) return;
+            const pending = _pendingLoop;
+            _pendingLoop = null;
+            showLoop(pending, FADE_MS);
+        };
         const back = () => {
             if (!_stingerUntilEnded) return;
             _stingerUntilEnded = false;
             video.removeEventListener('ended', back);
             // Fade back to the loop layer (which kept playing underneath).
             fadeMixTo(_activeLayer === 1 ? 1 : 0, STINGER_FADE_MS);
-            // A crowd-state switch that committed mid-stinger was deferred;
-            // play it now or the old loop would linger indefinitely (the
-            // machine already advanced, so no later event re-triggers it).
-            if (_pendingLoop) {
-                const pending = _pendingLoop;
-                _pendingLoop = null;
-                showLoop(pending, FADE_MS);
-            }
+            flushPending();
         };
         loadAndPlay(video, _manifest.stingers[name], false, (ok) => {
-            if (!ok || !_venueActive) { _stingerUntilEnded = false; return; }
+            if (!ok || !_venueActive) {
+                _stingerUntilEnded = false;
+                flushPending();
+                return;
+            }
             video.addEventListener('ended', back);
             fadeMixTo(layer === 1 ? 1 : 0, STINGER_FADE_MS);
             // Safety: an `ended` that never fires (decode stall) must not
@@ -288,6 +295,7 @@
         if (!_venueActive || !_manifest) return;
         bindVideosToRenderer();
         const d = (e && e.detail) || {};
+        if (Number.isFinite(Number(d.accuracyPct))) _lastAccuracyPct = Number(d.accuracyPct);
         const streak = Number(d.streak) || 0;
         const sting = stingerForStreak(_prevStreak, streak);
         _prevStreak = streak;
@@ -302,10 +310,12 @@
         }
     }
 
-    function onStatsRecorded(e) {
+    function onStatsRecorded() {
         if (!_venueActive || !_manifest) return;
-        const d = (e && e.detail) || {};
-        const sting = stingerForAccuracy(d.accuracy != null ? d.accuracy : d.accuracyPct);
+        // stats:recorded carries only {filename, arrangement} — the accuracy
+        // comes from the last v3:live-performance-state of the finished song.
+        const sting = stingerForAccuracy(_lastAccuracyPct);
+        _lastAccuracyPct = null; // one reaction per song
         if (sting) {
             _lastStingerAt = -Infinity; // end-of-song reaction always allowed
             playStinger(sting);
