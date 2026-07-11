@@ -240,7 +240,12 @@
             if (!ok || !_venueActive) return;
             _fadingLoop = state;
             fadeMixTo(layer === 1 ? 1 : 0, fadeMs, () => {
-                if (_fadingLoop === state) _fadingLoop = null;
+                // Preempted mid-fade (stinger claimed this layer while we
+                // were still ramping): the layer no longer holds this loop —
+                // promoting it would pause the real loop and hand fade-back
+                // the wrong target.
+                if (_fadingLoop !== state) return;
+                _fadingLoop = null;
                 const old = _videos[_activeLayer];
                 _activeLayer = layer;
                 if (old && !old.paused) old.pause();
