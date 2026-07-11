@@ -18,6 +18,7 @@
     let _state = null;
     let _pollTimer = 0;
     let _appliedManifestVenue = null;
+    let _manifestReqGen = 0; // invalidates in-flight manifest fetches
     let _prevUnlockedIds = null;
 
     function $(id) { return document.getElementById(id); }
@@ -40,6 +41,9 @@
     async function pushCrowdManifest(state) {
         const crowd = window.v3VenueCrowd;
         if (!crowd || typeof crowd.setManifest !== 'function') return;
+        // Any newer invocation (delete, venue switch, fresher state) must win
+        // over a manifest fetch still in flight from this one.
+        const gen = ++_manifestReqGen;
         const unlocked = state.venues.filter((v) => v.unlocked);
         let venue = null;
         try {
@@ -57,8 +61,9 @@
         if (venue.id === _appliedManifestVenue) return;
         try {
             const res = await fetch(`${API}/venues/${venue.id}/manifest.json`);
-            if (!res.ok) return;
+            if (gen !== _manifestReqGen || !res.ok) return;
             const manifest = await res.json();
+            if (gen !== _manifestReqGen) return;
             manifest.base = `${API}/venues/${venue.id}/`;
             _appliedManifestVenue = venue.id;
             crowd.setManifest(manifest);
