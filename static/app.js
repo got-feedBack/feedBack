@@ -12165,3 +12165,52 @@ async function bootstrapPluginsAndUi() {
         })
         .catch(() => {});
 })();
+
+
+// ─── The window contract ────────────────────────────────────────────────────
+// app.js is a classic script today, so every top-level `function foo()` here is
+// implicitly a property of `window`. The R3a migration turns this file into an
+// ES module, where that stops being true — module scope is not global scope, and
+// each of these names would silently vanish from `window`.
+//
+// Everything below is reached by NAME from outside this file, so each one is
+// made explicit BEFORE the flip. While app.js is still classic this whole block
+// is a no-op (it just re-assigns what is already there), which is exactly what
+// makes it safe to land on its own.
+//
+// The consumers are: inline on*= handlers in static/v3/index.html; on*= handlers
+// this file builds inside template literals; static/v3/*.js; the capabilities;
+// bundled plugins; and — easy to forget, since they live in other repos —
+// feedback-desktop and the external plugins. Constitution II names
+// `window.playSong` / `window.showScreen` / `window.feedBack` as the public
+// extension contract.
+//
+// Guarded by tests/js/window_contract.test.js. Add a name here the moment
+// anything outside app.js calls it.
+Object.assign(window, {
+    _confirmDialog, _getArrangementNamingMode, _libraryLocalFilename, _librarySongArtUrl,
+    _librarySongId, _onHeaderClick, _onNamingModeChange, _trapFocusInModal,
+    changeArrangement, checkPluginUpdates, clearLibFilters, clearLoop,
+    deleteSelectedLoop, exportDiagnostics, exportSettings, filterFavorites,
+    filterLibrary, fullRescanLibrary, goFavPage, handleSliderInput,
+    hideScanBanner, importSettings, loadPlugins, loadSavedLoop,
+    loadSettings, onSectionPracticeModeChange, openEditModal, persistSetting,
+    pickDlcFolder, pinCurrentArrangementDefault, playSong, previewDiagnostics,
+    previewEditArt, renderGridCards, renderTreeInto, rescanLibrary,
+    retuneSong, saveCurrentLoop, saveSettings, seekBy,
+    setAvOffsetMs, setFavView, setInstrumentPathway, setLibView,
+    setLibraryProvider, setLoopEnd, setLoopStart, setMastery,
+    setSpeed, setViz, showScreen, sortFavorites,
+    sortLibrary, syncLibrarySong, toggleAllArtists, toggleAllFavoriteArtists,
+    toggleLibFilters, togglePlay, toggleSectionPracticePopover, uiPrompt,
+    updatePlugin, uploadSongs,
+
+    // These four are invisible to every static scan. app.js:2156-2157 picks the
+    // handler NAME at runtime —
+    //     const letterFn = favoritesOnly ? 'filterFavTreeLetter' : 'filterTreeLetter';
+    // — and interpolates it: `onclick="${letterFn}('A')"`. So the names never
+    // appear as identifiers anywhere, and ESLint / no-undef / a grep for
+    // `onclick="fn` all miss them. They are the library A-Z rail and its
+    // pagination; drop one and those buttons throw at click time, nowhere else.
+    filterFavTreeLetter, filterTreeLetter, goFavTreePage, goTreePage,
+});
