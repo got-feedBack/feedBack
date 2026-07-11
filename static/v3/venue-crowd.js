@@ -104,9 +104,10 @@
     let _activeLayer = 0;       // layer currently showing the loop
     let _mix = 0;               // 0 → layer0 visible, 1 → layer1 visible
     let _fadeRaf = 0;
-    let _loadToken = 0;         // invalidates in-flight canplaythrough waits
+    let _stopGen = 0;           // bumped by stop(): invalidates ALL in-flight loads
     let _boundToRenderer = false;
-    let _pendingLoop = null;    // transition committed while a stinger played
+    let _pendingLoop = null;    // loop switch deferred by an active stinger
+    let _loadingLoop = null;    // loop currently waiting on canplaythrough
     let _stingerUntilEnded = false;
     let _lastStingerAt = -Infinity;
     let _prevStreak = 0;
@@ -199,12 +200,15 @@
     }
 
     // Load url into the video, resolve when it can play through (or after a
-    // timeout — a stalled fetch must not wedge the crowd forever).
+    // timeout — a stalled fetch must not wedge the crowd forever). Tokens are
+    // per-element: a later load on the SAME video (a stinger preempting the
+    // idle layer) cancels this one, but loads on the other layer don't.
     function loadAndPlay(video, url, loop, cb) {
-        const token = ++_loadToken;
+        const token = (video._fbCrowdToken = (video._fbCrowdToken || 0) + 1);
+        const gen = _stopGen;
         let settled = false;
         const settle = (ok) => {
-            if (settled || token !== _loadToken) return;
+            if (settled || token !== video._fbCrowdToken || gen !== _stopGen) return;
             settled = true;
             video.removeEventListener('canplaythrough', onReady);
             video.removeEventListener('error', onError);
@@ -227,7 +231,9 @@
         if (!_manifest || !_videos[0]) return;
         const layer = idleLayer();
         const video = _videos[layer];
+        _loadingLoop = state;
         loadAndPlay(video, _manifest.loops[state], true, (ok) => {
+            if (_loadingLoop === state) _loadingLoop = null;
             if (!ok || !_venueActive) return;
             fadeMixTo(layer === 1 ? 1 : 0, fadeMs, () => {
                 const old = _videos[_activeLayer];
@@ -246,6 +252,13 @@
         _stingerUntilEnded = true;
         const layer = idleLayer();
         const video = _videos[layer];
+        // The stinger reuses the idle layer's element, cancelling any loop
+        // load still in flight there — requeue that loop for when the
+        // stinger ends (the machine already advanced, nothing re-fires it).
+        if (_loadingLoop) {
+            _pendingLoop = _loadingLoop;
+            _loadingLoop = null;
+        }
         const back = () => {
             if (!_stingerUntilEnded) return;
             _stingerUntilEnded = false;
@@ -313,12 +326,24 @@
 
     function stop() {
         cancelFade();
-        _loadToken++;
+        _stopGen++;
         _stingerUntilEnded = false;
         _pendingLoop = null;
+        _loadingLoop = null;
         for (const v of _videos) {
             if (v && !v.paused) v.pause();
         }
+        // Unbind from the renderer: a paused video still holds its last
+        // frame, and the venue style keeps a bound plane visible whenever
+        // videoWidth > 0 — without this a removed pack would leave a frozen
+        // crowd frame over the static plate. start() re-binds.
+        const setVideo = h3d('h3dVenueBackdropSetVideo');
+        if (_boundToRenderer && setVideo) {
+            setVideo(0, null);
+            setVideo(1, null);
+        }
+        _boundToRenderer = false;
+        setMix(0);
     }
 
     function setVenueActive(on) {
