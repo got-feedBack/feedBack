@@ -1,0 +1,12 @@
+{
+    "id": "career",
+    "name": "Career",
+    "version": "0.1.0",
+    "bundled": true,
+    "private": false,
+    "description": "Career mode — gig your way from a local bar to the arena. Earn stars per song; the crowd reacts to how you play.",
+    "screen": "screen.html",
+    "script": "screen.js",
+    "styles": "assets/career.css",
+    "routes": "routes.py"
+}
