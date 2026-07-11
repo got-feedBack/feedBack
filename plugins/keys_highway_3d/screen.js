@@ -1854,8 +1854,15 @@
             return { layout, whiteCount: whiteIndex };
         }
 
-        const WHITE_W = 12 * K, WHITE_L = 46 * K, WHITE_H = 5 * K;
-        const BLACK_W = 6.4 * K, BLACK_L = 28 * K, BLACK_H = 6.5 * K;
+        // Key WIDTHS are fixed — the horizontal lane tiling (naturals/sharps)
+        // is derived from them, so they must not change.
+        const WHITE_W = 12 * K, BLACK_W = 6.4 * K;
+        // Key LENGTH (depth toward the player) + HEIGHT: taller/longer bodies so
+        // the key-depress tip has room to read and the edge-shaded side walls
+        // (see buildKeyboardAndHighway) give each key a defined border. Every
+        // consumer reads these at build-/frame-time.
+        const WHITE_L = 49.5 * K, WHITE_H = 9.5 * K;
+        const BLACK_L = 33 * K, BLACK_H = 13 * K;
         const HIGHWAY_LEN = 1150 * K; // longer runway → ~8.8s of lookahead visible
         // 'flat' piano-shaped-lane geometry (see laneSpanFlat). Zero-overlap tiling:
         // white lanes are trimmed by FLAT_SHARP_HALF where they meet a sharp and
@@ -2516,6 +2523,67 @@
             return g;
         }
 
+        // Bake a vertical shade ramp into a key geometry's vertex colors so the
+        // (taller) side walls darken toward the base while the top face stays
+        // full-bright. This gives every key a defined edge and turns the seam
+        // between neighbours into a soft shadow line — the "smidge of darkness"
+        // that makes adjacent keys easy to tell apart. The material multiplies
+        // its base color by these (vertexColors), same trick the note gems use.
+        function _shadeKeyEdges(geo, botShade) {
+            geo.computeBoundingBox();
+            const y0 = geo.boundingBox.min.y, yr = (geo.boundingBox.max.y - y0) || 1;
+            const pos = geo.attributes.position;
+            const cols = new Float32Array(pos.count * 3);
+            for (let i = 0; i < pos.count; i++) {
+                const t = (pos.getY(i) - y0) / yr;               // 0 base .. 1 top
+                const v = botShade + (1 - botShade) * (t * t * (3 - 2 * t));
+                cols[i * 3] = cols[i * 3 + 1] = cols[i * 3 + 2] = v;
+            }
+            geo.setAttribute('color', new T.BufferAttribute(cols, 3));
+        }
+
+        // Contour a stood-up key geometry (height == +Y) by tapering its
+        // horizontal (X) footprint toward the TOP: the base keeps full width and
+        // the top narrows to `topScale`, giving a trapezoid/chiseled-wedge profile
+        // that reads from the camera's top-down angle (used for the sharp keys).
+        // Left/right edges only — depth (Z) toward the highway is never
+        // touched. Cheap: a one-time vertex pass at build; recomputes normals so
+        // the sloped walls light correctly.
+        function _taperKeyX(geo, topScale) {
+            geo.computeBoundingBox();
+            const y0 = geo.boundingBox.min.y, yr = (geo.boundingBox.max.y - y0) || 1;
+            const pos = geo.attributes.position;
+            for (let i = 0; i < pos.count; i++) {
+                const t = (pos.getY(i) - y0) / yr;             // 0 base .. 1 top
+                const s = 1 + (topScale - 1) * t;              // full at base, topScale at top
+                pos.setX(i, pos.getX(i) * s);
+            }
+            pos.needsUpdate = true;
+            geo.computeVertexNormals();
+        }
+
+        // Slant a stood-up key's FRONT face (the edge toward the player) back by
+        // `degrees` from vertical, so the side profile reads as a trapezoid/wedge:
+        // the front-bottom edge recedes while the top edge stays, tilting a 90°
+        // front to (90 - degrees)°. Only the front half is sheared (weighted by
+        // depth) so the BACK edge that meets the highway is never moved. One-time
+        // vertex pass; recomputes normals. Sharp keys only.
+        function _slantFrontFace(geo, degrees) {
+            geo.computeBoundingBox();
+            const bb = geo.boundingBox;
+            const y0 = bb.min.y, yr = (bb.max.y - y0) || 1;
+            const zMid = (bb.min.z + bb.max.z) / 2, zr = (bb.max.z - zMid) || 1;
+            const amt = (bb.max.y - bb.min.y) * Math.tan(degrees * Math.PI / 180);
+            const pos = geo.attributes.position;
+            for (let i = 0; i < pos.count; i++) {
+                const t = (pos.getY(i) - y0) / yr;                   // 0 base .. 1 top
+                const fw = Math.max(0, (pos.getZ(i) - zMid) / zr);   // 0 back-half .. 1 front
+                pos.setZ(i, pos.getZ(i) - (1 - t) * fw * amt);       // recede the front-base
+            }
+            pos.needsUpdate = true;
+            geo.computeVertexNormals();
+        }
+
         function _noteGeometry(w, len) {
             const key = w.toFixed(4) + '|' + len.toFixed(2);
             let geo = _noteGeoCache.get(key);
@@ -2968,10 +3036,27 @@
             // is translated to the key's BACK edge so the live MIDI key-
             // depress animation can pivot there (rotation.x > 0 tips the
             // front of the key down, like a real piano action).
-            const whiteGeo = _roundedBoxGeo(WHITE_W * 0.94, WHITE_H, WHITE_L, WHITE_W * 0.05, WHITE_H * 0.1);
+            // Left/right inset so a thin real-piano gap opens between neighbours and
+            // each edge reads clearly. Naturals get the wider inset (their long walls
+            // sit flush, so this is what actually separates them); sharps keep a
+            // slimmer one. Inset is left/right ONLY — the back edge that meets the
+            // highway never moves, and positions + lane widths are untouched so
+            // falling notes still line up with their key.
+            const whiteGap = 1.0 * K;  // per side
+            const blackGap = 0.7 * K;  // per side
+            const whiteBodyW = WHITE_W - 2 * whiteGap;
+            const blackBodyW = BLACK_W - 2 * blackGap;
+            const whiteGeo = _roundedBoxGeo(whiteBodyW, WHITE_H, WHITE_L, WHITE_W * 0.05, WHITE_H * 0.1);
             whiteGeo.translate(0, 0, WHITE_L / 2);
-            const blackGeo = _roundedBoxGeo(BLACK_W, BLACK_H, BLACK_L, BLACK_W * 0.08, BLACK_H * 0.06);
+            const blackGeo = _roundedBoxGeo(blackBodyW, BLACK_H, BLACK_L, BLACK_W * 0.08, BLACK_H * 0.06);
             blackGeo.translate(0, 0, BLACK_L / 2);
+            // Contour the sharps into a trapezoid: pull the TOP edges inward
+            // (left/right only) while the base stays full width, so each black
+            // key reads as a chiseled wedge from the camera's top-down angle.
+            _taperKeyX(blackGeo, 0.84);
+            _slantFrontFace(blackGeo, 10);  // front face 90° -> ~80° (trapezoid side profile)
+            _shadeKeyEdges(whiteGeo, 0.72); // white walls darken to 72% at the base
+            _shadeKeyEdges(blackGeo, 0.60); // blacks a touch stronger for form
             const whiteGlyphGeo = new T.PlaneGeometry(WHITE_W * 0.72, WHITE_W * 0.72);
             const blackGlyphGeo = new T.PlaneGeometry(BLACK_W * 0.96, BLACK_W * 0.96);
             for (const [midi, entry] of layout) {
@@ -2979,6 +3064,9 @@
                 const inRange = midi >= range.activeLow && midi <= range.activeHigh;
                 const material = new T.MeshStandardMaterial({
                     color: black ? 0x070708 : 0xe8e8ee,
+                    // Edge shading is baked into the geometry's vertex colors
+                    // (_shadeKeyEdges); the material multiplies its base color by them.
+                    vertexColors: true,
                     // Pitch-class color preset on emissive but OFF at rest — the key
                     // is neutral until a note approaches, when updateScene ramps the
                     // intensity up by proximity.
@@ -2991,12 +3079,14 @@
                     envMapIntensity: black ? 1.3 : 0.3,
                 });
                 const mesh = new T.Mesh(black ? blackGeo : whiteGeo, material);
-                // Positions place the geometry where the old centred boxes
-                // sat: the mesh origin is the back-edge centre.
+                // The mesh origin is the back-edge centre. Both key types anchor
+                // their BACK edge to the hit-line (-WHITE_L/2), so the sharps sit
+                // flush with the naturals instead of diving backward into the
+                // highway, and their visible length is independent of WHITE_L.
                 mesh.position.set(
                     keyX(entry, whiteCount),
                     black ? BLACK_H / 2 + WHITE_H * 0.1 : WHITE_H / 2,
-                    black ? (WHITE_L - BLACK_L) / 2 - WHITE_L / 2 - BLACK_L / 2 - 4 * K : -WHITE_L / 2,
+                    -WHITE_L / 2,
                 );
                 mesh.userData.midi = midi;
                 // Wrong-note flash restore state.
@@ -3084,7 +3174,11 @@
                 } else {
                     w = (entry.black ? BLACK_W : WHITE_W * 0.94) * 0.9;
                     x = keyX(entry, whiteCount);
-                    y = (entry.black ? BLACK_H + WHITE_H : WHITE_H) + NOTE_H / 2 + 0.5 * K;
+                    // Floating note planes (independent of the tall black-key height):
+                    // naturals dropped 1K so they read better on the low-down cam as
+                    // they come in; sharps sit +2K over the base so they stay raised
+                    // (nets the same height they had before the natural was lowered).
+                    y = WHITE_H + NOTE_H / 2 + 0.5 * K + (entry.black ? 2 * K : -1 * K);
                 }
                 // Clone per note so each can glow independently while being consumed.
                 const mesh = new T.Mesh(_noteGeometry(w, len), _noteMaterial(note.midi, note.hand).clone());

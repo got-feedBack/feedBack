@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Keys Highway 3D — reshaped piano keys so key presses read clearly (default look, no
+  toggle).** Taller/deeper key bodies with baked vertex-color edge shading and a thin
+  real-piano side gap give every key a defined border and make adjacent keys easy to tell
+  apart; sharps are contoured into a top-tapered, front-slanted trapezoid and anchored to
+  the hit-line so they no longer dive backward into the highway. Floating-layout falling
+  notes are re-planed to suit: naturals sit a touch lower for the low-down camera and
+  sharps ride just above them, decoupled from the black-key height. Key positions, lane
+  widths, and note X-alignment are unchanged, and the `flat`/`realistic` layouts are
+  untouched. (keys_highway_3d `0.2.1` → `0.2.2`)
+
 ### Fixed
 - **The packaged desktop app could not start (`ModuleNotFoundError: No module named
   'appstate'`).** feedback-desktop's `scripts/bundle-slopsmith.sh` copies a *hardcoded
