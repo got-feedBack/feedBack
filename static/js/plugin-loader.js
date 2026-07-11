@@ -7,40 +7,15 @@
 // breaks, every plugin breaks — so every change here ends with a real plugin
 // booted against a local uvicorn, not just a green test run.
 //
-// Two things it needs from app.js, and why neither is an import:
-//   * window.showScreen — already the public host contract (constitution II),
-//     so it is called through `window` rather than re-coupled as an import.
-//   * _populateVizPicker — app.js's viz-picker UI, which must run after plugin
-//     scripts have loaded (it looks for window.feedBackViz_<id> factories).
-//     It is injected once at boot via configurePluginLoader() instead of
-//     imported, so this module never imports app.js and the graph stays acyclic
-//     (the import-x/no-cycle gate).
-
-// The injected host seam. Populated once, by app.js, at boot.
+// The one thing it still needs from app.js is `window.showScreen` — already the
+// public host contract (constitution II), so it is called through `window` rather
+// than re-coupled as an import.
 //
-// The default is NOISY on purpose. A silent no-op stub is the classic failure
-// mode for this pattern: if the wiring call in app.js is ever dropped or drifts,
-// the loader keeps working, the viz picker just quietly stops refreshing, and
-// nothing — no test, no boot check — says a word. Failing loudly means the
-// smoke harness (which treats console errors as failures) catches it.
-const _host = {
-    populateVizPicker: () => {
-        console.error(
-            '[plugin-loader] host seam not configured — app.js must call '
-            + 'configurePluginLoader({ populateVizPicker }) before plugins load.',
-        );
-    },
-};
-
-/**
- * Wire the host functions this module needs. Called once from app.js at boot,
- * before any plugin is loaded.
- */
-export function configurePluginLoader(hooks) {
-    if (hooks && typeof hooks.populateVizPicker === 'function') {
-        _host.populateVizPicker = hooks.populateVizPicker;
-    }
-}
+// `_populateVizPicker` used to arrive through a configurePluginLoader() host seam:
+// it lived in app.js, and importing app.js from here would have closed a cycle.
+// The viz layer is now its own leaf module, so the seam is GONE — this imports it
+// directly, and the graph stays acyclic without any injection.
+import { _populateVizPicker } from './viz.js';
 
 let _loadPluginsInFlight = false;
 const _pluginUiContributions = new Map();
@@ -731,7 +706,7 @@ function _refreshPluginsSoon() {
     _pluginRefreshTimer = setTimeout(async () => {
         const plugins = await loadPlugins();
         if (plugins) {
-            _host.populateVizPicker(plugins);
+            _populateVizPicker(plugins);
         } else {
             // loadPlugins() returned null because a refetch was already in
             // flight, so this status change would otherwise be dropped. Re-arm

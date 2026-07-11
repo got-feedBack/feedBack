@@ -9,6 +9,9 @@ const venueScene = require('../../static/v3/venue-scene-3d.js');
 const venueViz = require('../../static/v3/venue-viz.js');
 const pov = require('../../static/v3/venue-instrument-pov.js');
 const APP_JS = path.join(__dirname, '..', '..', 'static', 'app.js');
+// The viz layer (setViz / the venue option / the picker) was carved out of
+// app.js into its own module (R3a).
+const VIZ_JS = path.join(__dirname, '..', '..', 'static', 'js', 'viz.js');
 const H3D_JS = path.join(__dirname, '..', '..', 'plugins', 'highway_3d', 'screen.js');
 const INDEX_HTML = path.join(__dirname, '..', '..', 'static', 'v3', 'index.html');
 const ASSET_DIR = path.join(__dirname, '..', '..', 'static', 'assets', 'venue', 'themes', 'small-club');
@@ -185,8 +188,8 @@ test('venue-scene-3d exports bg plate asset ids', () => {
     assert.equal(venueScene.ASSET_BASE, '/static/assets/venue/themes/small-club/');
 });
 
-test('app.js syncs venue 3D scene on viz changes', () => {
-    const src = fs.readFileSync(APP_JS, 'utf8');
+test('viz.js syncs venue 3D scene on viz changes', () => {
+    const src = fs.readFileSync(VIZ_JS, 'utf8');
     assert.match(src, /v3VenueScene3d\.syncViz\('venue'\)/);
     assert.match(src, /v3VenueScene3d\.syncViz\(id\)/);
 });

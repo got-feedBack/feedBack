@@ -8,6 +8,8 @@ const path = require('node:path');
 const venueViz = require('../../static/v3/venue-viz.js');
 const venue = require('../../static/v3/venue-mood-fx.js');
 const APP_JS = path.join(__dirname, '..', '..', 'static', 'app.js');
+// The viz layer was carved out of app.js into its own module (R3a).
+const VIZ_JS = path.join(__dirname, '..', '..', 'static', 'js', 'viz.js');
 const INDEX_HTML = path.join(__dirname, '..', '..', 'static', 'v3', 'index.html');
 const V3_CSS = path.join(__dirname, '..', '..', 'static', 'v3', 'v3.css');
 
@@ -139,8 +141,8 @@ test('index.html contains in-player venue placeholder markup', () => {
     assert.match(html, /id="v3-venue-scene-wash"/);
 });
 
-test('app.js adds Venue visualization option and adapter', () => {
-    const src = fs.readFileSync(APP_JS, 'utf8');
+test('viz.js adds Venue visualization option and adapter', () => {
+    const src = fs.readFileSync(VIZ_JS, 'utf8');
     assert.match(src, /function _ensureVenueVizOption/);
     assert.match(src, /opt\.value = 'venue'/);
     assert.match(src, /opt\.textContent = 'Venue'/);
@@ -210,15 +212,15 @@ test('venue mood source documents strip overlay disabled', () => {
     assert.match(source, /v3-venue-mode-badge/);
 });
 
-test('app.js preserves plugin viz population for drum/tab/piano highways', () => {
-    const src = fs.readFileSync(APP_JS, 'utf8');
+test('viz.js preserves plugin viz population for drum/tab/piano highways', () => {
+    const src = fs.readFileSync(VIZ_JS, 'utf8');
     assert.match(src, /p\.type === 'visualization'/);
     assert.match(src, /feedBackViz_/);
     assert.match(src, /BUILTIN_OPT_VALUES/);
 });
 
-test('venue option remains distinct from highway_3d in app adapter', () => {
-    const src = fs.readFileSync(APP_JS, 'utf8');
+test('venue option remains distinct from highway_3d in viz adapter', () => {
+    const src = fs.readFileSync(VIZ_JS, 'utf8');
     assert.match(src, /if \(id === 'venue'\)/);
     assert.doesNotMatch(src, /if \(id === 'venue'\)[\s\S]{0,400}sel\.value = 'highway_3d'/);
 });
