@@ -7,6 +7,10 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = ROOT.parent
 
+# The plugin loader was carved out of static/app.js into its own module (R3a).
+# These tests assert on its source text, so they read it from its new home.
+PLUGIN_LOADER = ROOT / "static" / "js" / "plugin-loader.js"
+
 
 def _sibling_file(plugin_dir: str, filename: str) -> Path:
     path = WORKSPACE_ROOT / plugin_dir / filename
@@ -23,7 +27,7 @@ def _sibling_text(plugin_dir: str, filename: str, required_token: str | None = N
 
 
 def test_plugin_loader_guards_duplicate_hydration_and_scripts():
-    source = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    source = PLUGIN_LOADER.read_text(encoding="utf-8")
 
     assert "let _loadPluginsInFlight = false" in source
     assert "window.feedBack._loadedPluginScripts" in source
@@ -31,7 +35,7 @@ def test_plugin_loader_guards_duplicate_hydration_and_scripts():
 
 
 def test_plugin_loader_unmounts_previous_ui_contributions_before_reregistering():
-    source = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    source = PLUGIN_LOADER.read_text(encoding="utf-8")
 
     assert "const _pluginUiContributions = new Map()" in source
     assert "await _commandUiDomain(contribution.domain, 'unmount', plugin, contribution)" in source
@@ -48,7 +52,7 @@ def test_plugin_loader_does_not_treat_response_absence_as_uninstall():
     # (plugin scripts don't re-run), and the DOM/style wipes forced a
     # mid-session screen.js re-evaluation that duplicated the desktop
     # audio_engine's native signal chain.
-    source = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    source = PLUGIN_LOADER.read_text(encoding="utf-8")
 
     # The absence-triggered sweep is gone (rationale comment in its place)...
     assert "const livePluginIds" not in source
@@ -154,7 +158,13 @@ def test_deferred_runtime_domains_remain_reserved_not_bridged():
 
 
 def test_capability_events_do_not_bridge_deferred_surfaces():
-    app_source = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    # These are NEGATIVE assertions, so they must span every file the code could
+    # have moved to — otherwise carving a function out of app.js turns the guard
+    # vacuous instead of failing.
+    app_source = (
+        (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        + PLUGIN_LOADER.read_text(encoding="utf-8")
+    )
     capability_source = (ROOT / "static" / "capabilities.js").read_text(encoding="utf-8")
 
     for token in ["return 'ui.navigation'", "return 'note-detection'", "eventName.startsWith('viz:') || eventName.startsWith('highway:')"]:
@@ -164,7 +174,7 @@ def test_capability_events_do_not_bridge_deferred_surfaces():
 
 
 def test_plugin_loader_registers_manifest_capability_declarations():
-    source = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    source = PLUGIN_LOADER.read_text(encoding="utf-8")
 
     assert "const capabilityPlugins = fetchedPlugins.slice().sort((a, b) => String(a.id || '').localeCompare(String(b.id || '')))" in source
     assert "capabilityApi.registerParticipants(capabilityPlugins)" in source

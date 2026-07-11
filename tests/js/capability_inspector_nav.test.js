@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..', '..');
-const APP_JS = path.join(ROOT, 'static', 'app.js');
+const PLUGIN_LOADER_JS = path.join(ROOT, 'static', 'js', 'plugin-loader.js');
 const MANIFEST = path.join(ROOT, 'plugins', 'capability_inspector', 'plugin.json');
 const SCREEN_HTML = path.join(ROOT, 'plugins', 'capability_inspector', 'screen.html');
 const SETTINGS_HTML = path.join(ROOT, 'plugins', 'capability_inspector', 'settings.html');
@@ -28,7 +28,7 @@ test('capability inspector manifest ships settings but no default nav entry', ()
 });
 
 test('capability inspector plugins menu entry is localStorage opt-in', () => {
-    const src = source(APP_JS);
+    const src = source(PLUGIN_LOADER_JS);
     const helper = region(src, "const CAPABILITY_INSPECTOR_NAV_SETTING = 'capability_inspector.showInPluginsMenu'", 1400);
     const menu = region(src, 'const navPlugins = plugins.map', 1000);
     const contributions = region(src, 'async function _registerLegacyPluginUiContributions(plugin)', 1400);
@@ -106,7 +106,7 @@ test('capability inspector screen ships scoped graph lane CSS', () => {
     assert.match(html, /left: -1\.75rem/);
 });
 test('_navLabel resolves string, object, synthesized, and empty nav values', () => {
-    const src = source(APP_JS);
+    const src = source(PLUGIN_LOADER_JS);
     const m = src.match(/function _navLabel\(nav, plugin\) \{[\s\S]*?\n\}/);
     assert.ok(m, 'could not extract _navLabel from app.js');
     const _navLabel = new Function(`${m[0]}; return _navLabel;`)();
@@ -123,7 +123,7 @@ test('_navLabel resolves string, object, synthesized, and empty nav values', () 
 });
 
 test('plugin nav dropdown label uses the computed nav, not the raw plugin.nav', () => {
-    const src = source(APP_JS);
+    const src = source(PLUGIN_LOADER_JS);
     // Regression guard for the string/synthesized-nav label fix: the dropdown
     // label must derive from the loop's computed nav via _navLabel, not from
     // plugin.nav?.label (which drops string and synthesized labels).

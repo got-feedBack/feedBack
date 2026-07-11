@@ -71,6 +71,9 @@ test('native audio-mix participant suppresses matching legacy fader and records 
 
 const ROOT = path.join(__dirname, '..', '..');
 const APP_JS = path.join(ROOT, 'static', 'app.js');
+// The plugin loader was carved out of app.js into its own module (R3a); the
+// library-provider code below still lives in app.js.
+const PLUGIN_LOADER_JS = path.join(ROOT, 'static', 'js', 'plugin-loader.js');
 const LIBRARY_JS = path.join(ROOT, 'static', 'capabilities', 'library.js');
 
 function source(file) {
@@ -87,7 +90,7 @@ function region(src, needle, length = 1200) {
 }
 
 test('plugin script hydration exposes the current plugin id for legacy registrations', () => {
-    const src = source(APP_JS);
+    const src = source(PLUGIN_LOADER_JS);
     const block = region(src, 'script.src = `/api/plugins/${plugin.id}/screen.js');
     assert.match(block, /window\.feedBack\._loadingPluginId\s*=\s*plugin\.id/);
     assert.match(block, /delete\s+window\.feedBack\._loadingPluginId/);

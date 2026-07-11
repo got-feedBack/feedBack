@@ -1,4 +1,4 @@
-// Verify loadPlugins' plugin-DOM wipe loops in static/app.js: a plugin that is
+// Verify loadPlugins' plugin-DOM wipe loops in static/js/plugin-loader.js: a plugin that is
 // merely ABSENT from the current /api/plugins response (transient partial
 // response while the backend's plugin registry is repopulating after a
 // restart) must keep its settings panel and screen DOM. Wiping it while its
@@ -14,7 +14,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const APP_JS = path.join(__dirname, '..', '..', 'static', 'app.js');
+const PLUGIN_LOADER_JS = path.join(__dirname, '..', '..', 'static', 'js', 'plugin-loader.js');
 
 // Slice the wipe block out of loadPlugins by its stable landmarks: from the
 // nav reset that opens it to the comment introducing the next section.
@@ -40,7 +40,7 @@ function makeEl(pluginId, id) {
 }
 
 function runWipe({ respondedIds, alreadyHydrated, settingsChildren, screens }) {
-    const src = fs.readFileSync(APP_JS, 'utf8');
+    const src = fs.readFileSync(PLUGIN_LOADER_JS, 'utf8');
     const block = extractWipeBlock(src);
     settingsChildren.forEach((el) => { el._parent = settingsChildren; });
     const container = { children: settingsChildren };

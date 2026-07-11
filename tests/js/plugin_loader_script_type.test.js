@@ -1,4 +1,4 @@
-// Guards the R0 module-migration loader change in static/app.js: a migrated
+// Guards the R0 module-migration loader change in static/js/plugin-loader.js: a migrated
 // plugin (manifest scriptType:"module", surfaced as plugin.script_type) must be
 // injected as <script type="module"> so its screen.js `import './src/main.js'`
 // graph loads, while classic plugins stay untouched.
@@ -16,8 +16,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const APP_JS = path.join(__dirname, '..', '..', 'static', 'app.js');
-const src = fs.readFileSync(APP_JS, 'utf8');
+const PLUGIN_LOADER_JS = path.join(__dirname, '..', '..', 'static', 'js', 'plugin-loader.js');
+const src = fs.readFileSync(PLUGIN_LOADER_JS, 'utf8');
 
 // Isolate the screen.js <script> injection block: from where its src is built
 // to where the element is appended.

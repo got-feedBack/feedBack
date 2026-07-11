@@ -43,12 +43,19 @@ module.exports = [
         languageOptions: { ecmaVersion: 'latest', sourceType: 'script' },
         rules: { 'max-lines': sizeRule(1500) },
     },
-    // ES-module graphs (a plugin's src/ tree, .mjs tests): module parsing + the
-    // acyclic-imports hard gate + the size norm. A migrated bundled plugin's
-    // entry `import './src/main.js'` screen.js must parse as a module — add its
-    // glob here in that plugin's migration PR (classic screen.js stays a script).
+    // ES-module graphs (a plugin's src/ tree, .mjs tests, core's own static/js/
+    // tree): module parsing + the acyclic-imports hard gate + the size norm. A
+    // migrated bundled plugin's entry `import './src/main.js'` screen.js must
+    // parse as a module — add its glob here in that plugin's migration PR
+    // (classic screen.js stays a script).
+    //
+    // `static/app.js` is listed explicitly: it is served as
+    // <script type="module"> (R3a) and now `import`s its carved-out modules, so
+    // parsing it as a script would be a syntax error. It is the ENTRY of core's
+    // module graph, which is what makes no-cycle meaningful here — a carved
+    // module that imports app.js back would close a cycle and fail this gate.
     {
-        files: ['**/src/**/*.js', '**/*.mjs'],
+        files: ['**/src/**/*.js', '**/*.mjs', 'static/app.js', 'static/js/**/*.js'],
         languageOptions: { ecmaVersion: 'latest', sourceType: 'module' },
         plugins: { 'import-x': importX },
         // v4 flat-config resolver (resolver-next + createNodeResolver). Without

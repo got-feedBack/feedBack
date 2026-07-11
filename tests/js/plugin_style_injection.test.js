@@ -1,4 +1,4 @@
-// Verify the plugin `styles` capability in static/app.js: _injectPluginStyles
+// Verify the plugin `styles` capability in static/js/plugin-loader.js: _injectPluginStyles
 // adds exactly one versioned <link rel="stylesheet"> per plugin, swaps it on a
 // version upgrade (no duplicates, no stale tags), injects nothing for a plugin
 // without `styles`, and routes the URL through the sandboxed asset endpoint.
@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const APP_JS = path.join(__dirname, '..', '..', 'static', 'app.js');
+const PLUGIN_LOADER_JS = path.join(__dirname, '..', '..', 'static', 'js', 'plugin-loader.js');
 
 // Brace-balanced extraction of a `const NAME = (...) => { ... }` arrow, so a
 // nested object/template literal can't make a naive regex stop early.
@@ -84,7 +84,7 @@ function setupSandbox() {
         },
     };
     vm.createContext(sandbox);
-    const src = fs.readFileSync(APP_JS, 'utf8');
+    const src = fs.readFileSync(PLUGIN_LOADER_JS, 'utf8');
     const removeSrc = extractConstArrow(src, '_removePluginStyleTags');
     const injectSrc = extractConstArrow(src, '_injectPluginStyles');
     const reconcileSrc = extractConstArrow(src, '_reconcilePluginStyles');
