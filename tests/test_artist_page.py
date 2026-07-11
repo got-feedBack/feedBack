@@ -10,7 +10,7 @@ Two halves, mirroring the design's split:
 
 * GET /api/artist/{name}/links + POST .../links/refresh — the lazy, cached,
   opt-in external-links layer. The HTTP transport is a fake over
-  `server._mb_http_get` (the ONE network seam — same pattern as
+  `enrichment._mb_http_get` (the ONE network seam — same pattern as
   tests/test_mb_enrichment.py), so nothing here opens a socket. Covers the
   url-rel whitelist mapping, the http(s) scheme gate (a hostile javascript:
   resource never reaches a link slot), cache-hit second calls making no
@@ -19,6 +19,7 @@ Two halves, mirroring the design's split:
 """
 
 import importlib
+import enrichment
 import json
 import sys
 from urllib.parse import quote
@@ -88,7 +89,7 @@ class FakeMBArtist:
 
     def __call__(self, path, params):
         if self.raise_transport:
-            raise self._srv.EnrichTransportError("fake network down")
+            raise enrichment.EnrichTransportError("fake network down")
         self.calls.append((path, dict(params)))
         if path == f"artist/{MBID}":
             return self.doc
@@ -100,8 +101,8 @@ def mb_artist(server, monkeypatch):
     """Install the fake transport AND enable the network flag (the test env
     disables it by default — see test_links_offline_returns_empty)."""
     fake = FakeMBArtist(server)
-    monkeypatch.setattr(server, "_mb_http_get", fake)
-    monkeypatch.setattr(server, "_enrich_network_enabled", lambda: True)
+    monkeypatch.setattr(enrichment, "_mb_http_get", fake)
+    monkeypatch.setattr(enrichment, "_enrich_network_enabled", lambda: True)
     return fake
 
 

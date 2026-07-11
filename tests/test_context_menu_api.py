@@ -4,6 +4,7 @@ contents). The refresh flow reuses the P8 fake-transport pattern — nothing
 here opens a socket."""
 
 import importlib
+import enrichment
 import sys
 
 import pytest
@@ -85,9 +86,9 @@ def test_refresh_resets_even_a_manual_pin_and_rematches(server, client, monkeypa
                           "status": "Official", "date": "1990-09-24",
                           "release-group": {"primary-type": "Album"}}],
         }]}
-    monkeypatch.setattr(server, "_mb_http_get", fake)
-    monkeypatch.setattr(server, "_enrich_network_enabled", lambda: True)
-    server._background_enrich()
+    monkeypatch.setattr(enrichment, "_mb_http_get", fake)
+    monkeypatch.setattr(enrichment, "_enrich_network_enabled", lambda: True)
+    enrichment._background_enrich()
     assert server.meta_db.get_enrichment("a.sloppak")["mb_recording_id"] == "rec-new"
 
 

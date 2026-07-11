@@ -1,5 +1,5 @@
 // Verify the alpha-build heads-up banner: markup is present in
-// static/index.html and `_updateAlphaWarningBanner(version)` in
+// static/v3/index.html and `_updateAlphaWarningBanner(version)` in
 // static/app.js toggles its visibility correctly per the version string.
 
 const { test } = require('node:test');
@@ -8,7 +8,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const INDEX_HTML = path.join(__dirname, '..', '..', 'static', 'index.html');
+const INDEX_HTML = path.join(__dirname, '..', '..', 'static', 'v3', 'index.html');
 const APP_JS = path.join(__dirname, '..', '..', 'static', 'app.js');
 
 test('index.html ships the alpha-warning banner inside the library section', () => {

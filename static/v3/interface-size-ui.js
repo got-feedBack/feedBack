@@ -45,7 +45,9 @@
     // Settings markup is static, but re-sync when settings.js signals it wired.
     document.addEventListener('v3:settings-rendered', function () { sync(); });
 
-    if (document.readyState === 'loading') {
+    // `defer` runs this at readyState 'interactive' — later scripts have not
+    // evaluated yet, so wait for DOMContentLoaded (see static/v3/index.html).
+    if (document.readyState !== 'complete') {
         document.addEventListener('DOMContentLoaded', function () { sync(); }, { once: true });
     } else {
         sync();

@@ -111,7 +111,9 @@
 
     // Announce once after the document parses, so any listener wired during page
     // load can sync without special-casing (consumers may also just call get()).
-    if (document.readyState === 'loading') {
+    // `defer` runs this at readyState 'interactive' — later scripts have not
+    // evaluated yet, so wait for DOMContentLoaded (see static/v3/index.html).
+    if (document.readyState !== 'complete') {
         document.addEventListener('DOMContentLoaded', announce, { once: true });
     } else {
         announce();

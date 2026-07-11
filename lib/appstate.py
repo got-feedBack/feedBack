@@ -61,6 +61,16 @@ copies a hardcoded file list — that regression is what moved this file here.
 # The singletons routers may read. Every name here must also be a `_SLOTS` key.
 meta_db = None
 audio_effect_mappings = None
+# The tuning-provider registry instance (built-ins + plugin-contributed). A
+# stable object mutated in place via register()/unregister() — injected here by
+# reference so routers read the same registry plugins populate.
+tuning_providers = None
+# The library-provider registry instance + the local provider, constructed in
+# server.py (LocalLibraryProvider needs meta_db) and injected by reference. The
+# classes live in lib/library_registry.py; plugins register their own providers
+# through the registry via plugin_context.
+library_providers = None
+local_library_provider = None
 
 # Config paths. server.py derives these from the environment (fresh on every
 # import, so the ~49 pop-and-reimport fixtures keep working) and injects them
@@ -86,12 +96,37 @@ audio_cache_dir = None
 # through the seam. get_progression_content wraps a lazy content cache that stays
 # in server.py (its `setattr(server, "_progression_content")` test is untouched).
 get_progression_content = None
+builtin_diagnostic_filename = None
+running_version = None
+# Art helpers that stay in server.py (shared with the art/delete routes) but are
+# also called by the enrichment worker in lib/enrichment.py — injected as
+# callables to keep enrichment acyclic. art_cache_dir is server's ART_CACHE_DIR.
+art_cache_dir = None
+song_pack_art_exists = None
+art_override_paths = None
+art_safe_name = None
+# The canonical settings-defaults builder — stays in server.py (shared with the
+# scan/artist-links code) but the settings router calls it through the seam.
+default_settings = None
+# Scan/ingest seam for the song routes (routers/song.py). kick_scan/
+# invalidate_song_caches/stat_for_cache stay in server.py (scan lifecycle owns
+# them); scan_status is a GETTER (the underlying dict is reassigned, so a value
+# would go stale) — call appstate.scan_status() to read the live status.
+kick_scan = None
+invalidate_song_caches = None
+stat_for_cache = None
+scan_status = None
 
 _SLOTS = frozenset({
-    "meta_db", "audio_effect_mappings",
+    "meta_db", "audio_effect_mappings", "tuning_providers",
+    "library_providers", "local_library_provider",
     "config_dir", "dlc_dir", "dlc_dir_env",
     "static_dir", "sloppak_cache_dir", "audio_cache_dir",
-    "get_progression_content",
+    "get_progression_content", "builtin_diagnostic_filename",
+    "running_version",
+    "art_cache_dir", "song_pack_art_exists", "art_override_paths", "art_safe_name",
+    "default_settings",
+    "kick_scan", "invalidate_song_caches", "stat_for_cache", "scan_status",
 })
 
 

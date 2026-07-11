@@ -9,6 +9,36 @@ import structlog
 _LOGGING_NAMES = ("feedBack", "uvicorn", "uvicorn.error", "uvicorn.access")
 
 
+@pytest.fixture(autouse=True)
+def _reset_enrichment_state():
+    """Reset the enrichment worker's process-global state between tests.
+
+    The `server` fixtures pop-and-reimport `server`, but `lib/enrichment.py`
+    (which now owns the worker) stays imported for the whole session, so its
+    module globals — the cancel Event, the status dict, the caches — would
+    otherwise leak across tests. A test that set `_enrich_cancel` (or a stale
+    `running` status) could silently short-circuit a later direct
+    `_background_enrich()` call. Clear it up front so each test starts clean.
+    """
+    try:
+        import enrichment
+    except ImportError:
+        yield
+        return
+    enrichment._enrich_cancel.clear()
+    enrichment._enrich_pending_pass = False
+    enrichment._enrich_status.update(
+        {"running": False, "processed": 0, "last_pass_at": None,
+         "total": 0, "matched": 0, "current": None})
+    enrichment._enrich_last_fetch = 0.0
+    enrichment._artist_alias_cache.clear()
+    # _caa_index_locks is deliberately left alone: it's guarded by
+    # _caa_index_locks_guard, so clearing it here (unlocked) would race a
+    # still-alive worker thread, and its entries are stateless per-release
+    # mutexes that don't leak test state anyway.
+    yield
+
+
 @pytest.fixture()
 def isolate_logging():
     """Restore feedBack / uvicorn logger state after each test.

@@ -1,6 +1,6 @@
 """Server-level tests for the P8 MusicBrainz matcher + Match-Review flow.
 
-The HTTP transport is a fake installed over `server._mb_http_get` — the ONE
+The HTTP transport is a fake installed over `enrichment._mb_http_get` — the ONE
 seam enrichment uses to reach the network — so nothing here ever opens a
 socket. The offline default is itself under test: without explicitly
 enabling the network flag, a pass must skip matching entirely (pytest can
@@ -8,6 +8,7 @@ never hit MusicBrainz, whatever a test triggers).
 """
 
 import importlib
+import enrichment
 import sys
 
 import pytest
@@ -50,7 +51,7 @@ class FakeMB:
 
     def __call__(self, path, params):
         if self.raise_transport:
-            raise self._srv.EnrichTransportError("fake network down")
+            raise enrichment.EnrichTransportError("fake network down")
         self.calls.append((path, dict(params)))
         if path == "recording":
             return self.search_response
@@ -71,8 +72,8 @@ def mb(server, monkeypatch):
     disables it by default — see test_offline_default_skips_matching)."""
     fake = FakeMB()
     fake._srv = server
-    monkeypatch.setattr(server, "_mb_http_get", fake)
-    monkeypatch.setattr(server, "_enrich_network_enabled", lambda: True)
+    monkeypatch.setattr(enrichment, "_mb_http_get", fake)
+    monkeypatch.setattr(enrichment, "_enrich_network_enabled", lambda: True)
     return fake
 
 
@@ -111,8 +112,8 @@ def test_search_falls_back_to_loose_when_strict_is_empty(server, monkeypatch):
             return {"recordings": []}
         return {"recordings": [mb_doc(rid="rec-x", title="Telephone Number")]}
 
-    monkeypatch.setattr(server, "_mb_http_get", _routed)
-    cands = server._mb_search_recordings("Junko Ohashi", "Telephone Number")
+    monkeypatch.setattr(enrichment, "_mb_http_get", _routed)
+    cands = enrichment._mb_search_recordings("Junko Ohashi", "Telephone Number")
     assert len(cands) == 1
     assert len(calls) == 2                     # strict first, then the loose retry
     assert calls[0].startswith("recording:")   # strict is the field-phrase form
@@ -128,8 +129,8 @@ def test_search_does_not_retry_when_strict_hits(server, monkeypatch):
         calls.append(params.get("query", ""))
         return {"recordings": [mb_doc()]}
 
-    monkeypatch.setattr(server, "_mb_http_get", _routed)
-    cands = server._mb_search_recordings("AC/DC", "Thunderstruck")
+    monkeypatch.setattr(enrichment, "_mb_http_get", _routed)
+    cands = enrichment._mb_search_recordings("AC/DC", "Thunderstruck")
     assert len(cands) == 1
     assert len(calls) == 1
 
@@ -147,10 +148,10 @@ def test_artist_aliases_fetched_and_cached(server, monkeypatch):
         return {"sort-name": "Ohashi, Junko",
                 "aliases": [{"name": "Junko Ohashi"}, {"name": "大橋 純子"}]}
 
-    monkeypatch.setattr(server, "_mb_http_get", fake)
-    names = server._mb_artist_aliases(_AID)
+    monkeypatch.setattr(enrichment, "_mb_http_get", fake)
+    names = enrichment._mb_artist_aliases(_AID)
     assert "Junko Ohashi" in names and "Ohashi, Junko" in names
-    server._mb_artist_aliases(_AID)          # cached → no second request
+    enrichment._mb_artist_aliases(_AID)          # cached → no second request
     assert len(calls) == 1
 
 
@@ -158,8 +159,8 @@ def test_artist_aliases_rejects_bad_id(server, monkeypatch):
     def boom(path, params):
         raise AssertionError("must not fetch for a non-UUID id")
 
-    monkeypatch.setattr(server, "_mb_http_get", boom)
-    assert server._mb_artist_aliases("not-a-uuid") == []
+    monkeypatch.setattr(enrichment, "_mb_http_get", boom)
+    assert enrichment._mb_artist_aliases("not-a-uuid") == []
 
 
 def test_enrich_auto_matches_japanese_primary_via_alias(server, monkeypatch):
@@ -176,9 +177,9 @@ def test_enrich_auto_matches_japanese_primary_via_alias(server, monkeypatch):
         return {"recordings": [mb_doc(rid="rec-jp", title="Telephone Number",
                                       artist="大橋純子", artist_id=_AID)]}   # loose hit
 
-    monkeypatch.setattr(server, "_mb_http_get", _routed)
-    monkeypatch.setattr(server, "_enrich_network_enabled", lambda: True)
-    server._background_enrich()
+    monkeypatch.setattr(enrichment, "_mb_http_get", _routed)
+    monkeypatch.setattr(enrichment, "_enrich_network_enabled", lambda: True)
+    enrichment._background_enrich()
     row = server.meta_db.get_enrichment("x.sloppak")
     # The romanized alias lifts the artist over the auto floor → auto-confirmed.
     assert row["match_state"] == "matched"
@@ -190,10 +191,10 @@ def test_enrich_auto_matches_japanese_primary_via_alias(server, monkeypatch):
 def test_locked_field_not_canonicalized_by_auto_match(server, monkeypatch):
     _put(server, "x.sloppak")                       # title "Thunderstruck (v2)", artist "ACDC"
     server.meta_db.set_song_override("x.sloppak", "artist", locked=True)
-    monkeypatch.setattr(server, "_mb_http_get",
+    monkeypatch.setattr(enrichment, "_mb_http_get",
                         lambda path, params: {"recordings": [mb_doc()]})
-    monkeypatch.setattr(server, "_enrich_network_enabled", lambda: True)
-    server._background_enrich()
+    monkeypatch.setattr(enrichment, "_enrich_network_enabled", lambda: True)
+    enrichment._background_enrich()
     row = server.meta_db.get_enrichment("x.sloppak")
     assert row["match_state"] == "matched"          # still matches (identity applies)…
     assert row["canon_artist"] is None              # …but the LOCKED artist isn't canonicalized
@@ -208,9 +209,9 @@ def test_offline_default_skips_matching(server, monkeypatch):
     but never matches — even with a transport installed."""
     fake = FakeMB()
     fake._srv = server
-    monkeypatch.setattr(server, "_mb_http_get", fake)
+    monkeypatch.setattr(enrichment, "_mb_http_get", fake)
     _put(server, "a.sloppak")
-    server._background_enrich()
+    enrichment._background_enrich()
     assert fake.calls == []
     assert server.meta_db.get_enrichment("a.sloppak")["match_state"] == "unscanned"
 
@@ -218,15 +219,15 @@ def test_offline_default_skips_matching(server, monkeypatch):
 def test_real_transport_refuses_when_offline(server):
     """_mb_http_get itself raises (before any socket) when the network is
     disabled — defence in depth under pytest."""
-    with pytest.raises(server.EnrichTransportError):
-        server._mb_http_get("recording", {"query": "x"})
+    with pytest.raises(enrichment.EnrichTransportError):
+        enrichment._mb_http_get("recording", {"query": "x"})
 
 
 def test_transport_error_pauses_pass_without_burning_attempts(server, mb):
     _put(server, "a.sloppak")
     _put(server, "b.sloppak", title="Other Song")
     mb.raise_transport = True
-    server._background_enrich()
+    enrichment._background_enrich()
     for fn in ("a.sloppak", "b.sloppak"):
         row = server.meta_db.get_enrichment(fn)
         assert row["match_state"] == "unscanned"
@@ -234,7 +235,7 @@ def test_transport_error_pauses_pass_without_burning_attempts(server, mb):
     # Network comes back → the next kick matches both.
     mb.raise_transport = False
     mb.search_response = {"recordings": [mb_doc()]}
-    server._background_enrich()
+    enrichment._background_enrich()
     assert server.meta_db.get_enrichment("a.sloppak")["match_state"] == "matched"
 
 
@@ -243,7 +244,7 @@ def test_transport_error_pauses_pass_without_burning_attempts(server, mb):
 def test_high_confidence_auto_matches_and_settles(server, mb):
     _put(server, "a.sloppak")
     mb.search_response = {"recordings": [mb_doc()]}
-    server._background_enrich()
+    enrichment._background_enrich()
     row = server.meta_db.get_enrichment("a.sloppak")
     assert row["match_state"] == "matched"
     assert row["match_source"] == "text"
@@ -256,13 +257,13 @@ def test_high_confidence_auto_matches_and_settles(server, mb):
     assert row["genres"] == ["hard rock"]
     # Settled: another pass makes NO further network calls…
     n = len(mb.calls)
-    server._background_enrich()
+    enrichment._background_enrich()
     assert len(mb.calls) == n
     # …until the identity changes, which re-matches.
     _put(server, "a.sloppak", title="Back in Black")
     mb.search_response = {"recordings": [mb_doc(rid="rec-2", title="Back in Black",
                                                 album="Back in Black", date="1980-07-25")]}
-    server._background_enrich()
+    enrichment._background_enrich()
     row = server.meta_db.get_enrichment("a.sloppak")
     assert row["mb_recording_id"] == "rec-2"
 
@@ -271,7 +272,7 @@ def test_medium_confidence_goes_to_review_not_canonical(server, mb):
     # Partial artist agreement → medium confidence.
     _put(server, "a.sloppak", artist="AC/DC ft Nobody")
     mb.search_response = {"recordings": [mb_doc()]}
-    server._background_enrich()
+    enrichment._background_enrich()
     row = server.meta_db.get_enrichment("a.sloppak")
     assert row["match_state"] == "review"
     assert row["match_source"] == "text"
@@ -281,7 +282,7 @@ def test_medium_confidence_goes_to_review_not_canonical(server, mb):
     assert row["candidates"] and row["candidates"][0]["recording_id"] == "rec-1"
     # A review row is settled while its identity is unchanged — no re-query.
     n = len(mb.calls)
-    server._background_enrich()
+    enrichment._background_enrich()
     assert len(mb.calls) == n
 
 
@@ -289,14 +290,14 @@ def test_low_confidence_fails_with_backoff(server, mb):
     _put(server, "a.sloppak")
     mb.search_response = {"recordings": [mb_doc(rid="rec-x", title="Sunrise",
                                                 artist="Norah Jones")]}
-    server._background_enrich()
+    enrichment._background_enrich()
     row = server.meta_db.get_enrichment("a.sloppak")
     assert row["match_state"] == "failed"
     assert row["attempts"] == 1
     assert row["last_attempt_at"] is not None
     # Immediately after, the backoff hasn't elapsed → no retry, no network.
     n = len(mb.calls)
-    server._background_enrich()
+    enrichment._background_enrich()
     assert len(mb.calls) == n
     assert server.meta_db.get_enrichment("a.sloppak")["attempts"] == 1
     # Rewind the clock two hours → eligible again, attempts increments.
@@ -304,7 +305,7 @@ def test_low_confidence_fails_with_backoff(server, mb):
         server.meta_db.conn.execute(
             "UPDATE song_enrichment SET last_attempt_at = last_attempt_at - 7200")
         server.meta_db.conn.commit()
-    server._background_enrich()
+    enrichment._background_enrich()
     assert len(mb.calls) == n + 1
     assert server.meta_db.get_enrichment("a.sloppak")["attempts"] == 2
 
@@ -312,7 +313,7 @@ def test_low_confidence_fails_with_backoff(server, mb):
 def test_no_results_fails(server, mb):
     _put(server, "a.sloppak")
     mb.search_response = {"recordings": []}
-    server._background_enrich()
+    enrichment._background_enrich()
     assert server.meta_db.get_enrichment("a.sloppak")["match_state"] == "failed"
 
 
@@ -322,7 +323,7 @@ def test_cache_hit_copies_match_without_network(server, mb):
     _put(server, "a.sloppak")
     _put(server, "b.sloppak")   # identical identity → same content_hash
     mb.search_response = {"recordings": [mb_doc()]}
-    server._background_enrich()
+    enrichment._background_enrich()
     assert len(mb.search_calls) == 1          # ONE search covered both charts
     a = server.meta_db.get_enrichment("a.sloppak")
     b = server.meta_db.get_enrichment("b.sloppak")
@@ -347,7 +348,7 @@ def test_manifest_mbid_tier0(server, mb):
     _write_sloppak_manifest(server, "a.sloppak", f"mbid: {mbid}\n")
     _put(server, "a.sloppak")
     mb.recording_lookups[mbid] = mb_doc(rid=mbid)
-    server._background_enrich()
+    enrichment._background_enrich()
     row = server.meta_db.get_enrichment("a.sloppak")
     assert row["match_state"] == "matched"
     assert row["match_source"] == "mbid"
@@ -360,7 +361,7 @@ def test_manifest_isrc_tier1(server, mb):
     _write_sloppak_manifest(server, "a.sloppak", "isrc: AUAP09000045\n")
     _put(server, "a.sloppak")
     mb.isrc_lookups["AUAP09000045"] = {"recordings": [mb_doc()]}
-    server._background_enrich()
+    enrichment._background_enrich()
     row = server.meta_db.get_enrichment("a.sloppak")
     assert row["match_state"] == "matched"
     assert row["match_source"] == "isrc"
@@ -374,7 +375,7 @@ def test_manifest_isrc_display_hyphens_stripped(server, mb):
     _write_sloppak_manifest(server, "a.sloppak", "isrc: AU-AP0-90-00045\n")
     _put(server, "a.sloppak")
     mb.isrc_lookups["AUAP09000045"] = {"recordings": [mb_doc()]}
-    server._background_enrich()
+    enrichment._background_enrich()
     row = server.meta_db.get_enrichment("a.sloppak")
     assert row["match_state"] == "matched"
     assert row["match_source"] == "isrc"
@@ -387,7 +388,7 @@ def test_bad_manifest_mbid_falls_through_to_text(server, mb):
     _put(server, "a.sloppak")
     mb.recording_lookups.clear()              # lookup 404s (typo'd manifest)
     mb.search_response = {"recordings": [mb_doc()]}
-    server._background_enrich()
+    enrichment._background_enrich()
     row = server.meta_db.get_enrichment("a.sloppak")
     assert row["match_state"] == "matched"
     assert row["match_source"] == "text"
@@ -401,7 +402,7 @@ def test_manual_never_overwritten_by_matcher(server, mb):
         "a.sloppak", {"recording_id": "user-pick", "title": "Thunderstruck",
                       "artist": "AC/DC"}, source="search")
     mb.search_response = {"recordings": [mb_doc(rid="machine-pick")]}
-    server._background_enrich()
+    enrichment._background_enrich()
     row = server.meta_db.get_enrichment("a.sloppak")
     assert row["match_state"] == "manual"
     assert row["mb_recording_id"] == "user-pick"
@@ -419,7 +420,7 @@ def _seed_review(server, mb, fn="a.sloppak", title="Thunderstruck (v2)"):
     # legitimately copies an earlier row instead of running the text tiers).
     _put(server, fn, title=title, artist="AC/DC ft Nobody")
     mb.search_response = {"recordings": [mb_doc()]}
-    server._background_enrich()
+    enrichment._background_enrich()
     assert server.meta_db.get_enrichment(fn)["match_state"] == "review"
 
 
@@ -457,11 +458,11 @@ def test_review_reject_route_never_retries(server, mb, client):
     assert row["match_source"] == "rejected"
     # Rejected rows are excluded from the retry backoff forever…
     n = len(mb.calls)
-    server._background_enrich()
+    enrichment._background_enrich()
     assert len(mb.calls) == n
     # …but an identity edit re-queues (the user fixed the metadata).
     _put(server, "a.sloppak", artist="AC/DC")
-    server._background_enrich()
+    enrichment._background_enrich()
     assert server.meta_db.get_enrichment("a.sloppak")["match_state"] == "matched"
     # Rejecting a manual row is refused.
     r = client.post("/api/enrichment/review/a.sloppak/reject")
@@ -502,8 +503,8 @@ def test_search_proxy(server, mb, client, monkeypatch):
     assert body["candidates"][0]["score"] > 0.9
     # Transport failure surfaces as 503, not a 500.
     def _down(path, params):
-        raise server.EnrichTransportError("down")
-    monkeypatch.setattr(server, "_mb_http_get", _down)
+        raise enrichment.EnrichTransportError("down")
+    monkeypatch.setattr(enrichment, "_mb_http_get", _down)
     r = client.get("/api/enrichment/search", params={"title": "x"})
     assert r.status_code == 503
 
@@ -523,8 +524,8 @@ def test_match_facet_filters_grid_and_stats(server, mb, client, monkeypatch):
         if "revsong" in q:
             return {"recordings": [mb_doc(rid="rec-r", title="Revsong")]}
         return {"recordings": []}
-    monkeypatch.setattr(server, "_mb_http_get", _routed)
-    server._background_enrich()
+    monkeypatch.setattr(enrichment, "_mb_http_get", _routed)
+    enrichment._background_enrich()
     # Pendsong got failed by the pass (no results); reset it to unscanned to
     # represent the not-yet-scanned band.
     with server.meta_db._lock:
@@ -566,14 +567,14 @@ def test_auto_threshold_setting_moves_the_auto_review_boundary(server, mb, clien
     client.post("/api/settings", json={"enrich_auto_threshold": 0.95})
     _put(server, "a.sloppak", title="Highway to Hell", artist="AC/DC",
          year="", duration=0)
-    server._background_enrich()
+    enrichment._background_enrich()
     assert server.meta_db.get_enrichment("a.sloppak")["match_state"] == "review"
     # Lower the bar to the default 0.90 → an identity edit re-queues, and the
     # same 0.90-scored candidate now auto-applies.
     client.post("/api/settings", json={"enrich_auto_threshold": 0.9})
     _put(server, "a.sloppak", title="Highway to Hell", artist="AC/DC",
          year="", duration=0, album="Different Album")
-    server._background_enrich()
+    enrichment._background_enrich()
     row = server.meta_db.get_enrichment("a.sloppak")
     assert row["match_state"] == "matched"
     assert abs(row["match_score"] - 0.9) < 1e-6
@@ -583,7 +584,7 @@ def test_enrich_enabled_setting_gates_background_matching(server, mb, client):
     client.post("/api/settings", json={"enrich_enabled": False})
     _put(server, "a.sloppak")
     mb.search_response = {"recordings": [mb_doc()]}
-    server._background_enrich()
+    enrichment._background_enrich()
     assert mb.calls == []
     assert server.meta_db.get_enrichment("a.sloppak")["match_state"] == "unscanned"
     # Manual search/fix stays available while the background matcher is off.
@@ -591,7 +592,7 @@ def test_enrich_enabled_setting_gates_background_matching(server, mb, client):
     assert r.status_code == 200
     # Re-enable → the next pass matches.
     client.post("/api/settings", json={"enrich_enabled": True})
-    server._background_enrich()
+    enrichment._background_enrich()
     assert server.meta_db.get_enrichment("a.sloppak")["match_state"] == "matched"
 
 
@@ -625,7 +626,7 @@ def test_review_queue_orders_missing_data_first(server, mb, client):
     _seed_review(server, mb, fn="aa.sloppak", title="Thunderstruck (v2)")
     _put(server, "zz.sloppak", title="Thunderstruck (Live)",
          artist="AC/DC ft Nobody", album="", year="")
-    server._background_enrich()
+    enrichment._background_enrich()
     assert server.meta_db.get_enrichment("zz.sloppak")["match_state"] == "review"
     songs = client.get("/api/enrichment/review").json()["songs"]
     assert [s["filename"] for s in songs] == ["zz.sloppak", "aa.sloppak"]

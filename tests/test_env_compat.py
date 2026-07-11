@@ -4,22 +4,22 @@ from env_compat import getenv_compat, env_flag_compat
 
 
 def test_canonical_wins_over_legacy(monkeypatch):
-    monkeypatch.setenv("FEEDBACK_UI", "v3")
-    monkeypatch.setenv("SLOPSMITH_UI", "v2")
-    assert getenv_compat("FEEDBACK_UI") == "v3"
+    monkeypatch.setenv("FEEDBACK_DEMO_MODE", "canonical")
+    monkeypatch.setenv("SLOPSMITH_DEMO_MODE", "legacy")
+    assert getenv_compat("FEEDBACK_DEMO_MODE") == "canonical"
 
 
 def test_legacy_fallback_when_canonical_unset(monkeypatch):
-    monkeypatch.delenv("FEEDBACK_UI", raising=False)
-    monkeypatch.setenv("SLOPSMITH_UI", "v2")
-    assert getenv_compat("FEEDBACK_UI") == "v2"
+    monkeypatch.delenv("FEEDBACK_DEMO_MODE", raising=False)
+    monkeypatch.setenv("SLOPSMITH_DEMO_MODE", "legacy")
+    assert getenv_compat("FEEDBACK_DEMO_MODE") == "legacy"
 
 
 def test_default_when_neither_set(monkeypatch):
-    monkeypatch.delenv("FEEDBACK_UI", raising=False)
-    monkeypatch.delenv("SLOPSMITH_UI", raising=False)
-    assert getenv_compat("FEEDBACK_UI", "default") == "default"
-    assert getenv_compat("FEEDBACK_UI") is None
+    monkeypatch.delenv("FEEDBACK_DEMO_MODE", raising=False)
+    monkeypatch.delenv("SLOPSMITH_DEMO_MODE", raising=False)
+    assert getenv_compat("FEEDBACK_DEMO_MODE", "default") == "default"
+    assert getenv_compat("FEEDBACK_DEMO_MODE") is None
 
 
 def test_non_feedback_names_have_no_fallback(monkeypatch):
@@ -31,9 +31,9 @@ def test_non_feedback_names_have_no_fallback(monkeypatch):
 
 def test_empty_canonical_is_respected_not_overridden(monkeypatch):
     # An explicitly-empty canonical value is still "set" and wins.
-    monkeypatch.setenv("FEEDBACK_UI", "")
-    monkeypatch.setenv("SLOPSMITH_UI", "v2")
-    assert getenv_compat("FEEDBACK_UI") == ""
+    monkeypatch.setenv("FEEDBACK_DEMO_MODE", "")
+    monkeypatch.setenv("SLOPSMITH_DEMO_MODE", "legacy")
+    assert getenv_compat("FEEDBACK_DEMO_MODE") == ""
 
 
 def test_flag_parses_true_values(monkeypatch):

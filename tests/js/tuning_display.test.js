@@ -9,7 +9,6 @@ const vm = require('node:vm');
 const APP_JS = path.join(__dirname, '..', '..', 'static', 'app.js');
 const HIGHWAY_JS = path.join(__dirname, '..', '..', 'static', 'highway.js');
 const V3_HTML = path.join(__dirname, '..', '..', 'static', 'v3', 'index.html');
-const V2_HTML = path.join(__dirname, '..', '..', 'static', 'index.html');
 
 function extractBlock(src, startMarker) {
     const start = src.indexOf(startMarker);
@@ -94,11 +93,6 @@ test('displayTuningName returns empty when nothing usable', () => {
 
 test('V3 index.html defines hud-tuning', () => {
     const html = fs.readFileSync(V3_HTML, 'utf8');
-    assert.match(html, /id="hud-tuning"/);
-});
-
-test('V2 index.html defines hud-tuning', () => {
-    const html = fs.readFileSync(V2_HTML, 'utf8');
     assert.match(html, /id="hud-tuning"/);
 });
 

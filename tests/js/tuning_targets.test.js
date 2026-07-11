@@ -11,7 +11,6 @@ const HIGHWAY_JS = path.join(__dirname, '..', '..', 'static', 'highway.js');
 const TUNER_UI_JS = path.join(__dirname, '..', '..', 'plugins', 'tuner', 'utils', 'ui.js');
 const TUNER_SCREEN_JS = path.join(__dirname, '..', '..', 'plugins', 'tuner', 'screen.js');
 const V3_HTML = path.join(__dirname, '..', '..', 'static', 'v3', 'index.html');
-const V2_HTML = path.join(__dirname, '..', '..', 'static', 'index.html');
 
 function loadTuningHelpers() {
     const src = fs.readFileSync(APP_JS, 'utf8');

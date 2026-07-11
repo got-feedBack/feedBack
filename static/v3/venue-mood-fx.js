@@ -511,7 +511,9 @@
             const sm = root && root.feedBack;
             if (sm) bindRuntime(sm);
         };
-        if (document.readyState === 'loading') {
+        // `defer` runs this at readyState 'interactive' — later scripts have not
+        // evaluated yet, so wait for DOMContentLoaded (see static/v3/index.html).
+        if (document.readyState !== 'complete') {
             document.addEventListener('DOMContentLoaded', boot);
         } else {
             boot();

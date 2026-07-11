@@ -440,6 +440,8 @@
         });
     }
     function boot() { renderPlaylists(); renderSaved(); }
-    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once: true });
+    // `defer` runs this at readyState 'interactive' — later scripts have not
+    // evaluated yet, so wait for DOMContentLoaded (see static/v3/index.html).
+    if (document.readyState !== 'complete') document.addEventListener('DOMContentLoaded', boot, { once: true });
     else boot();
 })();

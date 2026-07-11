@@ -34,7 +34,7 @@ but not the primary supported path.
 
 ### II. Vanilla Frontend — No Frameworks
 
-The frontend (`static/app.js`, `static/highway.js`, `static/index.html`,
+The frontend (`static/app.js`, `static/highway.js`, `static/v3/index.html`,
 `static/style.css`) is plain JavaScript with the `fetch` API, direct DOM
 manipulation, and the Canvas 2D / WebGL2 APIs. The only style framework
 is Tailwind CSS, served as a prebuilt static stylesheet
@@ -284,4 +284,4 @@ no `..`, no absolute paths).
   higher-numbered principle's escape hatch is to live in a plugin
   with its own bundled assets.
 
-**Version**: 1.2.0 | **Ratified**: 2026-05-09 | **Last Amended**: 2026-07-08
+**Version**: 1.3.0 | **Ratified**: 2026-05-09 | **Last Amended**: 2026-07-11
