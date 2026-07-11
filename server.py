@@ -427,7 +427,12 @@ class TuningProviderRegistry:
                     for name, freqs in names.items():
                         result[instrument][name] = [round(f * scale, 4) for f in freqs]
             except Exception:
-                logger.exception("tuning provider %r raised during get_merged()", provider_id)
+                # `log`, not `logger` — there is no `logger` in this module. This handler
+                # exists so ONE bad provider cannot break tunings for everyone; with the
+                # wrong name it raised NameError from inside the except and did precisely
+                # what it was written to prevent. See #899 and
+                # tests/test_tuning_provider_isolation.py.
+                log.exception("tuning provider %r raised during get_merged()", provider_id)
         return result
 
 
