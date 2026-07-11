@@ -4852,9 +4852,31 @@ window.jucePlayer = jucePlayer;
 // on a dead JUCE backing transport. This watcher migrates the loaded song
 // between the two paths whenever the engine's running state changes, preserving
 // playback position and play/pause state.
+// [asio-diag] global error tap: the 2026-07-11 tester log showed an uncaught
+// SyntaxError with no source location and the routing watcher/feeder never
+// installing — an error event carries filename:line even for parse errors in
+// other scripts, which console output does not. Unconditional (errors are
+// rare; one line each) so a broken script can never hide itself again.
+window.addEventListener('error', (e) => {
+    console.warn('[asio-diag] uncaught-error:', e.message,
+        'at', (e.filename || '<unknown>') + ':' + (e.lineno || 0) + ':' + (e.colno || 0));
+});
+window.addEventListener('unhandledrejection', (e) => {
+    const r = e.reason;
+    console.warn('[asio-diag] unhandled-rejection:',
+        (r && (r.name + ': ' + r.message)) || String(r));
+});
+
 (function _installJuceEngineRoutingWatcher() {
     const juceApi = window.feedBackDesktop?.audio;
-    if (!juceApi || typeof juceApi.isAudioRunning !== 'function') return;
+    if (!juceApi || typeof juceApi.isAudioRunning !== 'function') {
+        // Expected in the Docker sphere; in the desktop app this means the
+        // preload bridge was missing when app.js ran — the whole exclusive
+        // reroute chain is dead and this line is the only witness.
+        console.log('[asio-diag] routing watcher NOT installed (no bridge: api=' + !!juceApi + ')');
+        return;
+    }
+    console.log('[asio-diag] routing watcher installed');
 
     let _rerouteInFlight = false;
     // URL that JUCE's loadBackingTrack *explicitly rejected* (ok === false —
@@ -5305,7 +5327,14 @@ window.jucePlayer = jucePlayer;
 (function _installRendererBusFeeder() {
     const api = window.feedBackDesktop?.audio;
     if (!api || typeof api.setRendererBus !== 'function'
-             || typeof api.pushRendererAudio !== 'function') return;
+             || typeof api.pushRendererAudio !== 'function') {
+        console.log('[asio-diag] renderer-bus feeder NOT installed (api=' + !!api
+            + ' setRendererBus=' + typeof api?.setRendererBus
+            + ' pushRendererAudio=' + typeof api?.pushRendererAudio + ')');
+        return;
+    }
+    console.log('[asio-diag] renderer-bus feeder installed (loopback-capable='
+        + (typeof window.navigator?.mediaDevices?.getDisplayMedia === 'function') + ')');
 
     const TAP_WORKLET = `
         class FeedbackBusTap extends AudioWorkletProcessor {
@@ -5592,7 +5621,11 @@ window.jucePlayer = jucePlayer;
                 }
             }
         } catch (e) {
-            console.warn('[renderer-bus] reevaluate failed (will retry):', e);
+            // Explicit name/message/stack head — the console-message forward
+            // stringifies a DOMException to the useless "[object DOMException]".
+            console.warn('[renderer-bus] reevaluate failed (will retry):',
+                (e && e.name ? e.name + ': ' + e.message : String(e)),
+                (e && e.stack ? '| ' + String(e.stack).split('\n')[1] : ''));
             _mode = 'off';
             // A partial engage may have left the bus enabled with no producer
             // and the page muted — undo both so a failed tick can't strand
