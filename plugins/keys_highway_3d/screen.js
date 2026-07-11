@@ -3174,7 +3174,11 @@
                 } else {
                     w = (entry.black ? BLACK_W : WHITE_W * 0.94) * 0.9;
                     x = keyX(entry, whiteCount);
-                    y = (entry.black ? BLACK_H + WHITE_H : WHITE_H) + NOTE_H / 2 + 0.5 * K;
+                    // Floating note planes (independent of the tall black-key height):
+                    // naturals dropped 1K so they read better on the low-down cam as
+                    // they come in; sharps sit +2K over the base so they stay raised
+                    // (nets the same height they had before the natural was lowered).
+                    y = WHITE_H + NOTE_H / 2 + 0.5 * K + (entry.black ? 2 * K : -1 * K);
                 }
                 // Clone per note so each can glow independently while being consumed.
                 const mesh = new T.Mesh(_noteGeometry(w, len), _noteMaterial(note.midi, note.hand).clone());
