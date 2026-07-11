@@ -12,6 +12,7 @@ tests/test_art_layer.py.
 """
 
 import importlib
+import enrichment
 import io as _io
 import sys
 
@@ -119,8 +120,8 @@ def caa_index(server, monkeypatch):
         calls.append(release_id)
         return indexes.get(release_id)   # unknown release → None (a CAA 404)
     fake.calls, fake.indexes = calls, indexes
-    monkeypatch.setattr(server, "_caa_release_index", fake)
-    monkeypatch.setattr(server, "_enrich_network_enabled", lambda: True)
+    monkeypatch.setattr(enrichment, "_caa_release_index", fake)
+    monkeypatch.setattr(enrichment, "_enrich_network_enabled", lambda: True)
     return fake
 
 
@@ -274,10 +275,10 @@ def test_malicious_release_id_rejected_no_fetch_no_write(server, caa_index):
     """A crafted release id (path traversal) never matches _CAA_ID_RE, so it
     yields no images, opens no socket, and writes no cache file — inside the
     art dir or anywhere else."""
-    art_dir = server._enrichment_art_dir()
+    art_dir = enrichment._enrichment_art_dir()
     before = set(art_dir.glob("*"))
-    assert not server._CAA_ID_RE.match("../../etc/x")
-    assert server._caa_index_cached("../../etc/x") == []
+    assert not enrichment._CAA_ID_RE.match("../../etc/x")
+    assert enrichment._caa_index_cached("../../etc/x") == []
     assert caa_index.calls == []                       # the seam was never asked
     assert set(art_dir.glob("*")) == before            # nothing written
     # And nothing landed at the traversal target beside the cache dir either.
@@ -340,7 +341,7 @@ def test_fetch_art_url_follows_redirects_validating_each_hop(server, monkeypatch
         return _FakeResp(200, chunks=[b"IMGDATA"])
 
     monkeypatch.setattr(requests, "get", fake_get)
-    monkeypatch.setattr(server, "_enrich_network_enabled", lambda: True)
+    monkeypatch.setattr(enrichment, "_enrich_network_enabled", lambda: True)
     monkeypatch.setattr(server, "_url_host_is_internal",
                         lambda u: (checked.append(u), False)[1])
     data = server._fetch_art_url("https://coverartarchive.example/release/x/front-500")
@@ -354,7 +355,7 @@ def test_fetch_art_url_blocks_redirect_to_internal(server, monkeypatch):
     import requests
     monkeypatch.setattr(requests, "get", lambda url, **kw: _FakeResp(
         302, {"Location": "http://internal.example/x.png"}))
-    monkeypatch.setattr(server, "_enrich_network_enabled", lambda: True)
+    monkeypatch.setattr(enrichment, "_enrich_network_enabled", lambda: True)
     monkeypatch.setattr(server, "_url_host_is_internal",
                         lambda u: "internal" in u)
     with pytest.raises(ValueError):
@@ -365,7 +366,7 @@ def test_fetch_art_url_redirect_budget(server, monkeypatch):
     import requests
     monkeypatch.setattr(requests, "get", lambda url, **kw: _FakeResp(
         307, {"Location": "https://public.example/next.png"}))
-    monkeypatch.setattr(server, "_enrich_network_enabled", lambda: True)
+    monkeypatch.setattr(enrichment, "_enrich_network_enabled", lambda: True)
     monkeypatch.setattr(server, "_url_host_is_internal", lambda u: False)
-    with pytest.raises(server.EnrichTransportError):
+    with pytest.raises(enrichment.EnrichTransportError):
         server._fetch_art_url("https://public.example/x.png")

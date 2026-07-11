@@ -6,6 +6,7 @@ song (delete_song). Locks pin a field against a later auto-match.
 """
 
 import importlib
+import enrichment
 import sys
 
 import pytest
@@ -149,7 +150,7 @@ def test_locked_fields_reader(server):
 
 
 def test_compose_lock_filter_strips_locked_cand_keys(server):
-    f = server._compose_lock_filter(None, {"artist", "year"})
+    f = enrichment._compose_lock_filter(None, {"artist", "year"})
     cand = {"recording_id": "r", "artist": "X", "artist_sort": "X", "title": "T",
             "year": "1990", "album": "A", "genres": ["rock"]}
     out = f(cand)
@@ -158,7 +159,7 @@ def test_compose_lock_filter_strips_locked_cand_keys(server):
     # …identity + unlocked display fields survive
     assert out["recording_id"] == "r" and out["title"] == "T" and out["album"] == "A"
     # no locks → base filter returned unchanged (zero-copy common path)
-    assert server._compose_lock_filter(None, set()) is None
+    assert enrichment._compose_lock_filter(None, set()) is None
 
 
 # ── display overlay in the grid (slice 3) ─────────────────────────────────────

@@ -7,6 +7,7 @@ here opens a socket, and the offline default is itself asserted.
 """
 
 import importlib
+import enrichment
 import io as _io
 import sys
 
@@ -176,15 +177,15 @@ def caa(server, monkeypatch):
         calls.append(release_id)
         return art.get(release_id)
     fake.calls, fake.art = calls, art
-    monkeypatch.setattr(server, "_caa_http_get", fake)
-    monkeypatch.setattr(server, "_enrich_network_enabled", lambda: True)
+    monkeypatch.setattr(enrichment, "_caa_http_get", fake)
+    monkeypatch.setattr(enrichment, "_enrich_network_enabled", lambda: True)
     return fake
 
 
 def test_caa_fetch_fills_missing_art(server, client, caa):
     make_sloppak(server, "a.sloppak")                 # no pack art
     _match_row(server, "a.sloppak")
-    server._background_enrich()
+    enrichment._background_enrich()
     row = server.meta_db.get_enrichment("a.sloppak")
     assert row["art_state"] == "caa"
     assert row["art_cache_path"] and row["art_cache_path"].endswith("caa_rel-1.jpg")
@@ -193,7 +194,7 @@ def test_caa_fetch_fills_missing_art(server, client, caa):
     assert r.headers["content-type"] == "image/jpeg"
     # Settled: the next pass never re-fetches.
     n = len(caa.calls)
-    server._background_enrich()
+    enrichment._background_enrich()
     assert len(caa.calls) == n
 
 
@@ -204,7 +205,7 @@ def test_caa_skips_pack_art_and_dedupes_by_release(server, caa):
     _match_row(server, "haspack.sloppak")
     _match_row(server, "b.sloppak")                   # same release as c
     _match_row(server, "c.sloppak")
-    server._background_enrich()
+    enrichment._background_enrich()
     assert server.meta_db.get_enrichment("haspack.sloppak")["art_state"] == "pack"
     assert server.meta_db.get_enrichment("b.sloppak")["art_state"] == "caa"
     assert server.meta_db.get_enrichment("c.sloppak")["art_state"] == "caa"
@@ -214,10 +215,10 @@ def test_caa_skips_pack_art_and_dedupes_by_release(server, caa):
 def test_caa_404_marks_none(server, caa):
     make_sloppak(server, "a.sloppak")
     _match_row(server, "a.sloppak", release_id="rel-missing")
-    server._background_enrich()
+    enrichment._background_enrich()
     assert server.meta_db.get_enrichment("a.sloppak")["art_state"] == "none"
     n = len(caa.calls)
-    server._background_enrich()
+    enrichment._background_enrich()
     assert len(caa.calls) == n                        # never re-hammered
 
 
@@ -226,13 +227,13 @@ def test_caa_transport_error_leaves_row_unevaluated(server, caa, monkeypatch):
     _match_row(server, "a.sloppak")
 
     def _down(release_id):
-        raise server.EnrichTransportError("down")
-    monkeypatch.setattr(server, "_caa_http_get", _down)
-    server._background_enrich()
+        raise enrichment.EnrichTransportError("down")
+    monkeypatch.setattr(enrichment, "_caa_http_get", _down)
+    enrichment._background_enrich()
     assert server.meta_db.get_enrichment("a.sloppak")["art_state"] is None
     # Network back → next pass completes it.
-    monkeypatch.setattr(server, "_caa_http_get", caa)
-    server._background_enrich()
+    monkeypatch.setattr(enrichment, "_caa_http_get", caa)
+    enrichment._background_enrich()
     assert server.meta_db.get_enrichment("a.sloppak")["art_state"] == "caa"
 
 
@@ -240,22 +241,22 @@ def test_offline_default_skips_art_worker(server, monkeypatch):
     """Under the plain test env the whole art phase is skipped with the rest
     of the network work."""
     calls = []
-    monkeypatch.setattr(server, "_caa_http_get", lambda rid: calls.append(rid))
+    monkeypatch.setattr(enrichment, "_caa_http_get", lambda rid: calls.append(rid))
     make_sloppak(server, "a.sloppak")
     _match_row(server, "a.sloppak")
-    server._background_enrich()
+    enrichment._background_enrich()
     assert calls == []
     assert server.meta_db.get_enrichment("a.sloppak")["art_state"] is None
 
 
 def test_lru_prune_evicts_oldest_and_resets_rows(server, caa, monkeypatch):
-    monkeypatch.setattr(server, "_CAA_CACHE_CAP_BYTES", 1)   # everything over cap
+    monkeypatch.setattr(enrichment, "_CAA_CACHE_CAP_BYTES", 1)   # everything over cap
     make_sloppak(server, "a.sloppak", title="One")
     make_sloppak(server, "b.sloppak", title="Two")
     caa.art["rel-2"] = png_bytes((1, 1, 1))
     _match_row(server, "a.sloppak", release_id="rel-1")
     _match_row(server, "b.sloppak", release_id="rel-2")
-    server._background_enrich()
+    enrichment._background_enrich()
     # With a 1-byte cap every fetch immediately evicts — the rows that pointed
     # at evicted files were reset to unevaluated.
     caa_files = list(server.ART_CACHE_DIR.glob("caa_*.jpg"))
@@ -282,13 +283,13 @@ def test_delete_override_restores_caa_fallback(server, client, caa):
     _match_row(server, "a.sloppak")
     # Pin an override BEFORE the art worker runs → the pass stamps art_state='user'.
     client.post("/api/song/a.sloppak/art/upload", json={"image": b64(png_bytes())})
-    server._background_enrich()
+    enrichment._background_enrich()
     assert server.meta_db.get_enrichment("a.sloppak")["art_state"] == "user"
     # Remove it → the row resets to unevaluated…
     assert client.delete("/api/art/a.sloppak/override").json()["removed"]
     assert server.meta_db.get_enrichment("a.sloppak")["art_state"] is None
     # …and the next pass fetches + serves the release's front cover.
-    server._background_enrich()
+    enrichment._background_enrich()
     assert server.meta_db.get_enrichment("a.sloppak")["art_state"] == "caa"
     r = client.get("/api/song/a.sloppak/art")
     assert r.status_code == 200

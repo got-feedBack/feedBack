@@ -8,6 +8,7 @@ flag is only force-enabled where a test needs the pipeline to run.
 """
 
 import importlib
+import enrichment
 import io as _io
 import sys
 
@@ -57,8 +58,8 @@ class FakeMB:
 @pytest.fixture()
 def mb(server, monkeypatch):
     fake = FakeMB()
-    monkeypatch.setattr(server, "_mb_http_get", fake)
-    monkeypatch.setattr(server, "_enrich_network_enabled", lambda: True)
+    monkeypatch.setattr(enrichment, "_mb_http_get", fake)
+    monkeypatch.setattr(enrichment, "_enrich_network_enabled", lambda: True)
     return fake
 
 
@@ -116,13 +117,13 @@ def test_musicbrainz_source_off_stamps_without_matching(server, mb, client):
     client.post("/api/settings", json={"enrich_src_musicbrainz": False})
     _put(server, "a.sloppak")
     mb.search_response = {"recordings": [mb_doc()]}
-    server._background_enrich()
+    enrichment._background_enrich()
     assert mb.calls == []
     row = server.meta_db.get_enrichment("a.sloppak")
     assert row["match_state"] == "unscanned"       # hash stamped, no match
     # Re-enabling picks the same row up on the next pass.
     client.post("/api/settings", json={"enrich_src_musicbrainz": True})
-    server._background_enrich()
+    enrichment._background_enrich()
     assert server.meta_db.get_enrichment("a.sloppak")["match_state"] == "matched"
 
 
@@ -133,7 +134,7 @@ def test_field_toggles_strip_auto_applied_fields(server, mb, client):
                                        "enrich_apply_genres": False})
     _put(server, "a.sloppak")
     mb.search_response = {"recordings": [mb_doc()]}
-    server._background_enrich()
+    enrichment._background_enrich()
     row = server.meta_db.get_enrichment("a.sloppak")
     assert row["match_state"] == "matched"
     assert row["canon_artist"] == "AC/DC"
@@ -150,7 +151,7 @@ def test_names_toggle_keeps_ids_and_other_fields(server, mb, client):
     client.post("/api/settings", json={"enrich_apply_names": False})
     _put(server, "a.sloppak")
     mb.search_response = {"recordings": [mb_doc()]}
-    server._background_enrich()
+    enrichment._background_enrich()
     row = server.meta_db.get_enrichment("a.sloppak")
     assert row["match_state"] == "matched"
     assert row["canon_artist"] is None
@@ -170,7 +171,7 @@ def test_review_accept_applies_all_fields_despite_toggles(server, mb, client):
     # Partial artist agreement → review tier (candidates stored unfiltered).
     _put(server, "a.sloppak", artist="AC/DC ft Nobody")
     mb.search_response = {"recordings": [mb_doc()]}
-    server._background_enrich()
+    enrichment._background_enrich()
     assert server.meta_db.get_enrichment("a.sloppak")["match_state"] == "review"
     r = client.post("/api/enrichment/review/a.sloppak/accept",
                     json={"recording_id": "rec-1"})
@@ -192,21 +193,21 @@ def test_reenabling_field_backfills_matched_row(server, mb, client):
     client.post("/api/settings", json={"enrich_apply_year": False})
     _put(server, "a.sloppak")
     mb.search_response = {"recordings": [mb_doc()]}
-    server._background_enrich()
+    enrichment._background_enrich()
     row = server.meta_db.get_enrichment("a.sloppak")
     assert row["match_state"] == "matched"
     assert row["canon_year"] is None                    # suppressed
     assert row["apply_mask"] == "enrich_apply_year"     # …and remembered
     # Re-enable → next pass re-queues and backfills the year (hash unchanged).
     client.post("/api/settings", json={"enrich_apply_year": True})
-    server._background_enrich()
+    enrichment._background_enrich()
     row = server.meta_db.get_enrichment("a.sloppak")
     assert row["match_state"] == "matched"
     assert row["canon_year"] == "1990"                  # backfilled
     assert row["apply_mask"] in (None, "")              # fully applied now
     # Converged: a fully-applied row is not re-queued again.
     assert server.meta_db.enrichment_pending(
-        allowed_keys=frozenset(server._ENRICH_APPLY_FIELDS)) == []
+        allowed_keys=frozenset(enrichment._ENRICH_APPLY_FIELDS)) == []
 
 
 def test_partial_match_is_not_a_cache_donor(server):
@@ -271,8 +272,8 @@ def caa(server, monkeypatch):
         calls.append(release_id)
         return art.get(release_id)
     fake.calls = calls
-    monkeypatch.setattr(server, "_caa_http_get", fake)
-    monkeypatch.setattr(server, "_enrich_network_enabled", lambda: True)
+    monkeypatch.setattr(enrichment, "_caa_http_get", fake)
+    monkeypatch.setattr(enrichment, "_enrich_network_enabled", lambda: True)
     return fake
 
 
@@ -280,13 +281,13 @@ def test_caa_source_toggle_gates_art_fetch(server, client, caa):
     make_sloppak(server, "a.sloppak")
     _match_row(server, "a.sloppak")
     client.post("/api/settings", json={"enrich_src_caa": False})
-    server._background_enrich()
+    enrichment._background_enrich()
     assert caa.calls == []
     row = server.meta_db.get_enrichment("a.sloppak")
     assert row["art_state"] is None                # not forfeited, just skipped
     # Re-enable → the same row is picked up.
     client.post("/api/settings", json={"enrich_src_caa": True})
-    server._background_enrich()
+    enrichment._background_enrich()
     assert server.meta_db.get_enrichment("a.sloppak")["art_state"] == "caa"
 
 
@@ -294,7 +295,7 @@ def test_apply_art_toggle_gates_art_fetch(server, client, caa):
     make_sloppak(server, "a.sloppak")
     _match_row(server, "a.sloppak")
     client.post("/api/settings", json={"enrich_apply_art": False})
-    server._background_enrich()
+    enrichment._background_enrich()
     assert caa.calls == []
     assert server.meta_db.get_enrichment("a.sloppak")["art_state"] is None
 

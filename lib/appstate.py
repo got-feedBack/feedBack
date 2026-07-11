@@ -92,6 +92,12 @@ audio_cache_dir = None
 get_progression_content = None
 builtin_diagnostic_filename = None
 running_version = None
+# Art helpers that stay in server.py (shared with the art/delete routes) but are
+# also called by the enrichment worker in lib/enrichment.py — injected as
+# callables to keep enrichment acyclic. art_cache_dir is server's ART_CACHE_DIR.
+art_cache_dir = None
+song_pack_art_exists = None
+art_override_paths = None
 
 _SLOTS = frozenset({
     "meta_db", "audio_effect_mappings", "tuning_providers",
@@ -99,6 +105,7 @@ _SLOTS = frozenset({
     "static_dir", "sloppak_cache_dir", "audio_cache_dir",
     "get_progression_content", "builtin_diagnostic_filename",
     "running_version",
+    "art_cache_dir", "song_pack_art_exists", "art_override_paths",
 })
 
 
