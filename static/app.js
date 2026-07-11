@@ -39,6 +39,7 @@ import {
     exportSettings,
     importSettings,
 } from './js/settings-io.js';
+import { audio } from './js/audio-el.js';
 
 // Demo analytics — real impl set by demo.js; no-op in normal builds
 window.feedBackDemoTrack = window.feedBackDemoTrack ?? null;
@@ -3419,7 +3420,9 @@ function retuneSong(filename, title, tuning, target) {
 }
 
 // ── Player ───────────────────────────────────────────────────────────────
-const audio = document.getElementById('audio');
+// `audio` now lives in ./js/audio-el.js so carved-out modules can reach the
+// player without importing app.js back (which would close a cycle). Same
+// element, same handle, same lookup — just imported instead of declared here.
 let isPlaying = false;
 let _lastSongPositionEventAt = 0;
 
