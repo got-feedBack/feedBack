@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pytest
@@ -71,11 +72,37 @@ def test_capability_visualizer_waits_for_registry_instead_of_hard_error():
 def test_app_shell_loads_capability_registry_before_app_runtime():
     source = (ROOT / "static" / "v3" / "index.html").read_text(encoding="utf-8")
 
-    assert '<script src="/static/capabilities.js"></script>' in source
-    assert '<script src="/static/capabilities/library.js"></script>' in source
+    assert re.search(r'<script[^>]+src="/static/capabilities\.js"', source)
+    assert re.search(r'<script[^>]+src="/static/capabilities/library\.js"', source)
     assert source.index('/static/diagnostics.js') < source.index('/static/capabilities.js')
     assert source.index('/static/capabilities.js') < source.index('/static/capabilities/library.js')
     assert source.index('/static/capabilities/library.js') < source.index('/static/app.js')
+
+
+def test_every_external_script_defers_so_document_order_is_execution_order():
+    """The shell's scripts must all execute in document order.
+
+    `capabilities.js` builds the `window.feedBack` bus and must run before
+    `app.js`, which calls `window.feedBack.on(...)` at top level. Today document
+    order gives that for free, because every script is a parse-time classic one.
+
+    That guarantee survives the ES-module migration ONLY while no script is a
+    *plain* classic script: `defer` and `type="module"` scripts share one
+    "execute after parsing" list and run in document order, but a plain classic
+    script runs DURING parse — ahead of every deferred one. So the moment
+    capabilities.js becomes a module while app.js is still plain, app.js runs
+    first and `window.feedBack.on` is undefined.
+
+    Pinning "no plain external scripts" is what keeps that from silently
+    regressing as tags flip to type="module" one at a time.
+    """
+    source = (ROOT / "static" / "v3" / "index.html").read_text(encoding="utf-8")
+
+    plain = [
+        tag for tag in re.findall(r'<script\b[^>]*\bsrc=[^>]*>', source)
+        if 'defer' not in tag and 'async' not in tag and 'type="module"' not in tag
+    ]
+    assert not plain, f"external scripts that would jump the deferred queue: {plain}"
 
 
 def test_capability_registry_exposes_claim_dispatch_and_ready_contracts():

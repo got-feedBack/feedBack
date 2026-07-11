@@ -99,23 +99,39 @@
     <link rel="stylesheet" href="/static/tour-engine.css">
     <!-- v0.3.0 shell styles (radial-gradient bg, custom scrollbars). -->
     <link rel="stylesheet" href="/static/v3/v3.css">
+    <!-- EVERY external script below is `defer`. Do not add a plain one.
+         `defer` and `type="module"` scripts share a single "execute after
+         parsing" list and run in DOCUMENT ORDER; a plain classic script runs
+         DURING parse, ahead of all of them. So one plain tag would jump the
+         queue — and once the capabilities become modules (they defer), a
+         still-plain app.js would run BEFORE the bus exists and die on its
+         top-level `window.feedBack.on(...)` calls. Keeping every tag deferred
+         is what preserves this file's order through the ES-module migration.
+         Enforced by test_every_external_script_defers_so_document_order_is_execution_order.
+
+         The scripts themselves boot on DOMContentLoaded, which fires only after
+         all of the above have evaluated — that is what lets a script's boot()
+         use a global another script defines further down this list (there are
+         ~43 such forward references). Their readyState guards therefore treat
+         'interactive' as not-ready; see the note at each one. -->
+
     <!-- Diagnostics console capture must wrap console.* before any other
          script logs anything; load it as early as possible. See
          docs/diagnostics-bundle-spec.md (feedBack#166). -->
-    <script src="/static/diagnostics.js"></script>
-    <script src="/static/capabilities.js"></script>
-    <script src="/static/capabilities/library.js"></script>
-    <script src="/static/capabilities/tuning.js"></script>
-    <script src="/static/capabilities/working-tuning.js"></script>
-    <script src="/static/capabilities/audio-session.js"></script>
-    <script src="/static/capabilities/audio-effects.js"></script>
-    <script src="/static/capabilities/playback.js"></script>
+    <script defer src="/static/diagnostics.js"></script>
+    <script defer src="/static/capabilities.js"></script>
+    <script defer src="/static/capabilities/library.js"></script>
+    <script defer src="/static/capabilities/tuning.js"></script>
+    <script defer src="/static/capabilities/working-tuning.js"></script>
+    <script defer src="/static/capabilities/audio-session.js"></script>
+    <script defer src="/static/capabilities/audio-effects.js"></script>
+    <script defer src="/static/capabilities/playback.js"></script>
     <!-- fee[dB]ack v0.3.0: ui.library-card-injection capability (plugin card actions). -->
-    <script src="/static/capabilities/library-card-actions.js"></script>
-    <script src="/static/capabilities/visualization.js"></script>
-    <script src="/static/capabilities/note-detection.js"></script>
-    <script src="/static/capabilities/midi-input.js"></script>
-    <script src="/static/capabilities/interface-scale.js"></script>
+    <script defer src="/static/capabilities/library-card-actions.js"></script>
+    <script defer src="/static/capabilities/visualization.js"></script>
+    <script defer src="/static/capabilities/note-detection.js"></script>
+    <script defer src="/static/capabilities/midi-input.js"></script>
+    <script defer src="/static/capabilities/interface-scale.js"></script>
 </head>
 <body class="h-screen flex overflow-hidden bg-fb-sidebar text-fb-text font-display">
 
@@ -1225,64 +1241,64 @@
     </main>
     <!-- /#v3-main -->
 
-    <script src="/static/highway.js"></script>
-    <script src="/static/vendor/lottie.min.js"></script>
-    <script src="/static/lottie-api.js"></script>
-    <script src="/static/app.js"></script>
-    <script src="/static/audio-mixer.js"></script>
-    <script src="/static/vendor/shepherd.min.js"></script>
-    <script src="/static/tour-engine.js"></script>
+    <script defer src="/static/highway.js"></script>
+    <script defer src="/static/vendor/lottie.min.js"></script>
+    <script defer src="/static/lottie-api.js"></script>
+    <script defer src="/static/app.js"></script>
+    <script defer src="/static/audio-mixer.js"></script>
+    <script defer src="/static/vendor/shepherd.min.js"></script>
+    <script defer src="/static/tour-engine.js"></script>
     <!-- fee[dB]ack v0.3.0 shell: brand helper, then the shell (sidebar/topbar/
          routing). Loaded after app.js/audio-mixer so window.showScreen and
          window.feedBack(.audio) exist; dashboard.js is filled in prompt 13. -->
-    <script src="/static/v3/brand.js"></script>
-    <script src="/static/v3/shell.js"></script>
+    <script defer src="/static/v3/brand.js"></script>
+    <script defer src="/static/v3/shell.js"></script>
     <!-- Progression (spec 010): theme-core before profile.js so the equipped
          theme/avatar frame apply with the first badge render; progression-core
          registers the `progression` capability owner + window.v3Progression. -->
-    <script src="/static/v3/theme-core.js"></script>
-    <script src="/static/v3/progression-core.js"></script>
-    <script src="/static/v3/notifications.js"></script>
-    <script src="/static/v3/profile.js"></script>
-    <script src="/static/v3/progress.js"></script>
-    <script src="/static/v3/shop.js"></script>
-    <script src="/static/v3/tuner-core.js"></script>
-    <script src="/static/v3/badges.js"></script>
-    <script src="/static/v3/stats-recorder.js"></script>
-    <script src="/static/v3/live-performance-hud.js"></script>
-    <script src="/static/v3/scoreboard-pref.js"></script>
-    <script src="/static/v3/venue-viz.js"></script>
-    <script src="/static/v3/venue-instrument-pov.js"></script>
+    <script defer src="/static/v3/theme-core.js"></script>
+    <script defer src="/static/v3/progression-core.js"></script>
+    <script defer src="/static/v3/notifications.js"></script>
+    <script defer src="/static/v3/profile.js"></script>
+    <script defer src="/static/v3/progress.js"></script>
+    <script defer src="/static/v3/shop.js"></script>
+    <script defer src="/static/v3/tuner-core.js"></script>
+    <script defer src="/static/v3/badges.js"></script>
+    <script defer src="/static/v3/stats-recorder.js"></script>
+    <script defer src="/static/v3/live-performance-hud.js"></script>
+    <script defer src="/static/v3/scoreboard-pref.js"></script>
+    <script defer src="/static/v3/venue-viz.js"></script>
+    <script defer src="/static/v3/venue-instrument-pov.js"></script>
     <!-- venue-mood-fx must load before venue-scene-3d: the scene bridge reads
          window.v3VenueMoodFx.getMotion() synchronously at boot when the saved
          viz is 'venue'; loading it after falls back to 'subtle' and ignores a
          saved 'off'/'full' motion preference on first paint. -->
-    <script src="/static/v3/venue-mood-fx.js"></script>
-    <script src="/static/v3/venue-scene-3d.js"></script>
-    <script src="/static/v3/playlists.js"></script>
-    <script src="/static/v3/audio-routing.js"></script>
-    <script src="/static/v3/live-guitar-tone-source.js"></script>
-    <script src="/static/v3/pedal-cables.js"></script>
-    <script src="/static/v3/plugins-page.js"></script>
-    <script src="/static/v3/card-actions-core.js"></script>
+    <script defer src="/static/v3/venue-mood-fx.js"></script>
+    <script defer src="/static/v3/venue-scene-3d.js"></script>
+    <script defer src="/static/v3/playlists.js"></script>
+    <script defer src="/static/v3/audio-routing.js"></script>
+    <script defer src="/static/v3/live-guitar-tone-source.js"></script>
+    <script defer src="/static/v3/pedal-cables.js"></script>
+    <script defer src="/static/v3/plugins-page.js"></script>
+    <script defer src="/static/v3/card-actions-core.js"></script>
     <!-- Before songs.js: the songs toolbar calls the match-review chip hook
          on build, so the module must already be registered. -->
-    <script src="/static/v3/match-review.js"></script>
+    <script defer src="/static/v3/match-review.js"></script>
     <!-- Before songs.js: the drawer art click + card ⋮ "Change cover…" open
          the cover picker (window.__fbOpenImagePicker). -->
-    <script src="/static/v3/image-picker.js"></script>
-    <script src="/static/v3/songs.js"></script>
-    <script src="/static/v3/lessons.js"></script>
-    <script src="/static/v3/dashboard.js"></script>
-    <script src="/static/v3/settings.js"></script>
-    <script src="/static/v3/interface-size-ui.js"></script>
+    <script defer src="/static/v3/image-picker.js"></script>
+    <script defer src="/static/v3/songs.js"></script>
+    <script defer src="/static/v3/lessons.js"></script>
+    <script defer src="/static/v3/dashboard.js"></script>
+    <script defer src="/static/v3/settings.js"></script>
+    <script defer src="/static/v3/interface-size-ui.js"></script>
     <!-- First-run home tour: spotlights the home cards via the shared tour
          engine (tour-engine.js, loaded above). Auto-runs once after onboarding
          (triggered from profile.js finish()); replayable from the "?" menu. -->
-    <script src="/static/v3/onboarding-tour.js"></script>
-    <script src="/static/v3/interface-size-nudge.js"></script>
-    <script src="/static/v3/feedbarcade.js"></script>
-    <script src="/static/v3/player-chrome.js"></script>
+    <script defer src="/static/v3/onboarding-tour.js"></script>
+    <script defer src="/static/v3/interface-size-nudge.js"></script>
+    <script defer src="/static/v3/feedbarcade.js"></script>
+    <script defer src="/static/v3/player-chrome.js"></script>
     <script>
         // Navbar scroll effect
         window.addEventListener('scroll', () => {

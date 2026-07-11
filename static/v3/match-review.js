@@ -913,7 +913,9 @@
         });
     }
 
-    if (document.readyState === 'loading') {
+    // `defer` runs this at readyState 'interactive' — later scripts have not
+    // evaluated yet, so wait for DOMContentLoaded (see static/v3/index.html).
+    if (document.readyState !== 'complete') {
         document.addEventListener('DOMContentLoaded', () => {
             wireSettingsCard();
             wireScreenTeardown();

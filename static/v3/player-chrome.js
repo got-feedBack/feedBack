@@ -362,6 +362,8 @@
         syncActivation();
     }
 
-    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+    // `defer` runs this at readyState 'interactive' — later scripts have not
+    // evaluated yet, so wait for DOMContentLoaded (see static/v3/index.html).
+    if (document.readyState !== 'complete') document.addEventListener('DOMContentLoaded', init);
     else init();
 })();
