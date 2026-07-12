@@ -18,7 +18,14 @@ const APP_JS = path.join(__dirname, '..', '..', 'static', 'app.js');
 // auto-exit machinery around it (_clearAutoExit, holdAutoExit, _resolvePlayerOrigin)
 // stayed in app.js.
 const CONTROLS_JS = path.join(__dirname, '..', '..', 'static', 'js', 'player-controls.js');
-const SRC = fs.readFileSync(APP_JS, 'utf8');
+// R3d: the song session (showScreen / playSong / closeCurrentSong, and the autoplay hold and
+// auto-exit timer they own) was carved out of app.js into static/js/session.js. This file slices
+// functions from BOTH — `_resultsOverlayVisible` is still in app.js; `_releaseAutoplay` and
+// `_resolvePlayerOrigin` moved. Read both and strip `export`, exactly as CONTROLS_SRC already
+// does, rather than re-pinning each extraction at whichever file currently holds it.
+const SESSION_JS = path.join(__dirname, '..', '..', 'static', 'js', 'session.js');
+const SRC = fs.readFileSync(APP_JS, 'utf8')
+    + '\n' + fs.readFileSync(SESSION_JS, 'utf8').replace(/^export /gm, '');
 // the module is ESM; these sandboxes evaluate plain script text
 const CONTROLS_SRC = fs.readFileSync(CONTROLS_JS, 'utf8').replace(/^export /gm, '');
 

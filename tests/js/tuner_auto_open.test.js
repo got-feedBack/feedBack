@@ -488,8 +488,14 @@ test('gate: does not claim a hold when the feature is off', async () => {
     assert.equal(holds, 0);
 });
 
-test('the autoplay gate is a generic core hook with a fail-open backstop (app.js)', () => {
-    const appSrc = fs.readFileSync(APP_JS, 'utf8');
+test('the autoplay gate is a generic core hook with a fail-open backstop', () => {
+    // R3d: the gate SPANS two files now. window.feedBack.holdAutoplay is the public hook and
+    // stays on app.js's window contract; the machinery it drives (_autoplayHeld,
+    // _clearAutoplayHold, the backstop) moved to static/js/session.js with playSong. Read both —
+    // re-pinning at one would silently stop checking half the gate.
+    const SESSION_JS = path.join(__dirname, '..', '..', 'static', 'js', 'session.js');
+    const appSrc = fs.readFileSync(APP_JS, 'utf8')
+        + '\n' + fs.readFileSync(SESSION_JS, 'utf8').replace(/^export /gm, '');
     assert.match(appSrc, /window\.feedBack\.holdAutoplay = function/);
     assert.match(appSrc, /AUTOPLAY_HOLD_BACKSTOP_MS/);                       // fail-open: never strand the song
     assert.match(appSrc, /if \(_autoplayHeld\) \{ _autoplayStart = start;/); // a gated start is stashed

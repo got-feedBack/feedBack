@@ -4,7 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const APP_JS = path.join(__dirname, '..', '..', 'static', 'app.js');
+// R3d: playSong moved to static/js/session.js with showScreen and closeCurrentSong.
+const APP_JS = path.join(__dirname, '..', '..', 'static', 'js', 'session.js');
 // The speed controls were carved out into static/js/player-controls.js (R3a); playSong,
 // which resets them on a new song, stayed in app.js. This test spans both.
 const CONTROLS_JS = path.join(__dirname, '..', '..', 'static', 'js', 'player-controls.js');

@@ -12,6 +12,11 @@ const vm = require('node:vm');
 
 const { extractFunction } = require('./test_utils');
 
+// R3d: closeCurrentSong (and showScreen and playSong, the mutual recursion they form) moved to
+// static/js/session.js. Bodies unchanged — only the file. The WINDOW CONTRACT stays in app.js,
+// which is the whole point of it: app.js is the only place that publishes names for the markup's
+// onclick= handlers to resolve against.
+const SESSION_JS = path.join(__dirname, '..', '..', 'static', 'js', 'session.js');
 const APP_JS = path.join(__dirname, '..', '..', 'static', 'app.js');
 
 function buildSandbox({ playerOriginScreen = 'home' } = {}) {
@@ -66,13 +71,13 @@ function loadClose(sandbox, src) {
 }
 
 test('closeCurrentSong is exported on window and window.feedBack', () => {
-    const src = fs.readFileSync(APP_JS, 'utf8');
+    const src = fs.readFileSync(APP_JS, 'utf8');   // the contract lives in app.js
     assert.match(src, /window\.closeCurrentSong\s*=\s*closeCurrentSong/);
     assert.match(src, /window\.feedBack\.closeCurrentSong\s*=\s*closeCurrentSong/);
 });
 
 test('closeCurrentSong uses _playerOriginScreen when set', async () => {
-    const src = fs.readFileSync(APP_JS, 'utf8');
+    const src = fs.readFileSync(SESSION_JS, 'utf8');
     const sandbox = buildSandbox({ playerOriginScreen: 'favorites' });
     loadClose(sandbox, src);
     await sandbox.__closeCurrentSong();
@@ -87,7 +92,7 @@ test('closeCurrentSong uses _playerOriginScreen when set', async () => {
 });
 
 test('closeCurrentSong falls back to home when origin missing', async () => {
-    const src = fs.readFileSync(APP_JS, 'utf8');
+    const src = fs.readFileSync(SESSION_JS, 'utf8');
     const sandbox = buildSandbox({ playerOriginScreen: null });
     loadClose(sandbox, src);
     await sandbox.__closeCurrentSong();
@@ -96,7 +101,7 @@ test('closeCurrentSong falls back to home when origin missing', async () => {
 });
 
 test('closeCurrentSong falls back to home when origin is empty string', async () => {
-    const src = fs.readFileSync(APP_JS, 'utf8');
+    const src = fs.readFileSync(SESSION_JS, 'utf8');
     const sandbox = buildSandbox({ playerOriginScreen: '' });
     loadClose(sandbox, src);
     await sandbox.__closeCurrentSong();
