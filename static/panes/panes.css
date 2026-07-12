@@ -83,6 +83,7 @@
     transition: background .15s, border-color .15s;
 }
 .fb-pane-stub:hover { background: rgba(64, 128, 224, .18); border-color: #4080e0; }
+.fb-pane-stub:focus-visible { outline: 2px solid #4080e0; outline-offset: 1px; }
 .fb-pane-stub-glyph { font-size: .85rem; }
 
 /* ── The dock ────────────────────────────────────────────────────────────── */
