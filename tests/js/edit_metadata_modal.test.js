@@ -1,4 +1,4 @@
-// Regression guards for two Edit-Metadata modal fixes (static/app.js):
+// Regression guards for two Edit-Metadata modal fixes (static/js/edit-modal.js):
 //
 //  1. Year is editable — the modal renders an `edit-year` field and
 //     saveEditModal() includes `year` in the POST /api/song/<f>/meta body.
@@ -19,8 +19,11 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { extractFunction } = require('./test_utils');
 
-const APP_JS = path.join(__dirname, '..', '..', 'static', 'app.js');
-const readApp = () => fs.readFileSync(APP_JS, 'utf8');
+// R3d: the edit modal was carved out of app.js into its own module. Bodies unchanged — only
+// the file moved. (It could go cleanly because the LIBRARY came out first: every dependency the
+// modal has is a module now, and it reads six library bindings without writing any.)
+const EDIT_MODAL_JS = path.join(__dirname, '..', '..', 'static', 'js', 'edit-modal.js');
+const readApp = () => fs.readFileSync(EDIT_MODAL_JS, 'utf8');
 
 function loadFn(signature, sandbox, exportAs) {
     const fnSrc = extractFunction(readApp(), signature);
