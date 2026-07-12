@@ -2,21 +2,27 @@
  * fee[dB]ack — the pop-out chip.
  *
  * One affordance, core-owned, identical everywhere: the small ⇱ button a plugin
- * drops into a dialog it already has.
+ * drops into the panel it already has.
  *
- *     feedBack.panes.register({ id: 'camera_director', title: 'Camera', mount, unmount });
- *     feedBack.panes.attachChip(myDialogEl, 'camera_director');
+ *     feedBack.panes.register({ id: 'camera_director', title: 'Camera', element: () => panelEl });
+ *     feedBack.panes.attachChip(panelEl, 'camera_director');
  *
- * That is the entire adoption cost. Clicking the chip opens the pane in its host
- * and hides `myDialogEl`; a stub takes its place so the user can find it again;
- * closing the pane un-hides the dialog and restores the chip. The plugin writes
- * no show/hide logic — if it did, every plugin would invent a slightly different
- * one, which is exactly the inconsistency this exists to prevent.
+ * That is the entire adoption cost. Clicking the chip pops the panel out; a stub
+ * takes its place so the user can find it again; closing the pane brings the panel
+ * home and restores the chip. The plugin writes no show/hide logic — if it did,
+ * every plugin would invent a slightly different one, which is exactly the
+ * inconsistency this exists to prevent.
  *
- * Hiding uses `.fb-pane-detached`, NOT the `hidden` class or `[hidden]`, because
- * the dialogs being hidden here already toggle those themselves (the core mixer
- * popover, every rail popover). Two owners of one class is a bug waiting for a
- * bad day; a dedicated class composes cleanly with whatever the dialog does.
+ * The panel a chip is attached to is USUALLY the very element the pane moves into
+ * the pop-out window — so most of the time there is nothing here left to hide, and
+ * the job is simply to mark the hole it left. Hiding it would in fact be actively
+ * harmful: `.fb-pane-detached` is `display:none !important`, and it would travel
+ * with the node straight into the pane window and blank it.
+ *
+ * When the chip IS attached to something the pane didn't take (a wrapper, a
+ * launcher row), that element stays put and is hidden with `.fb-pane-detached` —
+ * a dedicated class, not `.hidden`/[hidden], because the panels we attach to
+ * already toggle those themselves.
  */
 (function () {
     'use strict';
@@ -69,12 +75,46 @@
         return s;
     }
 
-    function _onOpened(rec) {
-        rec.el.classList.add('fb-pane-detached');
-        if (!rec.stub.isConnected) rec.el.parentNode.insertBefore(rec.stub, rec.el);
+    // The pane is out. Leave a stub where its panel used to be.
+    //
+    // The subtlety: the panel a chip is attached to is USUALLY the very element the
+    // pane moved into the pop-out window. It is no longer in this document at all —
+    // so hiding it would be worse than pointless (the `display:none` travels with
+    // the node and blanks the pane window, which is exactly the bug this fixes), and
+    // the stub cannot be inserted "before it", because it is not here to be before.
+    //
+    // Hence `home`: the manager tells us where the element used to live, and the
+    // stub goes there. If the chip is attached to something the pane did NOT take —
+    // a wrapper, a launcher row — that element is still here, and we hide it as
+    // before.
+    function _onOpened(rec, detail) {
+        // "Moved" means the element is not in THIS document — either because this
+        // open took it, or because it is already sitting in a pane window from an
+        // earlier one. The ownerDocument test is what makes re-attaching a chip
+        // safe: a plugin that rebuilds its panel (Camera Director does, on every
+        // mode change) re-runs attachChip while the pane is still popped out, and
+        // an isConnected test would say "still here" — it IS connected, to the pane
+        // window — and we would stamp display:none onto the live pane.
+        const moved = (detail && detail.el === rec.el) || rec.el.ownerDocument !== document;
+
+        if (!moved && rec.el.isConnected) {
+            rec.el.classList.add('fb-pane-detached');
+            if (!rec.stub.isConnected && rec.el.parentNode) rec.el.parentNode.insertBefore(rec.stub, rec.el);
+            return;
+        }
+
+        // Mark the hole the element left. `home` comes with the event, or from the
+        // manager when we are reconciling after the fact.
+        const home = (detail && detail.home) || panes.homeOf(rec.spec.id);
+        if (!rec.stub.isConnected && home && home.parent && home.parent.isConnected) {
+            const next = (home.next && home.next.parentNode === home.parent) ? home.next : null;
+            home.parent.insertBefore(rec.stub, next);
+        }
     }
 
     function _onClosed(rec) {
+        // The element is back. Whatever we did to hide it, undo — including a class
+        // it might have carried out of the document and back.
         rec.el.classList.remove('fb-pane-detached');
         rec.stub.remove();
     }
@@ -108,7 +148,7 @@
 
         // Reconcile immediately: register() reopens a pane the user left open at
         // last unload, and that can land before (or after) attachChip runs.
-        if (panes.isOpen(paneId)) _onOpened(rec);
+        if (panes.isOpen(paneId)) _onOpened(rec, null);
 
         return () => {
             if (attached.get(paneId) !== rec) return;
@@ -123,7 +163,7 @@
     if (bus && typeof bus.on === 'function') {
         bus.on('panes:opened', (e) => {
             const rec = attached.get(e.detail && e.detail.id);
-            if (rec) _onOpened(rec);
+            if (rec) _onOpened(rec, e.detail);
         });
         bus.on('panes:closed', (e) => {
             const rec = attached.get(e.detail && e.detail.id);

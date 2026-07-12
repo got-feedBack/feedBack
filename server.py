@@ -1719,9 +1719,14 @@ def index_v3():
 
 @app.get("/pane")
 def pane_host():
-    # The document a popped-out pane runs in. Deliberately NOT the app shell with
-    # a query flag (the splitscreen follower's approach): that loads the library,
-    # the highway and the whole v3 shell only to hide them again, and pays for it
-    # with anti-flash hacks in three files. This page loads the pane runtime and
-    # nothing else. See docs/plugin-panes.md.
-    return FileResponse(str(STATIC_DIR / "panes" / "pane.html"))
+    # The document a popped-out pane is displayed in. It builds nothing: the opener
+    # MOVES the real panel element into it (document.adoptNode) and copies the app's
+    # stylesheets across. See docs/plugin-panes.md.
+    #
+    # no-cache, matching the /static mount's contract (_RevalidatedStaticFiles). A
+    # stale copy of this page is especially nasty: the opener waits for an element
+    # inside it before adopting, so an old cached version means the pane window
+    # simply sits there blank.
+    resp = FileResponse(str(STATIC_DIR / "panes" / "pane.html"))
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp

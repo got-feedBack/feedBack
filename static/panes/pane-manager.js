@@ -129,6 +129,12 @@
         // a docked panel reappears at the bottom of its container, or not at all.
         const home = { parent: el.parentNode, next: el.nextSibling };
 
+        // An element on its way OUT of this document must not carry a class whose
+        // whole job is to hide it IN this document. `.fb-pane-detached` is
+        // `display:none !important`, and it travels with the node — straight into
+        // the pane window, which then renders nothing at all.
+        el.classList.remove('fb-pane-detached');
+
         try {
             host.place(spec, el);
         } catch (e) {
@@ -139,7 +145,10 @@
         open.set(id, { spec, hostId: host.id, el, home });
         if (opts.remember !== false) _rememberHost(id, host.id);
         if (spec.onHost) { try { spec.onHost(host.id, el); } catch (e) { console.error('[panes]', id, 'onHost threw', e); } }
-        _emit('panes:opened', { id: id, host: host.id });
+        // `home` rides along because the element has LEFT this document — anything
+        // that wants to mark the hole it left (the chip's stub) needs to know where
+        // the hole is, and can no longer ask the element itself.
+        _emit('panes:opened', { id: id, host: host.id, el: el, home: home });
         return true;
     }
 
@@ -149,17 +158,21 @@
         if (!entry) return false;
         open.delete(id);
 
-        const host = hosts.get(entry.hostId);
-        try { if (host) host.unplace(id, entry.el); } catch (e) { console.error('[panes] host', entry.hostId, 'threw releasing', id, e); }
-
-        // Put the element back where it came from. Re-adopting it into THIS
-        // document is what undoes the pop-out: a node adopted by another window
-        // has that window's document as its owner, and appending it here without
-        // adopting first would throw in some engines and leave it in a half-moved
-        // state in others.
+        // ORDER IS LOAD-BEARING: bring the element home BEFORE the host lets go of
+        // it. The host's unplace() closes the pane window, and closing a window
+        // tears down its document — with the element still inside it. The node
+        // survives (we hold a reference) but comes back stripped of its event
+        // listeners, so the panel returns looking perfect and completely dead: no
+        // buttons, no sliders, nothing.
+        //
+        // Adopt first, while the pane window is still alive, and the node moves out
+        // of a living document into a living document, which is the only case the
+        // DOM actually guarantees.
         const home = entry.home;
         if (home && home.parent && home.parent.isConnected) {
             try {
+                // adoptNode, not appendChild: the node's owner is currently the pane
+                // window's document, and adopting is what transfers ownership back.
                 const node = document.adoptNode(entry.el);
                 if (home.next && home.next.parentNode === home.parent) home.parent.insertBefore(node, home.next);
                 else home.parent.appendChild(node);
@@ -168,9 +181,13 @@
             }
         }
 
+        const host = hosts.get(entry.hostId);
+        try { if (host) host.unplace(id, entry.el); } catch (e) { console.error('[panes] host', entry.hostId, 'threw releasing', id, e); }
+
         if (opts.remember !== false) _rememberHost(id, null);
         if (entry.spec.onHost) { try { entry.spec.onHost(null, entry.el); } catch (e) { /* non-fatal */ } }
         _emit('panes:closed', { id: id, host: entry.hostId });
+
         return true;
     }
 
@@ -255,6 +272,9 @@
         focus: focusPane,
         isOpen: (id) => open.has(id),
         hostOf: (id) => { const e = open.get(id); return e ? e.hostId : null; },
+        // Where an open pane's element came from. The chip needs this to mark the
+        // hole the element left, since it can no longer ask the element itself.
+        homeOf: (id) => { const e = open.get(id); return e ? e.home : null; },
         get: (id) => specs.get(id) || null,
         list: () => Array.from(specs.values()).map((s) => ({
             id: s.id, title: s.title, icon: s.icon,

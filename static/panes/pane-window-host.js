@@ -80,13 +80,53 @@
     // only exists in the document we actually want: pane.html's #fb-pane-root.
     function _whenReady(w, onReady, onFail) {
         const deadline = performance.now() + 10000;
+        let reachFailure = null;   // why we could never see the pop-out's document
         const tick = () => {
             if (w.closed) return;
-            let root = null;
-            try { root = w.document && w.document.getElementById('fb-pane-root'); }
-            catch (e) { root = null; }   // mid-navigation: the document is being swapped
-            if (root) { onReady(root); return; }
-            if (performance.now() > deadline) { onFail(new Error('the pane window never loaded')); return; }
+
+            let doc = null;
+            try { doc = w.document; }
+            catch (e) {
+                // A SecurityError here is the one that matters: it means the pop-out
+                // is not reachable from this realm at all (a separate process /
+                // browsing-context group), and no amount of waiting will fix it —
+                // adoptNode can never work.
+                doc = null;
+                reachFailure = e;
+            }
+
+            if (doc && doc.readyState !== 'loading') {
+                // Only ever adopt into the document we actually navigated TO.
+                // about:blank reports readyState 'complete' from the moment
+                // window.open() returns, and adopting into it means the panel is
+                // destroyed when /pane replaces it a moment later.
+                const href = (doc.location && doc.location.href) || '';
+                const isPaneDoc = href.indexOf('/pane') >= 0;
+                if (isPaneDoc) {
+                    // Prefer pane.html's own root, but never fail for want of it —
+                    // a stale cached copy of the page (or a future rename) must not
+                    // leave the user with a blank window and no panel.
+                    const root = doc.getElementById('fb-pane-root') || doc.body;
+                    if (root) { onReady(root); return; }
+                }
+            }
+
+            if (performance.now() > deadline) {
+                let why;
+                if (reachFailure) {
+                    why = 'the pane window\'s document is NOT reachable from this window ('
+                        + reachFailure.name + ': ' + reachFailure.message
+                        + ') — it is in a separate process, so the element cannot be moved into it';
+                } else if (!doc) {
+                    why = 'the pane window exposed no document at all';
+                } else {
+                    why = 'the pane window never loaded /pane (it is showing '
+                        + ((doc.location && doc.location.href) || 'an unknown URL')
+                        + ', readyState ' + doc.readyState + ')';
+                }
+                onFail(new Error(why));
+                return;
+            }
             setTimeout(tick, 25);
         };
         tick();
@@ -107,6 +147,67 @@
 
         root.appendChild(doc.adoptNode(el));
         doc.title = spec.title + ' — fee[dB]ack';
+
+        // THE ELEMENT MUST LEAVE BEFORE THE DOCUMENT DIES.
+        //
+        // When the user closes a pane window, its document is torn down — and the
+        // panel is inside it. The node itself survives (we hold a reference) and
+        // comes home looking perfect: right markup, right classes, right size. But
+        // it comes home DEAD: every event listener in the subtree is gone with the
+        // document that hosted them. A panel that renders and does nothing.
+        //
+        // The `closed` poll cannot save us: by the time `w.closed` is true, the
+        // document is already gone. `beforeunload` fires while it is still alive, so
+        // this is the last moment we can get the element out — and panes.close()
+        // adopts it back into the main document synchronously.
+        //
+        // We attach it HERE, not when the window was opened: back then the window
+        // still held its throwaway about:blank document, and a listener registered
+        // on that is discarded when /pane replaces it.
+        w.addEventListener('beforeunload', () => {
+            if (panes.isOpen(spec.id)) panes.close(spec.id);
+        });
+
+        // THE ELEMENT MUST LEAVE BEFORE THE DOCUMENT DIES.
+        //
+        // When the user closes a pane window, its document is torn down — and the
+        // panel is inside it. The node itself survives (we hold a reference) and
+        // comes home looking perfect: right markup, right classes, right size. But
+        // it comes home DEAD: every event listener in the subtree is gone with the
+        // document that hosted them. A panel that renders and does nothing.
+        //
+        // The `closed` poll cannot save us: by the time `w.closed` is true, the
+        // document is already gone. `beforeunload` fires while it is still alive, so
+        // this is the last moment we can get the element out — and panes.close()
+        // adopts it back into the main document synchronously.
+        //
+        // We attach it HERE, not when the window was opened: back then the window
+        // still held its throwaway about:blank document, and a listener registered
+        // on that is discarded when /pane replaces it.
+        w.addEventListener('beforeunload', () => {
+            if (panes.isOpen(spec.id)) panes.close(spec.id);
+        });
+
+        // Measure LATE. The pane window has not laid out yet at this point (it is
+        // still being created and shown), so anything read now reports 0x0 whether
+        // or not there is a real problem.
+        setTimeout(() => {
+            if (w.closed || !el.isConnected) return;
+            const view = doc.defaultView;
+            const cs = view.getComputedStyle(el);
+            const rootCs = view.getComputedStyle(root);
+            console.info('[panes] adopted', spec.id,
+                '| el:', el.id || el.className,
+                '| size:', el.offsetWidth + 'x' + el.offsetHeight,
+                '| display:', cs.display, '| visibility:', cs.visibility, '| opacity:', cs.opacity,
+                '| position:', cs.position, '| w/h:', cs.width + '/' + cs.height,
+                '| children:', el.childElementCount,
+                '| hidden attr:', el.hasAttribute('hidden'),
+                '| inline style:', el.getAttribute('style') || '(none)',
+                '| root size:', root.offsetWidth + 'x' + root.offsetHeight, '/', rootCs.display,
+                '| window inner:', view.innerWidth + 'x' + view.innerHeight,
+                '| styles:', doc.querySelectorAll('link[rel="stylesheet"], style').length);
+        }, 400);
     }
 
     function place(spec, el) {
