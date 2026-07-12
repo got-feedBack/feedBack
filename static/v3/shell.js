@@ -48,6 +48,7 @@
         // above. Screens are injected async by the plugin loader, so go()'s
         // plugin- guard applies.
         { key: 'virtuoso',    screen: 'plugin-virtuoso',    label: 'Virtuoso - Practice', group: null, icon: 'target' },
+        { key: 'career',      screen: 'plugin-career',      label: 'Career',      group: null,      icon: 'trophy' },
         { key: 'rig_builder', screen: 'plugin-rig_builder', label: 'Rig Builder', group: null,      icon: 'amp' },
         { key: 'editor',      screen: 'plugin-editor',      label: 'Song Editor', group: null,      icon: 'edit' },
         { key: 'audio_engine', screen: 'plugin-audio_engine', label: 'Audio', group: null,        icon: 'amp' },
@@ -60,6 +61,7 @@
     // that group. Each is gated on the plugin actually being installed.
     const PROMOTED_PLUGINS = [
         { navKey: 'virtuoso',    pluginId: 'virtuoso',    slotId: 'v3-nav-virtuoso',    anchorAfter: 'feedbarcade' },
+        { navKey: 'career',      pluginId: 'career',      slotId: 'v3-nav-career',      anchorAfter: 'feedbarcade' },
         { navKey: 'rig_builder', pluginId: 'rig_builder', slotId: 'v3-nav-rig-builder', anchorAfter: 'saved' },
         { navKey: 'editor',      pluginId: 'editor',      slotId: 'v3-nav-editor',     anchorAfter: 'songs' },
         { navKey: 'audio_engine', pluginId: 'audio_engine', slotId: 'v3-nav-audio-engine', anchorAfter: 'settings' },

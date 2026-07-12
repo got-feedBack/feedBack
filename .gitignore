@@ -24,6 +24,9 @@ plugins/*/
 !plugins/achievements/
 !plugins/achievements/**
 plugins/achievements/__pycache__/
+!plugins/career/
+!plugins/career/**
+plugins/career/__pycache__/
 !plugins/highway_3d/
 !plugins/highway_3d/**
 plugins/highway_3d/__pycache__/
