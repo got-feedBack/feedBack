@@ -13,6 +13,8 @@
 
     const API = '/api/plugins/career';
     const VENUE_OVERRIDE_KEY = 'feedBack-career-venue';
+    const NO_VENUE = '__none__';
+    const PREV_VIZ_KEY = 'feedBack-career-prev-viz';
     const POLL_MS = 2000;
 
     let _state = null;
@@ -46,11 +48,12 @@
         const gen = ++_manifestReqGen;
         const unlocked = state.venues.filter((v) => v.unlocked);
         let venue = null;
-        try {
-            const override = localStorage.getItem(VENUE_OVERRIDE_KEY);
+        let override = null;
+        try { override = localStorage.getItem(VENUE_OVERRIDE_KEY); } catch (_) { /* ok */ }
+        if (override !== NO_VENUE) {
             venue = unlocked.find((v) => v.id === override && v.installed) || null;
-        } catch (_) { /* ok */ }
-        if (!venue) venue = lastOf(unlocked.filter((v) => v.installed));
+            if (!venue) venue = lastOf(unlocked.filter((v) => v.installed));
+        }
         if (!venue) {
             if (_appliedManifestVenue !== null) {
                 _appliedManifestVenue = null;
@@ -82,8 +85,12 @@
             action = `<div class="career-bar-track mb-1" style="height:0.375rem"><div class="career-bar-fill" style="width:${pct}%"></div></div>
                 <div class="text-xs text-gray-400">Downloading… ${pct}%</div>`;
         } else if (v.installed) {
+            const active = localStorage.getItem(VENUE_OVERRIDE_KEY) === v.id;
+            const main = active
+                ? `<button data-career-unselect="1" class="career-btn career-btn-ghost">Leave venue</button>`
+                : `<button data-career-play="${esc(v.id)}" class="career-btn career-btn-primary">Play here</button>`;
             action = `<div class="flex items-center gap-2">
-                <button data-career-play="${esc(v.id)}" class="career-btn career-btn-primary">Play here</button>
+                ${main}
                 <button data-career-delete="${esc(v.id)}" class="career-btn career-btn-ghost">Remove pack</button>
             </div>`;
         } else if (v.has_pack) {
@@ -225,8 +232,27 @@
             fetch(`${API}/packs/${delBtn.dataset.careerDelete}`, { method: 'DELETE' })
                 .then(refresh);
         } else if (playBtn) {
-            try { localStorage.setItem(VENUE_OVERRIDE_KEY, playBtn.dataset.careerPlay); } catch (_) { /* ok */ }
+            try {
+                localStorage.setItem(VENUE_OVERRIDE_KEY, playBtn.dataset.careerPlay);
+                // Selecting a venue makes the Venue visualization the default;
+                // remember what the user had so Leave venue can restore it.
+                const cur = localStorage.getItem('vizSelection');
+                if (cur && cur !== 'venue') localStorage.setItem(PREV_VIZ_KEY, cur);
+                localStorage.setItem('vizSelection', 'venue');
+                if (typeof window.setViz === 'function') window.setViz('venue');
+            } catch (_) { /* ok */ }
             _appliedManifestVenue = null; // force manifest re-push
+            refresh();
+        } else if (e.target.closest('[data-career-unselect]')) {
+            try {
+                localStorage.setItem(VENUE_OVERRIDE_KEY, NO_VENUE);
+                const prev = localStorage.getItem(PREV_VIZ_KEY);
+                if (prev) {
+                    localStorage.setItem('vizSelection', prev);
+                    if (typeof window.setViz === 'function') window.setViz(prev);
+                }
+            } catch (_) { /* ok */ }
+            _appliedManifestVenue = null;
             refresh();
         }
     }

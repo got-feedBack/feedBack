@@ -35,7 +35,7 @@ from fastapi.responses import FileResponse
 
 PLUGIN_ID = "career"
 VENUE_ID_RE = re.compile(r"^[a-z0-9_-]{1,40}$")
-PACK_FILENAME_RE = re.compile(r"^[a-z0-9_-]{1,64}\.(mp4|webm|json)$")
+PACK_FILENAME_RE = re.compile(r"^[a-z0-9_-]{1,64}\.(mp4|webm|mp3|json)$")
 REQUIRED_LOOPS = ("bored", "neutral", "engaged", "ecstatic")
 DOWNLOAD_CHUNK = 1024 * 256
 
@@ -109,13 +109,16 @@ def _validate_pack_dir(pack_dir: Path):
     loops = manifest.get("loops") or {}
     for state in REQUIRED_LOOPS:
         name = loops.get(state)
-        if not name or not PACK_FILENAME_RE.match(name):
+        if not name or not PACK_FILENAME_RE.fullmatch(name):
             raise ValueError(f"manifest is missing the '{state}' loop")
         if not (pack_dir / name).is_file():
             raise ValueError(f"loop file '{name}' missing from pack")
     for name in (manifest.get("stingers") or {}).values():
-        if name and (not PACK_FILENAME_RE.match(name) or not (pack_dir / name).is_file()):
+        if name and (not PACK_FILENAME_RE.fullmatch(name) or not (pack_dir / name).is_file()):
             raise ValueError(f"stinger file '{name}' invalid or missing")
+    for name in (manifest.get("intro") or {}).values():
+        if name and (not PACK_FILENAME_RE.fullmatch(name) or not (pack_dir / name).is_file()):
+            raise ValueError(f"intro file '{name}' invalid or missing")
 
 
 def _download_pack(venue_id, pack, progress):
@@ -149,7 +152,7 @@ def _download_pack(venue_id, pack, progress):
                 if info.is_dir():
                     continue
                 name = Path(info.filename).name
-                if name != info.filename or not PACK_FILENAME_RE.match(name):
+                if name != info.filename or not PACK_FILENAME_RE.fullmatch(name):
                     raise ValueError(f"unexpected file in pack: {info.filename!r}")
                 with zf.open(info) as src, open(extract_dir / name, "wb") as dst:
                     shutil.copyfileobj(src, dst)
@@ -205,7 +208,7 @@ def setup(app, context):
 
     @app.post(f"/api/plugins/{PLUGIN_ID}/packs/{{venue_id}}/download")
     def start_download(venue_id: str):
-        venue = _venue(venue_id) if VENUE_ID_RE.match(venue_id) else None
+        venue = _venue(venue_id) if VENUE_ID_RE.fullmatch(venue_id) else None
         if venue is None:
             raise HTTPException(404, "Unknown venue.")
         pack = venue.get("pack")
@@ -227,7 +230,7 @@ def setup(app, context):
 
     @app.delete(f"/api/plugins/{PLUGIN_ID}/packs/{{venue_id}}")
     def delete_pack(venue_id: str):
-        if not VENUE_ID_RE.match(venue_id) or _venue(venue_id) is None:
+        if not VENUE_ID_RE.fullmatch(venue_id) or _venue(venue_id) is None:
             raise HTTPException(404, "Unknown venue.")
         with _lock:
             running = _state["downloads"].get(venue_id)
@@ -239,7 +242,7 @@ def setup(app, context):
 
     @app.get(f"/api/plugins/{PLUGIN_ID}/venues/{{venue_id}}/{{filename}}")
     async def get_pack_file(venue_id: str, filename: str):
-        if not VENUE_ID_RE.match(venue_id) or not PACK_FILENAME_RE.match(filename):
+        if not VENUE_ID_RE.fullmatch(venue_id) or not PACK_FILENAME_RE.fullmatch(filename):
             raise HTTPException(404, "Not found.")
         path = _venue_dir(venue_id) / filename
         # Defense-in-depth beyond the regexes (same recipe as highway_3d):
@@ -251,7 +254,7 @@ def setup(app, context):
             raise HTTPException(404, "Not found.")
         if not resolved.is_file():
             raise HTTPException(404, "Not found.")
-        media = {"mp4": "video/mp4", "webm": "video/webm",
+        media = {"mp4": "video/mp4", "webm": "video/webm", "mp3": "audio/mpeg",
                  "json": "application/json"}[resolved.suffix.lstrip(".").lower()]
         return FileResponse(
             resolved,
