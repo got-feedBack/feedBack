@@ -322,7 +322,11 @@
         if (!_venueActive || !_manifest) return;
         bindVideosToRenderer();
         const d = (e && e.detail) || {};
-        if (Number.isFinite(Number(d.accuracyPct))) _lastAccuracyPct = Number(d.accuracyPct);
+        // Number(null) === 0: HUD reset events (accuracyPct: null) must not
+        // wipe the value the end-of-song stinger reads via stats:recorded.
+        if (d.accuracyPct != null && Number.isFinite(Number(d.accuracyPct))) {
+            _lastAccuracyPct = Number(d.accuracyPct);
+        }
         const streak = Number(d.streak) || 0;
         const sting = stingerForStreak(_prevStreak, streak);
         _prevStreak = streak;
