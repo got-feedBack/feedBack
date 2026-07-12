@@ -225,6 +225,21 @@
         wins.set(spec.id, w);
         _startReaper();
 
+        // Take the element out of the document NOW, not when the window is ready.
+        //
+        // Everything below this line is async: the window has to load /pane before
+        // there is anything to adopt into. But the manager emits `panes:opened` as
+        // soon as we return, and the chip reacts by putting its "popped out" stub
+        // where the element used to be — so for that whole gap the user would see
+        // BOTH the real panel and a stub claiming it had left. On a window that
+        // never loads, that lasts the full 10s timeout.
+        //
+        // Detaching is not destructive: the node keeps its owner document (this
+        // one), its listeners and its closures. It is simply out of the tree,
+        // waiting — and if the window never loads, closePane() puts it straight
+        // back at its home.
+        el.remove();
+
         _whenReady(w, (root) => {
             try { _adopt(w, root, spec, el); }
             catch (e) {
