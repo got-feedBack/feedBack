@@ -345,7 +345,15 @@
         machine.reset();
         _prevStreak = 0;
         _lastAccuracyPct = null;
-        if (_venueActive && _manifest && !_stingerUntilEnded) {
+        // Abort any stinger/pending state from the previous song: its ended
+        // handler must not fade back into the old song's layers.
+        cancelFade();
+        _stingerGen++;
+        _stingerUntilEnded = false;
+        _pendingLoop = null;
+        _loadingLoop = null;
+        _fadingLoop = null;
+        if (_venueActive && _manifest) {
             showLoop(machine.current, FADE_MS);
         }
     }
