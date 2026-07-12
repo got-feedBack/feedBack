@@ -373,6 +373,10 @@
             setVideo(1, null);
         }
         _boundToRenderer = false;
+        // Mix and active layer must reset together: mix 0 shows layer 0, so a
+        // restart that left _activeLayer at 1 would flash layer 0's stale
+        // frame until the new loop loads.
+        _activeLayer = 0;
         setMix(0);
     }
 
