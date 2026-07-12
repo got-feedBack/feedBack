@@ -105,8 +105,61 @@ export let _settingsOriginScreen = 'home';
 
 // ── Screen Navigation ─────────────────────────────────────────────────────
 export async function showScreen(id) {
+    // ── 'home' is the LEGACY library screen. Always route it to the v3 Songs list. ──
+    //
+    // The v3 shell replaced #home with #v3-songs. That mapping DID exist — but only inside
+    // wrappers on `window.showScreen`, and only for callers that go through `window`:
+    //
+    //     app.js publishes the raw fn  ->  shell.js wraps it (adding the mapping)
+    //                                  ->  the stems plugin wraps it AGAIN, capturing whatever
+    //                                      happened to be there at the time
+    //
+    // Two ways that fails, and testers hit both:
+    //
+    //   1. ORDER. Three independent parties monkey-patch window.showScreen, each capturing the
+    //      current value. Plugins load ASYNCHRONOUSLY, so the chain links up in whatever order
+    //      the race settles — and any capture taken before shell.js installs, or any
+    //      re-assignment after it, silently drops the mapping.
+    //
+    //   2. THE INTERNAL CALLERS NEVER TOUCHED window.showScreen AT ALL. closeCurrentSong and the
+    //      Esc-from-settings shortcut call the IMPORTED showScreen directly, so no wrapper ever
+    //      sees them. Verified in a browser: the unwrapped function with 'home' lands on the dead
+    //      legacy screen every single time.
+    //
+    // Hence "randomly, when moving to the library from another menu option" — and "never when a
+    // song ends", because closeCurrentSong resolves its target through _resolvePlayerOrigin(),
+    // which already applies this mapping.
+    //
+    // So it lives HERE now: ONE guard in the function every caller routes through, rather than a
+    // chain of monkey-patches that must each remember.
+    //
+    // ONLY 'home'. NOT 'v3-home'. _resolvePlayerOrigin() maps BOTH — correctly, because it
+    // computes where to RETURN TO after a song, and coming back to the Songs list from the
+    // dashboard is the right behaviour. Copying that condition here was a [P1] (Codex caught it):
+    // #v3-home is the v3 DASHBOARD, a real screen the shell's Home nav, the onboarding tour and
+    // the dashboard re-render listener all target. Redirecting it would make Home unreachable.
+    //
+    // A legacy alias is not the same thing as a return target.
+    if (id === 'home' && document.getElementById('v3-songs')) {
+        id = 'v3-songs';
+    }
+
     // Capture the previous screen before changing active classes
     const prevScreenId = document.querySelector('.screen.active')?.id;
+
+    // ── screen:changing — emitted BEFORE any of the work below ──────────────────
+    //
+    // Timing matters here, and Codex caught me getting it wrong. The stems plugin used to
+    // monkey-patch window.showScreen so it could tear down its audio graph BEFORE navigation
+    // began. screen:changed fires at the very END of this function — after awaiting library and
+    // provider loads — so moving that plugin onto it would have delayed teardown behind a slow
+    // fetch, or skipped it entirely if the fetch threw. Stems would keep playing on a non-player
+    // screen.
+    //
+    // So there are two events, and the distinction is the whole point:
+    //     screen:changing  — before anything happens. "I am leaving `from`." Cancel/teardown here.
+    //     screen:changed   — after the DOM and data are settled. "I am on `id`."
+    if (window.feedBack) window.feedBack.emit('screen:changing', { id, from: prevScreenId || null });
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     document.getElementById(id).classList.add('active');
     // Mark the next render as a screen-entry so it scrolls the
@@ -186,7 +239,15 @@ export async function showScreen(id) {
         setPlayButtonState(false);
     }
     window.scrollTo(0, 0);
-    if (window.feedBack) window.feedBack.emit('screen:changed', { id });
+    // `from` is the screen we just LEFT. Without it, "I am leaving the player" is not
+    // expressible from an event, and the only way to express it was to WRAP window.showScreen —
+    // which is what shell.js and the stems plugin both did, and why the library intermittently
+    // showed the legacy screen (#923, #924): three parties patching one global, each capturing
+    // whatever was there at the time, in whatever order the plugin loads settled.
+    //
+    // Additive: every existing listener (app.js, audio-mixer.js, tour-engine.js) reads `id` and
+    // is unaffected.
+    if (window.feedBack) window.feedBack.emit('screen:changed', { id, from: prevScreenId || null });
 }
 
 export let currentFilename = '';

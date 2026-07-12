@@ -5,12 +5,10 @@ accuracy across arrangements crosses 0/1/2/3 of the thresholds in
 ``venues.json`` (data-driven so tuning never touches code). Cumulative
 stars unlock venue tiers (bar → club → arena).
 
-Venue packs (crowd-loop videos rendered offline in UE) are heavyweight and
-never ship with the app: ``venues.json`` points at a release asset per
-venue, downloaded on demand into ``CONFIG_DIR/plugin_uploads/career/venues/
-<id>/`` on a background thread (constitution: nothing heavy inline on the
-request path), sha256-verified, then served back with the same
-FileResponse/no-cache recipe as highway_3d's custom-video route.
+Venue packs (crowd-loop videos rendered offline in UE) may be bundled with
+the plugin under ``venue-packs/<id>/`` or downloaded on demand into
+``CONFIG_DIR/plugin_uploads/career/venues/<id>/``. Downloaded packs override
+bundled packs so release assets can replace a built-in starter venue.
 
 Endpoints (all under /api/plugins/career/):
   GET    /state                       stars + per-venue unlock/install/download status
@@ -42,6 +40,7 @@ DOWNLOAD_CHUNK = 1024 * 256
 _lock = threading.Lock()
 _state = {
     "content": None,        # parsed venues.json
+    "plugin_dir": None,     # plugin root; bundled packs live below it
     "venues_dir": None,     # CONFIG_DIR/plugin_uploads/career/venues
     "meta_db": None,        # MetadataDB (song_stats reads are lock-free / WAL)
     "log": logging.getLogger("feedBack.plugin.career"),
@@ -60,8 +59,27 @@ def _venue_dir(venue_id) -> Path:
     return _state["venues_dir"] / venue_id
 
 
+def _bundled_venue_dir(venue_id) -> Path:
+    return _state["plugin_dir"] / "venue-packs" / venue_id
+
+
+def _pack_dir(venue_id):
+    """Runtime pack location: downloaded override first, bundled fallback."""
+    local = _venue_dir(venue_id)
+    if (local / "manifest.json").is_file():
+        return local
+    bundled = _bundled_venue_dir(venue_id)
+    if (bundled / "manifest.json").is_file():
+        return bundled
+    return local
+
+
 def _installed(venue_id):
-    return (_venue_dir(venue_id) / "manifest.json").is_file()
+    return (_pack_dir(venue_id) / "manifest.json").is_file()
+
+
+def _bundled(venue_id):
+    return (_bundled_venue_dir(venue_id) / "manifest.json").is_file()
 
 
 def _stars():
@@ -174,12 +192,16 @@ def _download_pack(venue_id, pack, progress):
 
 def setup(app, context):
     plugin_dir = Path(__file__).resolve().parent
+    _state["plugin_dir"] = plugin_dir
     _state["content"] = json.loads((plugin_dir / "venues.json").read_text(encoding="utf-8"))
     _state["venues_dir"] = (
         Path(context["config_dir"]) / "plugin_uploads" / PLUGIN_ID / "venues")
     _state["venues_dir"].mkdir(parents=True, exist_ok=True)
     _state["meta_db"] = context.get("meta_db")
     _state["log"] = context.get("log") or _state["log"]
+    for v in _state["content"]["venues"]:
+        if _bundled(v["id"]):
+            _validate_pack_dir(_bundled_venue_dir(v["id"]))
 
     @app.get(f"/api/plugins/{PLUGIN_ID}/state")
     def get_state():
@@ -195,7 +217,8 @@ def setup(app, context):
                 "star_threshold": v["star_threshold"],
                 "unlocked": stars_total >= v["star_threshold"],
                 "installed": _installed(v["id"]),
-                "has_pack": bool(v.get("pack")),
+                "bundled": _bundled(v["id"]),
+                "has_pack": _bundled(v["id"]) or bool(v.get("pack")),
                 "download": dl,
             })
         return {
@@ -244,12 +267,13 @@ def setup(app, context):
     async def get_pack_file(venue_id: str, filename: str):
         if not VENUE_ID_RE.fullmatch(venue_id) or not PACK_FILENAME_RE.fullmatch(filename):
             raise HTTPException(404, "Not found.")
-        path = _venue_dir(venue_id) / filename
+        pack_dir = _pack_dir(venue_id)
+        path = pack_dir / filename
         # Defense-in-depth beyond the regexes (same recipe as highway_3d):
-        # the resolved path must stay inside the venues dir.
+        # the resolved path must stay inside the selected pack dir.
         try:
             resolved = path.resolve()
-            resolved.relative_to(_state["venues_dir"].resolve())
+            resolved.relative_to(pack_dir.resolve())
         except (OSError, ValueError):
             raise HTTPException(404, "Not found.")
         if not resolved.is_file():

@@ -89,9 +89,12 @@
             const main = active
                 ? `<button data-career-unselect="1" class="career-btn career-btn-ghost">Leave venue</button>`
                 : `<button data-career-play="${esc(v.id)}" class="career-btn career-btn-primary">Play here</button>`;
+            const remove = v.bundled
+                ? ''
+                : `<button data-career-delete="${esc(v.id)}" class="career-btn career-btn-ghost">Remove pack</button>`;
             action = `<div class="flex items-center gap-2">
                 ${main}
-                <button data-career-delete="${esc(v.id)}" class="career-btn career-btn-ghost">Remove pack</button>
+                ${remove}
             </div>`;
         } else if (v.has_pack) {
             const err = dl.status === 'error'
