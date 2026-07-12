@@ -970,12 +970,11 @@ async def startup_events():
     else:
         threading.Thread(target=_load_plugins_background, daemon=True).start()
 
-    # NB the `or ... == "1" and not started` shape below is PRESERVED VERBATIM: `and` binds
-    # tighter than `or`, so the re-entry guard is dead whenever the env var is truthy, and a
-    # second startup leaks a janitor thread. That is issue #902 — not fixed here, because a
-    # carve whose value is being provably behaviour-neutral is not the place to change
-    # behaviour.
-    if getenv_compat("FEEDBACK_DEMO_MODE") or getenv_compat("FEEDBACK_DEMO_MODE") == "1" and not demo_mode.janitor_started():
+    # start_janitor() is idempotent (#902). The re-entry guard used to be spelled out here
+    # as `... or ... == "1" and not started`, which parses as `A or (B and C)` — so the
+    # not-already-started half never ran, and a second startup leaked a janitor thread. The
+    # guard lives inside start_janitor() now, where no caller can get precedence wrong.
+    if demo_mode.demo_mode_enabled():
         demo_mode.start_janitor()
 
     # Start background metadata scan

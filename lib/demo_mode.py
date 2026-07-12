@@ -288,17 +288,55 @@ def demo_mode_enabled() -> bool:
 
 
 def start_janitor() -> None:
-    """Start the hourly session janitor. Called from server.py's startup hook.
+    """Start the hourly session janitor, at most one at a time. server.py's startup hook.
 
-    NB the caller's guard is the buggy one described in this module's header (issue #902).
-    Behaviour is preserved verbatim: this starts a thread every time it is called.
+    ━━━ THE GUARD ASKS "IS A HEALTHY JANITOR RUNNING?", AND NOTHING ELSE ━━━
+
+    Three ways to get this wrong, and #902 plus two Codex passes found all three:
+
+    1. NO GUARD (the original #902 bug). The re-entry check lived at the call site as
+       `A or (B and C)`, so it never ran, and a second startup started a SECOND thread,
+       overwrote the handle, and left the first to fire hooks forever, unjoinable.
+
+    2. GUARD ON THE FLAG (`if _DEMO_JANITOR_STARTED: return`). stop_janitor() deliberately
+       leaves that flag True when a hook outruns its join timeout — so once that hook
+       finishes and the thread exits, the flag is stale and a later startup would refuse to
+       start a replacement. Demo cleanup silently dead for the rest of the process.
+
+    3. GUARD ON LIVENESS ALONE (`if thread.is_alive(): return`). A timed-out stop leaves the
+       old thread ALIVE BUT DOOMED — its stop event is set, and it exits the moment its
+       current hook returns. Treating it as a running janitor means the replacement is never
+       started, and we are back at (2) a second later.
+
+    So a janitor counts as running only if its thread is alive AND it has not been told to
+    stop.
+
+    ━━━ AND WHY EACH JANITOR OWNS ITS STOP EVENT ━━━
+
+    This used to `_DEMO_JANITOR_STOP.clear()` a single shared Event. If a replacement were
+    started while a doomed thread was still finishing a hook, clearing the shared event would
+    RESURRECT it — it loops back to `stop.wait()`, sees the flag cleared, and carries on.
+    Two janitors, which is the exact bug we started from.
+
+    A fresh Event per janitor makes that impossible: the old thread waits on its OWN event,
+    which stays set forever, so it can only exit.
     """
-    global _DEMO_JANITOR_STARTED, _DEMO_JANITOR_THREAD
+    global _DEMO_JANITOR_STARTED, _DEMO_JANITOR_THREAD, _DEMO_JANITOR_STOP
+
+    thread = _DEMO_JANITOR_THREAD
+    if thread is not None and thread.is_alive() and not _DEMO_JANITOR_STOP.is_set():
+        return   # a healthy janitor is already running
+
+    # Either there is no janitor, or the previous one is dead / dying. Give the new one its
+    # OWN stop event so the old one stays stopped no matter what we do to ours.
+    stop = threading.Event()
+    _DEMO_JANITOR_STOP = stop
     _DEMO_JANITOR_STARTED = True
-    _DEMO_JANITOR_STOP.clear()
 
     def _janitor():
-        while not _DEMO_JANITOR_STOP.wait(timeout=3600):
+        # Closes over `stop`, NOT the module global — a later start_janitor() rebinds
+        # _DEMO_JANITOR_STOP, and this thread must keep watching the event it was born with.
+        while not stop.wait(timeout=3600):
             with _DEMO_JANITOR_HOOKS_LOCK:
                 hooks = list(_DEMO_JANITOR_HOOKS)
             for hook in hooks:
