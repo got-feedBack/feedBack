@@ -53,6 +53,11 @@
         let lastSwitchAt = -Infinity;
         return {
             get current() { return current; },
+            reset() {
+                current = "neutral";
+                candidate = null;
+                lastSwitchAt = -Infinity;
+            },
             // Feed the latest perf state; returns the new crowd state when a
             // transition commits, else null.
             update(perfState, nowMs) {
@@ -328,6 +333,15 @@
         }
     }
 
+    function onSongLoaded() {
+        machine.reset();
+        _prevStreak = 0;
+        _lastAccuracyPct = null;
+        if (_venueActive && _manifest && !_stingerUntilEnded) {
+            showLoop(machine.current, FADE_MS);
+        }
+    }
+
     function onStatsRecorded() {
         if (!_venueActive || !_manifest) return;
         // stats:recorded carries only {filename, arrangement} — the accuracy
@@ -422,6 +436,9 @@
         if (sm && typeof sm.on === 'function') {
             sm.on('v3:live-performance-state', onPerformanceState);
             sm.on('stats:recorded', onStatsRecorded);
+            // A new song must not inherit the previous song's crowd mood
+            // through the hysteresis/dwell window.
+            sm.on('song:loaded', onSongLoaded);
         }
         const dev = readDevManifest();
         if (dev && !_manifest) setManifest(dev);
