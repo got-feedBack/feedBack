@@ -15,7 +15,7 @@
 // are deliberately left behind. They need an explicit hwState parameter threaded through 53
 // call sites, which is a real change and belongs in its own commit, not smuggled in beside a
 // provably-identical move.
-import { VISIBLE_SECONDS, Z_CAM, Z_MAX } from './highway-constants.js';
+import { VISIBLE_SECONDS, Z_CAM, Z_MAX, _SHIMMER_LUT_SIZE } from './highway-constants.js';
 
 // ── Projection ───────────────────────────────────────────────────────
 export function project(tOffset) {
@@ -76,4 +76,28 @@ export function roundRect(ctx, x, y, w, h, r) {
     ctx.lineTo(x, y + r);
     ctx.quadraticCurveTo(x, y, x + r, y);
     ctx.closePath();
+}
+
+
+// ── The shimmer noise LUT ───────────────────────────────────────────────────────
+//
+// A DETERMINISTIC xorshift table: no randomness, no state, byte-for-byte identical for every
+// highway instance. Unlike the three per-instance caches that came out of the drawing layer (a
+// warn-once Set, a chord WeakMap, a lyric-width Map — all MUTATED, all lifted onto hwState so
+// two panels cannot stomp each other), this one is not merely SAFE to share but BETTER shared:
+// built once for the page instead of once per panel.
+//
+// MUTABILITY, NOT LOCATION, IS WHAT DECIDES WHERE A THING BELONGS.
+const _shimmerLut = new Float32Array(_SHIMMER_LUT_SIZE);
+for (let i = 0; i < _SHIMMER_LUT_SIZE; i++) {
+    let x = (i + 1) | 0;       // +1 dodges the all-zero xorshift trap
+    x ^= x << 13;
+    x ^= x >>> 17;
+    x ^= x << 5;
+    _shimmerLut[i] = (x >>> 0) / 4294967296;
+}
+
+export function _shimmerNoise(seed) {
+    // Mask works only because _SHIMMER_LUT_SIZE is a power of two.
+    return _shimmerLut[(seed >>> 0) & (_SHIMMER_LUT_SIZE - 1)];
 }

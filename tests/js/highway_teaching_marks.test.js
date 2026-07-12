@@ -32,7 +32,7 @@ const fingerLabel2D = loadFn('static/js/highway-geometry.js', 'teachingFingerLab
 const degreeLabel2D = loadFn('static/js/highway-geometry.js', 'teachingDegreeLabel');
 const fingerLabel3D = loadFn('plugins/highway_3d/screen.js', 'teachingFingerLabel');
 const degreeLabel3D = loadFn('plugins/highway_3d/screen.js', 'teachingDegreeLabel');
-const strumGroupBuckets = loadFn('static/highway.js', 'strumGroupBuckets');
+const strumGroupBuckets = loadFn('static/js/highway-draw.js', 'strumGroupBuckets');
 
 // ── teachingFingerLabel (fg) ─────────────────────────────────────────────────
 
