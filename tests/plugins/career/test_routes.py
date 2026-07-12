@@ -76,7 +76,8 @@ def test_download_unknown_venue_404s(client):
 
 
 def test_download_without_published_pack_404s(client):
-    # venues.json ships pack: null until packs are released.
+    # Bundled packs are already installed; download still requires a published
+    # remote pack entry.
     assert client.post("/api/plugins/career/packs/bar/download").status_code == 404
 
 
@@ -86,28 +87,46 @@ def test_download_locked_venue_403s(client, monkeypatch):
     assert client.post("/api/plugins/career/packs/club/download").status_code == 403
 
 
-def test_pack_file_serving_and_traversal_guard(client):
-    _install_fake_pack("bar")
+def test_bundled_bar_pack_is_installed_and_served(client):
+    state = client.get("/api/plugins/career/state").json()
+    bar = {v["id"]: v for v in state["venues"]}["bar"]
+    assert bar["installed"] is True
+    assert bar["bundled"] is True
+    assert bar["has_pack"] is True
+
     ok = client.get("/api/plugins/career/venues/bar/manifest.json")
     assert ok.status_code == 200
+    manifest = ok.json()
+    assert manifest["loops"]["ecstatic"] == "ecstatic.mp4"
+    assert manifest["intro"] == {"video": "intro.mp4", "audio": "bar-ambience.mp3"}
+    assert client.get("/api/plugins/career/venues/bar/intro.mp4").status_code == 200
+    audio = client.get("/api/plugins/career/venues/bar/bar-ambience.mp3")
+    assert audio.status_code == 200
+    assert audio.headers["content-type"].startswith("audio/mpeg")
+
+
+def test_pack_file_serving_and_traversal_guard(client):
+    _install_fake_pack("club")
+    ok = client.get("/api/plugins/career/venues/club/manifest.json")
+    assert ok.status_code == 200
     assert ok.json()["loops"]["ecstatic"] == "ecstatic.mp4"
-    video = client.get("/api/plugins/career/venues/bar/bored.mp4")
+    video = client.get("/api/plugins/career/venues/club/bored.mp4")
     assert video.status_code == 200
     assert video.headers["content-type"].startswith("video/mp4")
     assert video.headers["x-content-type-options"] == "nosniff"
     # Traversal / junk shapes never resolve.
     for bad in ("../manifest.json", "..%2Fmanifest.json", "x.sh", "MANIFEST.JSON"):
-        assert client.get(f"/api/plugins/career/venues/bar/{bad}").status_code == 404
-    assert client.get("/api/plugins/career/venues/../bar/manifest.json").status_code == 404
+        assert client.get(f"/api/plugins/career/venues/club/{bad}").status_code == 404
+    assert client.get("/api/plugins/career/venues/../club/manifest.json").status_code == 404
 
 
 def test_state_reports_installed_and_delete_removes(client):
-    _install_fake_pack("bar")
+    _install_fake_pack("club")
     state = client.get("/api/plugins/career/state").json()
-    assert {v["id"]: v["installed"] for v in state["venues"]}["bar"] is True
-    assert client.delete("/api/plugins/career/packs/bar").status_code == 200
+    assert {v["id"]: v["installed"] for v in state["venues"]}["club"] is True
+    assert client.delete("/api/plugins/career/packs/club").status_code == 200
     state = client.get("/api/plugins/career/state").json()
-    assert {v["id"]: v["installed"] for v in state["venues"]}["bar"] is False
+    assert {v["id"]: v["installed"] for v in state["venues"]}["club"] is False
 
 
 def test_download_worker_end_to_end(client, tmp_path):

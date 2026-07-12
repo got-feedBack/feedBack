@@ -33,6 +33,24 @@ test('venues.json defines the 3 ascending tiers with star thresholds', () => {
     }
 });
 
+test('bar venue pack ships with intro media in the plugin checkout', () => {
+    const packDir = path.join(PLUGIN_DIR, 'venue-packs', 'bar');
+    const manifest = JSON.parse(fs.readFileSync(path.join(packDir, 'manifest.json'), 'utf8'));
+    assert.deepEqual(Object.keys(manifest.loops).sort(),
+        ['bored', 'ecstatic', 'engaged', 'neutral']);
+    assert.equal(manifest.intro.video, 'intro.mp4');
+    assert.equal(manifest.intro.audio, 'bar-ambience.mp3');
+    for (const f of [
+        ...Object.values(manifest.loops),
+        ...Object.values(manifest.stingers),
+        manifest.intro.video,
+        manifest.intro.audio,
+    ]) {
+        const stat = fs.statSync(path.join(packDir, f));
+        assert.ok(stat.size > 0, `${f} must be present`);
+    }
+});
+
 test('shell promotes the career plugin into the sidebar', () => {
     const src = fs.readFileSync(SHELL_JS, 'utf8');
     assert.match(src, /key: 'career',\s*screen: 'plugin-career'/);
