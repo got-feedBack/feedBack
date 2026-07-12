@@ -318,22 +318,49 @@
         }
     }
 
-    // ── showScreen wrapper (idempotent rehydration — design/05 §Rehydration) ─
+    // ── Stay in sync with the active screen (idempotent rehydration — design/05) ─
+    //
+    // This USED to monkey-patch window.showScreen. It doesn't any more, and that is the point.
+    //
+    // Three parties were wrapping that one global — app.js publishes it, this wrapped it, and the
+    // stems plugin wrapped it again — each capturing whatever happened to be there at the time.
+    // Plugins load ASYNCHRONOUSLY, so the chain linked up in whatever order the race settled, and
+    // a capture taken before this installed silently dropped the home -> v3-songs mapping this
+    // wrapper carried. That is why the library intermittently showed the legacy screen (#923).
+    //
+    // The mapping lives inside showScreen() now, where no wrapper can lose it. And everything
+    // left here is just "the screen changed" — which showScreen already EMITS, and which app.js,
+    // audio-mixer.js and tour-engine.js have always listened for rather than patching.
+    //
+    // So: be a listener, like everyone else. window.showScreen is a plain function again.
     function installShowScreenHook() {
         const hooks = window.__feedBackV3ShellHooks || (window.__feedBackV3ShellHooks = {});
-        hooks.syncActive = syncActive; // always point at the latest impl
+        hooks.syncActive = syncActive;   // always point at the latest impl
         if (hooks.installed) return;
         hooks.installed = true;
-        hooks.baseShowScreen = window.showScreen;
-        window.showScreen = function (id) {
-            // Route every "go to the library" navigation to the v3 native Songs
-            // screen instead of the legacy #home library, so player-close,
-            // settings-back, the hidden legacy navbar, etc. all stay in v3.
-            const target = (id === 'home') ? 'v3-songs' : id;
-            const r = hooks.baseShowScreen ? hooks.baseShowScreen.call(this, target) : undefined;
-            try { hooks.syncActive && hooks.syncActive(target); } catch (e) { /* non-fatal */ }
-            return r;
+
+        // RETRY IF THE BUS IS LATE. The old wrapper didn't need window.feedBack to exist; a
+        // listener does. Bailing out when it isn't ready yet would silently leave the sidebar
+        // highlight and topbar title frozen forever — a dead nav, with nothing thrown. (Codex
+        // caught the identical hole in the stems plugin's version of this.)
+        const wire = () => {
+            const bus = window.feedBack;
+            if (!bus || typeof bus.on !== 'function') {
+                // `feedBack:capabilities:ready` — capabilities.js:1536. NOT the slopsmith: name:
+                // that was the pre-DMCA event and NOTHING dispatches it any more, so a fallback
+                // keyed on it can never fire. Codex caught exactly that here. (The old alias is
+                // kept too, in case an older capabilities build is in play.)
+                window.addEventListener('feedBack:capabilities:ready', wire, { once: true });
+                window.addEventListener('slopsmith:capabilities:ready', wire, { once: true });
+                return;
+            }
+            bus.on('screen:changed', (ev) => {
+                const id = ev && ev.detail && ev.detail.id;
+                if (!id) return;
+                try { hooks.syncActive && hooks.syncActive(id); } catch (e) { /* non-fatal */ }
+            });
         };
+        wire();
     }
 
     // ── Boot ────────────────────────────────────────────────────────────────

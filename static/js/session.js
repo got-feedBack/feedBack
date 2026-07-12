@@ -146,6 +146,20 @@ export async function showScreen(id) {
 
     // Capture the previous screen before changing active classes
     const prevScreenId = document.querySelector('.screen.active')?.id;
+
+    // ── screen:changing — emitted BEFORE any of the work below ──────────────────
+    //
+    // Timing matters here, and Codex caught me getting it wrong. The stems plugin used to
+    // monkey-patch window.showScreen so it could tear down its audio graph BEFORE navigation
+    // began. screen:changed fires at the very END of this function — after awaiting library and
+    // provider loads — so moving that plugin onto it would have delayed teardown behind a slow
+    // fetch, or skipped it entirely if the fetch threw. Stems would keep playing on a non-player
+    // screen.
+    //
+    // So there are two events, and the distinction is the whole point:
+    //     screen:changing  — before anything happens. "I am leaving `from`." Cancel/teardown here.
+    //     screen:changed   — after the DOM and data are settled. "I am on `id`."
+    if (window.feedBack) window.feedBack.emit('screen:changing', { id, from: prevScreenId || null });
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     document.getElementById(id).classList.add('active');
     // Mark the next render as a screen-entry so it scrolls the
@@ -225,7 +239,15 @@ export async function showScreen(id) {
         setPlayButtonState(false);
     }
     window.scrollTo(0, 0);
-    if (window.feedBack) window.feedBack.emit('screen:changed', { id });
+    // `from` is the screen we just LEFT. Without it, "I am leaving the player" is not
+    // expressible from an event, and the only way to express it was to WRAP window.showScreen —
+    // which is what shell.js and the stems plugin both did, and why the library intermittently
+    // showed the legacy screen (#923, #924): three parties patching one global, each capturing
+    // whatever was there at the time, in whatever order the plugin loads settled.
+    //
+    // Additive: every existing listener (app.js, audio-mixer.js, tour-engine.js) reads `id` and
+    // is unaffected.
+    if (window.feedBack) window.feedBack.emit('screen:changed', { id, from: prevScreenId || null });
 }
 
 export let currentFilename = '';
