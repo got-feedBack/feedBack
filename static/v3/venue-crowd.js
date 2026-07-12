@@ -216,10 +216,14 @@
         const gen = _stopGen;
         let settled = false;
         const settle = (ok) => {
-            if (settled || token !== video._fbCrowdToken || gen !== _stopGen) return;
+            if (settled) return;
             settled = true;
+            // Cleanup must run even for superseded loads or stale listeners
+            // accumulate on the two persistent elements; only the callback
+            // is gated on still being the current load.
             video.removeEventListener('canplaythrough', onReady);
             video.removeEventListener('error', onError);
+            if (token !== video._fbCrowdToken || gen !== _stopGen) return;
             cb(ok);
         };
         const onReady = () => settle(true);
