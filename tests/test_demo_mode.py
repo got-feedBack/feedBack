@@ -15,6 +15,7 @@ Covers:
 
 import importlib
 import sys
+import threading
 
 import demo_mode
 import pytest
@@ -616,3 +617,146 @@ def test_diag_cap_console_enforces_byte_cap(tmp_path, monkeypatch):
     finally:
         _cleanup(server, client)
 
+
+
+# ── #902: the janitor re-entry guard ────────────────────────────────────────────
+#
+# The guard in startup_events() read:
+#
+#     if getenv_compat("FEEDBACK_DEMO_MODE") or getenv_compat("FEEDBACK_DEMO_MODE") == "1" \
+#             and not _DEMO_JANITOR_STARTED:
+#
+# `and` binds tighter than `or`, so that is `A or (B and C)` — and the
+# not-already-started half never runs when the env var is truthy, which is the only case
+# that reaches it at all. A second startup started a SECOND janitor thread, overwrote the
+# handle, and shutdown then joined only the last one: the first leaked and kept firing
+# registered hooks hourly, forever.
+#
+# The guard now lives INSIDE start_janitor(), not at the call site — a caller cannot get
+# operator precedence wrong if there is nothing for it to get wrong.
+
+def _live_janitors():
+    return [t for t in threading.enumerate() if t.name == "demo-janitor" and t.is_alive()]
+
+
+def test_start_janitor_is_idempotent(monkeypatch):
+    """Two starts must not produce two threads. This is the #902 regression."""
+    monkeypatch.setattr(demo_mode, "_DEMO_JANITOR_STARTED", False)
+    monkeypatch.setattr(demo_mode, "_DEMO_JANITOR_THREAD", None)
+    before = len(_live_janitors())
+    try:
+        demo_mode.start_janitor()
+        first = demo_mode._DEMO_JANITOR_THREAD
+        demo_mode.start_janitor()          # <-- the second startup
+        second = demo_mode._DEMO_JANITOR_THREAD
+
+        assert first is second, (
+            "a second start_janitor() replaced the thread handle — the first thread is now "
+            "unreachable, will never be joined, and keeps running hooks forever (#902)"
+        )
+        assert len(_live_janitors()) == before + 1, (
+            f"expected exactly one janitor thread, found {len(_live_janitors()) - before}"
+        )
+    finally:
+        demo_mode.stop_janitor(timeout=2)
+
+
+def test_a_second_startup_does_not_leak_a_janitor(monkeypatch):
+    """The real shape of the bug: startup runs twice in one process."""
+    monkeypatch.setenv("FEEDBACK_DEMO_MODE", "1")
+    monkeypatch.setattr(demo_mode, "_DEMO_JANITOR_STARTED", False)
+    monkeypatch.setattr(demo_mode, "_DEMO_JANITOR_THREAD", None)
+    before = len(_live_janitors())
+    try:
+        for _ in range(3):
+            if demo_mode.demo_mode_enabled():
+                demo_mode.start_janitor()
+        assert len(_live_janitors()) == before + 1, "a repeated startup leaked janitor threads"
+    finally:
+        demo_mode.stop_janitor(timeout=2)
+        assert len(_live_janitors()) == before, "stop_janitor() did not join the thread"
+
+
+def test_a_timed_out_stop_does_not_disable_the_janitor_forever(monkeypatch):
+    """Codex [P2] on the first cut of the #902 fix.
+
+    stop_janitor() deliberately leaves _DEMO_JANITOR_STARTED True when a hook outruns the
+    join timeout, so a later startup can't spawn a second janitor beside a live one. But
+    that hook usually finishes a moment later: the thread exits, and the flag stays true.
+
+    A guard keyed on the FLAG would then refuse to start a replacement for the rest of the
+    process — demo-mode cleanup silently dead. Guarding on the thread's LIVENESS is what
+    makes both the double-start and the never-restart impossible.
+    """
+    before = len(_live_janitors())
+
+    # Simulate the aftermath of a timed-out stop: flag still set, thread already gone.
+    dead = threading.Thread(target=lambda: None, name="demo-janitor")
+    dead.start()
+    dead.join()
+    assert not dead.is_alive()
+    monkeypatch.setattr(demo_mode, "_DEMO_JANITOR_STARTED", True)
+    monkeypatch.setattr(demo_mode, "_DEMO_JANITOR_THREAD", dead)
+
+    try:
+        demo_mode.start_janitor()
+        assert len(_live_janitors()) == before + 1, (
+            "no replacement janitor was started — a stale STARTED flag from a timed-out "
+            "stop disabled demo-mode cleanup for the rest of the process"
+        )
+        assert demo_mode._DEMO_JANITOR_THREAD is not dead
+    finally:
+        demo_mode.stop_janitor(timeout=2)
+
+
+def test_a_replacement_starts_while_a_doomed_janitor_is_still_finishing_a_hook(monkeypatch):
+    """Codex [P2], second pass — the sharp window.
+
+    stop_janitor() times out while a hook is still running. The old thread is ALIVE but
+    DOOMED: its stop event is set, and it will exit the moment the hook returns. A guard
+    that keys on liveness alone treats it as a running janitor, skips the replacement, and
+    a second later there is no janitor at all.
+
+    It also pins the reason each janitor owns its OWN stop event: the old code cleared a
+    single SHARED Event on start, which would have RESURRECTED the doomed thread — it loops
+    back to wait(), sees the flag cleared, and carries on. Two janitors, which is the bug we
+    started from.
+    """
+    before = len(_live_janitors())
+
+    # A janitor mid-hook: alive, and already told to stop.
+    release = threading.Event()
+    old_stop = threading.Event()
+
+    def _stuck():
+        release.wait(timeout=5)          # pretend we're inside a slow hook
+
+    old = threading.Thread(target=_stuck, daemon=True, name="demo-janitor")
+    old.start()
+    old_stop.set()                       # stop_janitor() timed out and left this set
+    monkeypatch.setattr(demo_mode, "_DEMO_JANITOR_STARTED", True)
+    monkeypatch.setattr(demo_mode, "_DEMO_JANITOR_THREAD", old)
+    monkeypatch.setattr(demo_mode, "_DEMO_JANITOR_STOP", old_stop)
+
+    try:
+        demo_mode.start_janitor()
+
+        new = demo_mode._DEMO_JANITOR_THREAD
+        assert new is not old, (
+            "no replacement was started for a doomed janitor — once its hook returns the "
+            "process is left with no janitor at all"
+        )
+        assert new.is_alive()
+
+        # the old thread's own stop event must STILL be set: starting a replacement must not
+        # resurrect it
+        assert old_stop.is_set(), (
+            "the doomed janitor's stop event was cleared — it would loop back around and "
+            "keep running alongside the replacement. Two janitors."
+        )
+        assert demo_mode._DEMO_JANITOR_STOP is not old_stop, "the new janitor must own a fresh event"
+    finally:
+        release.set()
+        old.join(timeout=5)
+        demo_mode.stop_janitor(timeout=2)
+        assert len(_live_janitors()) == before
