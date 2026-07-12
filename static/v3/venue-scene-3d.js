@@ -96,6 +96,7 @@
         if (_active) {
             syncInstrumentPov();
             syncVenueMotion();
+            syncCrowd(true);
             return;
         }
         _active = true;
@@ -105,6 +106,17 @@
         setH3dMood(_lastMood);
         syncInstrumentPov();
         syncVenueMotion();
+        syncCrowd(true);
+    }
+
+    function syncCrowd(on) {
+        // Reactive crowd video layer (career mode) — inert without a pack.
+        try {
+            if (root && root.v3VenueCrowd &&
+                typeof root.v3VenueCrowd.setVenueActive === 'function') {
+                root.v3VenueCrowd.setVenueActive(!!on);
+            }
+        } catch (_) { /* visual-only */ }
     }
 
     function syncVenueMotion() {
@@ -128,6 +140,7 @@
         _assetsLoaded = false;
         _loadFailed = false;
         setH3dActive(false);
+        syncCrowd(false);
         syncPlaceholderVisibility();
     }
 

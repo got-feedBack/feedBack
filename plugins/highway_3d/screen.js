@@ -2418,6 +2418,13 @@
     let _venueSceneAssetsLoaded = false;
     let _venueSceneLoadFailed = false;
     const _venueTextureCache = new Map();
+    // Crowd video layers (career mode). venue-crowd.js owns the <video>
+    // elements and the crossfade timing; the renderer only maps them onto
+    // two planes in front of the static plate. _venueCrowdRev bumps on any
+    // element (re)assignment so update() knows to rebind textures.
+    const _venueCrowdVideos = [null, null];
+    let _venueCrowdMix = 0;
+    let _venueCrowdRev = 0;
 
     function _bgVenueMoodCoeffs(state) {
         const s = String(state || 'idle').toLowerCase();
@@ -2909,6 +2916,20 @@
     window.h3dVenueSceneSetMood = (state) => {
         _venueMoodState = String(state || 'idle').toLowerCase();
     };
+    // Crowd video layers (career mode) — see venue-crowd.js. Layer 0/1 are
+    // two coplanar backdrop planes; mix selects between them (0 → layer 0,
+    // 1 → layer 1) so the caller can crossfade loop videos.
+    window.h3dVenueBackdropSetVideo = (layer, videoEl) => {
+        const i = layer ? 1 : 0;
+        const el = videoEl || null;
+        if (_venueCrowdVideos[i] === el) return;
+        _venueCrowdVideos[i] = el;
+        _venueCrowdRev++;
+    };
+    window.h3dVenueBackdropSetMix = (mix) => {
+        const v = Number(mix);
+        _venueCrowdMix = Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0;
+    };
     window.h3dVenueSceneSetInstrumentPov = (input) => {
         const next = _venueResolvePovFromInput(input);
         if (_venueInstrumentPov === next) return;
@@ -3371,6 +3392,40 @@
                     () => _venueMarkFailed('failed to load small-club bg plate'),
                 );
 
+                // Crowd video planes (career mode): two crossfading layers
+                // just in front of the static plate (which stays mounted as
+                // the no-pack / load-failure fallback). Textures bind lazily
+                // in update() when venue-crowd.js assigns video elements.
+                state.crowd = { layers: [], rev: -1 };
+                for (let i = 0; i < 2; i++) {
+                    const geo = new T.PlaneGeometry(1, 1);
+                    const mat = new T.MeshBasicMaterial({
+                        color: 0xffffff, transparent: true, opacity: 0,
+                        depthWrite: false, fog: false,
+                    });
+                    const mesh = new T.Mesh(geo, mat);
+                    mesh.visible = false;
+                    // Layer 1 sits nearest so three.js's back-to-front
+                    // transparent sort draws it after layer 0.
+                    const layer = {
+                        mesh, geo, mat, tex: null, videoEl: null,
+                        cam: settings.cam,
+                        distance: BG_BACKDROP_DISTANCE * (i === 0 ? 1.04 : 1.03),
+                        lastAspect: 0, lastVisibleHeight: 0,
+                    };
+                    layer.applyCoverCrop = function () {
+                        if (!layer.videoEl || !layer.tex) return;
+                        _bgCoverCrop(
+                            layer.tex,
+                            layer.videoEl.videoWidth || 0,
+                            layer.videoEl.videoHeight || 0,
+                            layer.cam.aspect,
+                        );
+                    };
+                    scene.add(mesh);
+                    state.crowd.layers.push(layer);
+                }
+
                 const hazeGeo = new T.PlaneGeometry(280 * K, 40 * K);
                 const hazeMat = new T.MeshBasicMaterial({
                     color: 0x101820, transparent: true, opacity: coeffs.haze,
@@ -3402,6 +3457,57 @@
                     s.haze.mat.opacity = (s.haze.baseOp || VENUE_HAZE_STEADY)
                         * (coeffs.haze / VENUE_HAZE_STEADY);
                 }
+                if (s.crowd) {
+                    // Rebind VideoTextures when venue-crowd.js (re)assigns
+                    // elements. VideoTexture samples the element every frame,
+                    // so a src change on the same element needs no rebind.
+                    if (s.crowd.rev !== _venueCrowdRev) {
+                        s.crowd.rev = _venueCrowdRev;
+                        s.crowd.layers.forEach((layer, i) => {
+                            const el = _venueCrowdVideos[i];
+                            if (layer.videoEl === el) return;
+                            if (layer.tex) { layer.mat.map = null; layer.tex.dispose(); layer.tex = null; }
+                            layer.videoEl = el;
+                            layer.lastAspect = 0; // force refit + recrop
+                            if (el) {
+                                const tex = new T.VideoTexture(el);
+                                tex.colorSpace = T.SRGBColorSpace;
+                                tex.wrapS = T.ClampToEdgeWrapping;
+                                tex.wrapT = T.ClampToEdgeWrapping;
+                                tex.minFilter = T.LinearFilter;
+                                tex.magFilter = T.LinearFilter;
+                                tex.generateMipmaps = false;
+                                layer.tex = tex;
+                                layer.mat.map = tex;
+                            }
+                            layer.mat.needsUpdate = true;
+                        });
+                    }
+                    const warm = coeffs.warmth;
+                    s.crowd.layers.forEach((layer, i) => {
+                        const el = layer.videoEl;
+                        // videoWidth === 0 until metadata lands — showing the
+                        // plane before that paints a black flash over the plate.
+                        const ready = !!el && el.videoWidth > 0;
+                        // venue-crowd.js swaps src on the same element (loop ↔
+                        // stinger); a new intrinsic size needs a fresh
+                        // cover-crop, which _bgFitBackdropPlane only reapplies
+                        // on camera aspect changes.
+                        if (ready && (layer.lastVidW !== el.videoWidth ||
+                                      layer.lastVidH !== el.videoHeight)) {
+                            layer.lastVidW = el.videoWidth;
+                            layer.lastVidH = el.videoHeight;
+                            layer.applyCoverCrop();
+                        }
+                        const opacity = i === 0 ? 1 - _venueCrowdMix : _venueCrowdMix;
+                        layer.mat.opacity = opacity;
+                        layer.mesh.visible = ready && opacity > 0.01;
+                        if (layer.mesh.visible) {
+                            layer.mat.color.setRGB(warm, warm * 0.98, warm * 0.95);
+                            _bgFitBackdropPlane(layer);
+                        }
+                    });
+                }
             },
             teardown(s) {
                 if (!s) return;
@@ -3414,6 +3520,19 @@
                     if (p.mat) {
                         p.mat.map = null;
                         p.mat.dispose?.();
+                    }
+                }
+                // Crowd planes: this style owns the VideoTextures; the
+                // <video> elements belong to venue-crowd.js and survive.
+                if (s.crowd) {
+                    for (const layer of s.crowd.layers) {
+                        layer.mesh?.parent?.remove(layer.mesh);
+                        layer.geo?.dispose?.();
+                        if (layer.mat) {
+                            layer.mat.map = null;
+                            layer.mat.dispose?.();
+                        }
+                        layer.tex?.dispose?.();
                     }
                 }
                 // Dispose the cached plate textures too — the module-level cache
