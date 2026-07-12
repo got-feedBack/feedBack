@@ -278,9 +278,4 @@
     window.addEventListener('beforeunload', () => {
         wins.forEach((w) => { if (!w.closed) { try { w.close(); } catch (e) { /* ignore */ } } });
     });
-
-    // Exposed for pane-desktop.js, which upgrades this host in place rather than
-    // registering a competing one — the window still has to be opened HERE, by
-    // window.open(), or there would be no document to adopt into.
-    window.__fbPaneWindows = { FRAME_PREFIX, get: (id) => wins.get(id) || null };
 })();

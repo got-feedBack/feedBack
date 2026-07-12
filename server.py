@@ -1723,10 +1723,11 @@ def pane_host():
     # MOVES the real panel element into it (document.adoptNode) and copies the app's
     # stylesheets across. See docs/plugin-panes.md.
     #
-    # no-cache, matching the /static mount's contract (_RevalidatedStaticFiles). A
-    # stale copy of this page is especially nasty: the opener waits for an element
-    # inside it before adopting, so an old cached version means the pane window
-    # simply sits there blank.
+    # no-cache, matching the /static mount's contract (_RevalidatedStaticFiles).
+    # The opener adopts the panel into this page's #fb-pane-root, so a stale copy
+    # served from cache is a real hazard — it falls back to <body>, which works but
+    # loses the pane window's own layout, and a future change to the page would be
+    # invisible until the cache expired.
     resp = FileResponse(str(STATIC_DIR / "panes" / "pane.html"))
     resp.headers["Cache-Control"] = "no-cache"
     return resp

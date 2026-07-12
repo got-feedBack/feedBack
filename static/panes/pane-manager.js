@@ -45,19 +45,42 @@
     // Only which pane was open, and where. A pane's CONTENTS are the plugin's own
     // DOM and the plugin's own state — none of our business.
 
+    // A pane id is plugin-controlled and is used as a key in the persisted
+    // host map. `__proto__` and friends are not ids, they are booby traps: writing
+    // `map['__proto__'] = 'window'` on a plain object corrupts the map (and can
+    // reach Object.prototype), and reading `map[id]` can pick a value straight off
+    // the prototype chain for a pane that was never remembered at all.
+    //
+    // Rejected at registration, so the id never reaches storage — and the reads
+    // below are own-property checks anyway, because defence in depth is cheap here.
+    const UNSAFE_KEYS = ['__proto__', 'constructor', 'prototype'];
+    function _isUnsafeId(id) { return UNSAFE_KEYS.indexOf(id) >= 0; }
+
     function _readJSON(key, fallback) {
         try {
             const raw = localStorage.getItem(key);
-            return raw ? JSON.parse(raw) : fallback;
+            if (!raw) return fallback;
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return fallback;
+            // Re-key onto a null-prototype object: whatever was in storage (hand
+            // edited, corrupt, polluted) can no longer smuggle in a prototype.
+            const safe = Object.create(null);
+            Object.keys(parsed).forEach((k) => { if (!_isUnsafeId(k)) safe[k] = parsed[k]; });
+            return safe;
         } catch (e) { return fallback; }   // private mode / corrupt value
     }
     function _writeJSON(key, value) {
         try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* quota / private mode: non-fatal */ }
     }
     function _rememberHost(id, hostId) {
-        const map = _readJSON(HOSTS_KEY, {});
+        if (_isUnsafeId(id)) return;
+        const map = _readJSON(HOSTS_KEY, Object.create(null));
         if (hostId) map[id] = hostId; else delete map[id];
         _writeJSON(HOSTS_KEY, map);
+    }
+    function _rememberedHost(id) {
+        const map = _readJSON(HOSTS_KEY, Object.create(null));
+        return Object.prototype.hasOwnProperty.call(map, id) ? map[id] : undefined;
     }
 
     // ── Spec ─────────────────────────────────────────────────────────────────
@@ -65,6 +88,8 @@
     function _normalize(spec) {
         if (!spec || typeof spec !== 'object') throw new TypeError('panes.register: spec must be an object');
         if (!spec.id || typeof spec.id !== 'string') throw new TypeError('panes.register: spec.id is required');
+        // See UNSAFE_KEYS: a pane id becomes a key in the persisted host map.
+        if (_isUnsafeId(spec.id)) throw new TypeError('panes.register: unsafe pane id: ' + spec.id);
         if (typeof spec.element !== 'function' && !(spec.element instanceof Element)) {
             throw new TypeError('panes.register(' + spec.id + '): spec.element must be an Element, or a function returning one');
         }
@@ -279,7 +304,7 @@
         // without a user gesture, so restoring a popped-out pane on page load
         // would only ever produce a "pop-up blocked" toast. Such a pane comes back
         // in the dock, and the chip pops it out again on the user's next click.
-        let remembered = _readJSON(HOSTS_KEY, {})[s.id];
+        let remembered = _rememberedHost(s.id);
         if (remembered) {
             const h = hosts.get(remembered);
             if (h && h.autoRestore === false) remembered = 'dock';
