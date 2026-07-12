@@ -252,7 +252,8 @@
                     if (typeof window.setViz === 'function') window.setViz(prev);
                 }
             } catch (_) { /* ok */ }
-            _appliedManifestVenue = null;
+            // keep _appliedManifestVenue: pushCrowdManifest clears the crowd
+            // manifest precisely by seeing it is still set with no venue left
             refresh();
         }
     }
