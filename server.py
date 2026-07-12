@@ -18,7 +18,7 @@ configure_logging()
 
 log = logging.getLogger("feedBack.server")
 
-from fastapi import FastAPI, File
+from fastapi import FastAPI, File, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
@@ -47,6 +47,7 @@ import appstate
 import builtin_content
 import demo_mode
 import scan
+import tailwind_rebuild
 # Extracted route modules. They import `appstate`, never `server` — one-way graph.
 from routers import audio_effects, artist_aliases, loops, playlists, ws_highway, chart, wanted, library_extras, shop, progression, profile, stats, version, diagnostics
 from routers import tunings as tunings_router
@@ -1637,6 +1638,69 @@ class _RevalidatedStaticFiles(StaticFiles):
         response = await super().get_response(path, scope)
         response.headers.setdefault("Cache-Control", "no-cache")
         return response
+
+
+# ── The Tailwind stylesheet: runtime-augmented if there is one, else the committed build ──
+#
+# Two different things used to share one path (#911):
+#
+#   static/tailwind.min.css   a BUILD ARTEFACT. Committed, image-baked, generated from the
+#                             in-tree plugins only. CI (`tailwind-fresh`) verifies it.
+#   the RUNTIME sheet         PER-INSTALL STATE. Additionally scans whatever the user installed
+#                             into FEEDBACK_PLUGINS_DIR, so it differs machine to machine.
+#
+# Writing the second over the first meant that merely RUNNING THE DEV SERVER from a git
+# checkout silently modified a tracked file. `git add -A` then swept a 100KB reshuffle of
+# minified CSS into the commit and ci/tailwind-fresh went red with a diff that explained
+# nothing — on a PR whose real change touched no Tailwind classes at all. It also meant writing
+# app state into the app directory, which is read-only in some deploys.
+#
+# The runtime sheet lives in CONFIG_DIR now. This route serves it when it exists and otherwise
+# falls through to the committed one. It MUST be registered BEFORE the /static mount: routes
+# are matched in order, and the mount would otherwise swallow the path.
+def _runtime_css_if_usable() -> Path | None:
+    """The runtime sheet, but ONLY when it is actually the right answer.
+
+    Codex [P2] on the first cut of #911, and it was right: a persisted sheet can outlive the
+    reason it existed and then MASK newer core CSS indefinitely. Two ways:
+
+      * THE USER REMOVED THEIR PLUGINS. Startup only rebuilds when there are user plugins, so
+        nothing would ever overwrite the old sheet — and it still carries classes for plugins
+        that are gone, while missing nothing. With no user plugins the COMMITTED sheet is by
+        definition complete and authoritative.
+      * THE APP WAS UPGRADED. A new release ships new core classes in static/tailwind.min.css.
+        The runtime sheet on disk predates them. Serving it hides the new CSS until something
+        happens to trigger a rebuild — which, if the toolchain is absent (no node), is never.
+
+    Freshness is decided by CONTENT, not mtime. Codex [P2] again, and again correct: archives
+    and container images routinely PRESERVE SOURCE MTIMES, so a just-shipped stylesheet can
+    carry an older timestamp than a runtime sheet built days ago — and an mtime check would call
+    the stale one fresh. tailwind_rebuild stamps each runtime build with the hash of the
+    committed sheet it was made from; a core upgrade changes that file, hence that hash.
+
+    Falling back to the committed sheet is always safe: at worst it lacks a just-installed
+    plugin's classes for the seconds until the async rebuild lands.
+    """
+    runtime = tailwind_rebuild.runtime_css_path()
+    if not runtime.is_file():
+        return None
+    if tailwind_rebuild.user_plugin_count() == 0:
+        return None
+    if not tailwind_rebuild.runtime_css_is_current():
+        return None   # built against a different core — see runtime_css_is_current()
+    return runtime
+
+
+@app.get("/static/tailwind.min.css")
+def tailwind_css(request: Request):
+    target = _runtime_css_if_usable() or (STATIC_DIR / "tailwind.min.css")
+    if not target.is_file():
+        return Response("", status_code=404)
+    # Same cache contract the /static mount applies (_RevalidatedStaticFiles): no-cache, so the
+    # browser always revalidates and picks up a rebuild without a hard refresh.
+    resp = FileResponse(str(target), media_type="text/css")
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
 
 
 app.mount("/static", _RevalidatedStaticFiles(directory=str(STATIC_DIR)), name="static")
