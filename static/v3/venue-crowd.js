@@ -274,6 +274,10 @@
         // stinger ends (the machine already advanced, nothing re-fires it).
         const interrupted = _loadingLoop || _fadingLoop;
         if (interrupted) {
+            // Freeze any in-flight crossfade: its ramp would keep pushing the
+            // mix toward this layer while the stinger replaces the src (loop
+            // vanishing / stinger popping in at full opacity).
+            cancelFade();
             _pendingLoop = interrupted;
             _loadingLoop = null;
             _fadingLoop = null;
