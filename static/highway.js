@@ -2,6 +2,38 @@
  * Canvas-based note highway renderer.
  * Receives note data via WebSocket, renders on requestAnimationFrame.
  */
+import {
+    BG,
+    CHAIN_GAP_THRESHOLD,
+    CHAIN_RENDER_FULL_MAX,
+    CHORD_FRAME_FRETS,
+    DEFAULT_STRING_BRIGHT,
+    DEFAULT_STRING_COLORS,
+    DEFAULT_STRING_DIM,
+    FRETLINE_TARGET_OFFSET,
+    FRETLINE_WINDOW_AFTER,
+    FRETLINE_WINDOW_BEFORE,
+    MAX_RENDERER_DRAW_FAILURES,
+    MUTE_BOX_BAR,
+    MUTE_BOX_STROKE,
+    REPEAT_BOX_BAR,
+    REPEAT_BOX_FILL,
+    VISIBLE_SECONDS,
+    Z_CAM,
+    Z_MAX,
+    _AUTO_ADJUST_COOLDOWN_MS,
+    _AUTO_SCALE_MIN,
+    _AUTO_UPSCALE_COOLDOWN_MS,
+    _CHART_MAX_INTERP_MS,
+    _DOM_VIS_CHECK_FRAMES,
+    _DRAW_BUDGET_HI_MS,
+    _DRAW_BUDGET_LO_MS,
+    _LYRIC_MEASURE_INNER_MAX,
+    _LYRIC_MEASURE_OUTER_MAX,
+    _PAUSED_FRAME_INTERVAL_MS,
+    _SHIMMER_LUT_SIZE,
+} from './js/highway-constants.js';
+
 function createHighway() {
   // R3c: per-instance mutable state in one object, so extracted renderer/ws
   // modules can close over it as a factory arg without cross-panel sharing.
@@ -111,11 +143,6 @@ function createHighway() {
     // re-anchor refines the estimate from the latest segment. Default
     // to 1 until we have two anchors to compare.
     hwState._chartObservedRate = 1;
-    // Cap the interpolation so a stalled main thread (long task, GC,
-    // dropped tick) can't make getTime drift far past reality. Also the
-    // threshold for "audio looks paused" — if setTime hasn't advanced t
-    // in this long, treat as paused.
-    const _CHART_MAX_INTERP_MS = 100;
     // Visibility-aware rAF (feedBack#246): when the canvas is hidden
     // (display:none on itself or any ancestor — e.g. splitscreen's
     // workaround), pause renderer.draw and emit highway:visibility on
@@ -125,39 +152,9 @@ function createHighway() {
     // where offsetParent === null isn't enough.
     hwState._visibleOverride = null;
     hwState._lastVisible = null;
-    // Throttled DOM visibility sampling. Reading canvas.offsetParent
-    // every rAF frame forces a style/layout recalc — profiled at ~0.5 s
-    // main-thread self-time over a 63 s session. The displayed state
-    // changes rarely (navigate / splitscreen panel toggle), so the DOM
-    // is only re-sampled every _DOM_VIS_CHECK_FRAMES frames; the cached
-    // value serves the frames in between (worst-case transition latency
-    // ~10 frames ≈ 166 ms at 60 Hz — fine for a hide/show pause signal).
-    // Set _domVisSampledFrame to NaN to force a fresh sample on the next
-    // check (done on init, canvas replace, resize, and override-clear so
-    // deliberate transitions don't wait out the throttle window).
-    // NOTE those manual resets are LATENCY optimizations, not correctness
-    // requirements: the periodic re-sample runs every _DOM_VIS_CHECK_FRAMES
-    // frames regardless, so a visibility-affecting path that forgets to
-    // reset self-heals within ~10 frames — stale visibility can never be
-    // served indefinitely.
-    const _DOM_VIS_CHECK_FRAMES = 10;
     hwState._domVisCached = false;
     hwState._domVisSampledFrame = NaN;
     hwState.animFrame = null;
-    // Paused-render throttle (feedBack#654). The rAF loop runs
-    // unconditionally and only gates on visibility + ready, never on
-    // playback — so an expensive renderer (3D Highway's Three.js WebGL
-    // scene) does a full render every frame even while paused. That is
-    // pure waste, and the dominant cost on high-refresh / ANGLE setups
-    // (Chromium on Windows paces rAF to the fastest attached monitor,
-    // so the loop can run at 144 Hz even on a 60 Hz panel). While the
-    // audio clock is stalled, cap draws to one per
-    // _PAUSED_FRAME_INTERVAL_MS. Note position is clock-derived
-    // (n.t - currentTime), so this changes smoothness only — never
-    // audio/visual sync. A low non-zero rate (not a hard skip) keeps
-    // resize / seek-scrub / renderer-swap repaints correct without
-    // having to hook each of those paths.
-    const _PAUSED_FRAME_INTERVAL_MS = 100;
     hwState._lastPausedDrawAt = 0;
     hwState._connectOpts = {};
     hwState._resizeContainer = null;
@@ -273,9 +270,9 @@ function createHighway() {
     hwState._perfHud = null;
     hwState._hudOn = false;       // cached highwayPerfHud flag (re-read ~2x/sec, not per-frame)
     hwState._hudFlagAt = 0;
-    const _DRAW_BUDGET_HI_MS = 12;  // sustained draw cost above this -> scale down
-    const _DRAW_BUDGET_LO_MS = 7;   // sustained draw cost below this -> scale back up
-    const _AUTO_SCALE_MIN = 0.25;   // hard floor (lowest the user-configurable floor may be set)
+  // sustained draw cost above this -> scale down
+   // sustained draw cost below this -> scale back up
+   // hard floor (lowest the user-configurable floor may be set)
     // User-configurable floor for the load-adaptive render scale (#654):
     // 0.25 = stock (can drop to quarter-res on heavy frames → pixelated),
     // 1.0 = never auto-downscale below the Quality (renderScale) ceiling — so
@@ -287,12 +284,6 @@ function createHighway() {
         const v = parseFloat(localStorage.getItem('highwayMinRenderScale'));
         return Number.isFinite(v) ? Math.max(_AUTO_SCALE_MIN, Math.min(1, v)) : _AUTO_SCALE_MIN;
     })();
-    const _AUTO_ADJUST_COOLDOWN_MS = 600;
-    // Upscaling is deliberately LAZY (longer cooldown than the downscale path) so
-    // the resolution doesn't visibly hunt up/down on passages that hover near the
-    // budget — testers saw "quality going up and down" as parts got busier (#618
-    // charrette). Downscale stays prompt to protect the frame rate.
-    const _AUTO_UPSCALE_COOLDOWN_MS = 2500;
     hwState._inverted = localStorage.getItem('invertHighway') === 'true';
     hwState._lefty = localStorage.getItem('lefty') === '1';
     hwState._lastChordOnFretLine = null;  // chord object currently shown on fret line
@@ -311,22 +302,6 @@ function createHighway() {
     // shimmer). Incremented once per rAF in draw().
     hwState._frameIdx = 0;
 
-    // 64-entry precomputed jitter LUT replacing Math.random() in the
-    // lit-sustain shimmer hot path (drawSustains). Visually
-    // indistinguishable from per-frame Math.random at rAF cadence,
-    // allocation-free, and removes 4 RNG calls per visible lit sustain
-    // per frame on dense charts. Seeded deterministically (xorshift32)
-    // so the LUT itself is identical across `createHighway()` instances
-    // — shimmer is therefore reload-stable and test-reproducible PER
-    // instance for a given (frameIdx, n.s, n.t) seed. The seed includes
-    // closure-scope `_frameIdx` which is per-instance, so two
-    // splitscreen highways with different rAF cadence will shimmer
-    // differently at any given wall-clock moment; what's stable is the
-    // LUT contents.
-    //
-    // _SHIMMER_LUT_SIZE MUST stay a power of two — `_shimmerNoise`
-    // indexes with `& (_SHIMMER_LUT_SIZE - 1)` for the cheap modulo.
-    const _SHIMMER_LUT_SIZE = 64;
     const _shimmerLut = new Float32Array(_SHIMMER_LUT_SIZE);
     for (let i = 0; i < _SHIMMER_LUT_SIZE; i++) {
         let x = (i + 1) | 0;       // +1 dodges the all-zero xorshift trap
@@ -341,22 +316,6 @@ function createHighway() {
         return _shimmerLut[(seed >>> 0) & (_SHIMMER_LUT_SIZE - 1)];
     }
 
-    // Memoize ctx.measureText() for the lyric overlay. Per-syllable
-    // measurement was the dominant cost in dense karaoke charts; text
-    // and fontSize are the only inputs (font face string is constant
-    // `bold ${fontSize}px sans-serif`). Two-level Map (outer: fontSize,
-    // inner: text) so a cache hit avoids the `fontSize + '|' + text`
-    // concat that previously allocated on every lookup.
-    //
-    // Bounded on BOTH levels: window resizes change `fontSize`, so each
-    // resize creates a fresh inner Map; without an outer cap, the cache
-    // would retain every fontSize ever rendered for the page lifetime.
-    // Cap outer at 16 distinct fontSize buckets (more than enough — a
-    // session typically sees one or two), inner at 4096 entries per
-    // bucket. Clear-on-overflow on both — a karaoke cold start re-warms
-    // in one frame.
-    const _LYRIC_MEASURE_OUTER_MAX = 16;
-    const _LYRIC_MEASURE_INNER_MAX = 4096;
     const _lyricMeasureCache = new Map();   // Map<fontSize, Map<text, width>>
     function _measureLyricText(c, fontSize, text) {
         let inner = _lyricMeasureCache.get(fontSize);
@@ -374,36 +333,6 @@ function createHighway() {
         return w;
     }
 
-    // Rendering config
-    const VISIBLE_SECONDS = 3.0;
-    const Z_CAM = 2.2;
-    const Z_MAX = 10.0;
-    const BG = '#080810';
-
-    // String color palettes. Indices 0–5 cover guitar / bass; 6–7
-    // are added for extended-range GP imports (7-string, 8-string).
-    // Lookups still use `|| '#888'` as a safety fallback for any
-    // out-of-range index.
-    //
-    // These are `let`, not `const`: setStringColors() (used by the core
-    // "Highway String Colors" theming UI) overrides per-index entries at
-    // runtime, deriving the dim/bright variants from the chosen base color.
-    // DEFAULT_* keep the originals so a reset restores them byte-for-byte.
-    const DEFAULT_STRING_COLORS = [
-        '#cc0000', '#cca800', '#0066cc',
-        '#cc6600', '#00cc66', '#9900cc',
-        '#cc00aa', '#00cccc',  // 7th = magenta, 8th = teal
-    ];
-    const DEFAULT_STRING_DIM = [
-        '#520000', '#524200', '#002952',
-        '#522900', '#005229', '#3d0052',
-        '#520042', '#005252',
-    ];
-    const DEFAULT_STRING_BRIGHT = [
-        '#ff3c3c', '#ffe040', '#3c9cff',
-        '#ff9c3c', '#3cff9c', '#cc3cff',
-        '#ff3ce0', '#3ce0e0',
-    ];
     hwState.STRING_COLORS = DEFAULT_STRING_COLORS.slice();
     hwState.STRING_DIM = DEFAULT_STRING_DIM.slice();
     hwState.STRING_BRIGHT = DEFAULT_STRING_BRIGHT.slice();
@@ -964,8 +893,6 @@ function createHighway() {
     // every frame. Reset on every successful draw and whenever a new
     // renderer is installed.
     hwState._rendererDrawFailures = 0;
-    const MAX_RENDERER_DRAW_FAILURES = 3;
-
     // True only while the current renderer has had a successful init
     // since its last destroy (or was freshly installed but never init'd
     // because canvas was null). Gates destroy calls so an uninit'd
@@ -2704,42 +2631,6 @@ function createHighway() {
         }
         return lo;
     }
-
-    // ── Chord rendering — chains, frames, fretline preview (feedBack#88) ──
-    //
-    // Charts often repeat the same chord shape several times in a
-    // row (e.g. a G strummed 4 times). We call a contiguous run of same-id
-    // chords with gaps < CHAIN_GAP_THRESHOLD a "chain". Chains drive two
-    // visual choices:
-    //   • The first chord in a chain renders in full; subsequent chords in
-    //     a chain of CHAIN_RENDER_FULL_MAX or longer render as a "repeat
-    //     box" — a translucent boxed frame so the eye can see the rhythm
-    //     pattern without re-scanning identical fret numbers.
-    //   • Each chord anchors a CHORD_FRAME_FRETS-wide frame; muted and
-    //     open-only chords inherit the frame from their predecessor so
-    //     they don't snap to fret 0.
-    //
-    // We compute chain stats and frame anchors once per `src` array via
-    // _ensureChordRenderCache (lazy, invalidates when the array reference
-    // changes — which happens on chord ingest, mastery rebuild, or song
-    // reset). The render path is then pure read.
-    const CHAIN_GAP_THRESHOLD = 0.5;
-    const CHAIN_RENDER_FULL_MAX = 4;
-    const CHORD_FRAME_FRETS = 4;
-
-    // Fretline preview: the static fret line at the bottom shows the chord
-    // closest to the strum line (currentTime + FRETLINE_TARGET_OFFSET) within
-    // the [target - FRETLINE_WINDOW_BEFORE, target + FRETLINE_WINDOW_AFTER]
-    // window, as a teaching aid.
-    const FRETLINE_TARGET_OFFSET = -0.25;
-    const FRETLINE_WINDOW_BEFORE = 0.1;
-    const FRETLINE_WINDOW_AFTER = 0.3;
-
-    // Repeat / mute box colors.
-    const REPEAT_BOX_FILL = 'rgba(48, 80, 128, 0.06)';
-    const REPEAT_BOX_BAR = '#50a0dc';
-    const MUTE_BOX_STROKE = '#6060809b';
-    const MUTE_BOX_BAR = '#606080d1';
 
     // Reset all chord-render-derived state. Called from init() and
     // reconnect() so per-song state (preview, frame-mismatch warnings,

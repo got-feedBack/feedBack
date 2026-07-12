@@ -60,7 +60,7 @@ function buildClockSandbox(perfNowImpl) {
         performance: { now: perfNowImpl },
     };
     vm.createContext(sandbox);
-    const src = fs.readFileSync(HIGHWAY_JS, 'utf8');
+    const src = highwaySources();
     const setTimeBody = extractBlock(src, 'setTime(t) {');
     const getTimeBody = extractBlock(src, 'getTime() {');
     // Strip trailing comma if present (object-literal method declarations).
@@ -72,8 +72,25 @@ function buildClockSandbox(perfNowImpl) {
     return sandbox;
 }
 
+
+// R3c: highway.js is being carved into modules, so its source is no longer ONE file. Read the
+// whole set. Re-pinning these assertions at whichever file currently holds a constant just
+// means they break again on the next carve — and worse, a source-shape assertion that silently
+// stops finding its target is indistinguishable from one that passes.
+function highwaySources() {
+    const root = path.join(__dirname, '..', '..');
+    const jsDir = path.join(root, 'static', 'js');
+    const parts = [fs.readFileSync(path.join(root, 'static', 'highway.js'), 'utf8')];
+    for (const f of fs.readdirSync(jsDir).sort()) {
+        if (f.startsWith('highway-') && f.endsWith('.js')) {
+            parts.push(fs.readFileSync(path.join(jsDir, f), 'utf8'));
+        }
+    }
+    return parts.join('\n');
+}
+
 test('highway declares chart anchor + stall-detect + rate state', () => {
-    const src = fs.readFileSync(HIGHWAY_JS, 'utf8');
+    const src = highwaySources();
     // Both anchor fields use NaN sentinels — _chartAnchorAudioT in
     // particular MUST start as NaN, not 0, otherwise setTime(0) on the
     // very first 60 Hz tick fails the `t !== _chartAnchorAudioT` check
@@ -82,11 +99,11 @@ test('highway declares chart anchor + stall-detect + rate state', () => {
     assert.match(src, /hwState\._chartAnchorPerfNow\s*=\s*NaN/, 'missing _chartAnchorPerfNow (NaN sentinel)');
     assert.match(src, /hwState\._chartLastAdvanceAt\s*=\s*0/, 'missing _chartLastAdvanceAt (pause detection)');
     assert.match(src, /hwState\._chartObservedRate\s*=\s*1/, 'missing _chartObservedRate (playback rate awareness)');
-    assert.match(src, /const\s+_CHART_MAX_INTERP_MS\s*=\s*100/, 'missing _CHART_MAX_INTERP_MS cap');
+    assert.match(src, /(?:export\s+)?const\s+_CHART_MAX_INTERP_MS\s*=\s*100/, 'missing _CHART_MAX_INTERP_MS cap');
 });
 
 test('getTime scales interpolation by _chartObservedRate (speed-slider safe)', () => {
-    const src = fs.readFileSync(HIGHWAY_JS, 'utf8');
+    const src = highwaySources();
     const m = src.match(/getTime\(\)\s*\{[\s\S]+?\n\s*\},/);
     assert.ok(m, 'getTime() body not found');
     const slice = m[0];
@@ -98,7 +115,7 @@ test('getTime scales interpolation by _chartObservedRate (speed-slider safe)', (
 });
 
 test('setTime re-anchors and updates _chartLastAdvanceAt only when t actually changes', () => {
-    const src = fs.readFileSync(HIGHWAY_JS, 'utf8');
+    const src = highwaySources();
     // Repeated setTime calls with the same value must not refresh the
     // anchor (else interpolation stutters); they also must not refresh
     // _chartLastAdvanceAt (else getTime would never detect a stalled
@@ -115,7 +132,7 @@ test('setTime re-anchors and updates _chartLastAdvanceAt only when t actually ch
 });
 
 test('getTime falls back to chartTime when audio has stalled (paused)', () => {
-    const src = fs.readFileSync(HIGHWAY_JS, 'utf8');
+    const src = highwaySources();
     // Find the actual getTime body. Match the whole brace-balanced
     // method (using a generous greedy slice to ensure we capture both
     // the stall check and the interpolation expression below it).
@@ -139,7 +156,7 @@ test('getTime falls back to chartTime when audio has stalled (paused)', () => {
 });
 
 test('api.stop() clears the chart anchor state so re-init starts fresh', () => {
-    const src = fs.readFileSync(HIGHWAY_JS, 'utf8');
+    const src = highwaySources();
     // Use the brace-balanced extractor so the assertions are scoped to
     // the actual stop() body — a fixed-size slice would falsely match
     // resets that landed in an adjacent method.

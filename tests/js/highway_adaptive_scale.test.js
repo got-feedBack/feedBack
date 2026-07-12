@@ -27,16 +27,33 @@ function extractBlock(src, signature) {
     return src.slice(start, i);
 }
 
+
+// R3c: highway.js is being carved into modules, so its source is no longer ONE file. Read the
+// whole set. Re-pinning these assertions at whichever file currently holds a constant just
+// means they break again on the next carve — and worse, a source-shape assertion that silently
+// stops finding its target is indistinguishable from one that passes.
+function highwaySources() {
+    const root = path.join(__dirname, '..', '..');
+    const jsDir = path.join(root, 'static', 'js');
+    const parts = [fs.readFileSync(path.join(root, 'static', 'highway.js'), 'utf8')];
+    for (const f of fs.readdirSync(jsDir).sort()) {
+        if (f.startsWith('highway-') && f.endsWith('.js')) {
+            parts.push(fs.readFileSync(path.join(jsDir, f), 'utf8'));
+        }
+    }
+    return parts.join('\n');
+}
+
 test('highway declares adaptive-scale state with a floor', () => {
-    const src = fs.readFileSync(highwayJs, 'utf8');
+    const src = highwaySources();
     assert.match(src, /hwState\._autoScale\s*=\s*1/, 'missing _autoScale multiplier');
-    assert.match(src, /const\s+_AUTO_SCALE_MIN\s*=\s*0?\.25/, 'missing _AUTO_SCALE_MIN floor (0.25)');
-    assert.match(src, /const\s+_DRAW_BUDGET_HI_MS\s*=\s*\d+/, 'missing high draw budget');
-    assert.match(src, /const\s+_DRAW_BUDGET_LO_MS\s*=\s*\d+/, 'missing low draw budget');
+    assert.match(src, /(?:export\s+)?const\s+_AUTO_SCALE_MIN\s*=\s*0?\.25/, 'missing _AUTO_SCALE_MIN floor (0.25)');
+    assert.match(src, /(?:export\s+)?const\s+_DRAW_BUDGET_HI_MS\s*=\s*\d+/, 'missing high draw budget');
+    assert.match(src, /(?:export\s+)?const\s+_DRAW_BUDGET_LO_MS\s*=\s*\d+/, 'missing low draw budget');
 });
 
 test('_effectiveRenderScale clamps user ceiling * auto factor to [MIN, 1]', () => {
-    const src = fs.readFileSync(highwayJs, 'utf8');
+    const src = highwaySources();
     const fn = extractBlock(src, 'function _effectiveRenderScale()');
     // Derives from the (sanitized) user ceiling and auto factor.
     assert.match(fn, /_renderScale/, 'effective scale must derive from the user _renderScale');
@@ -47,7 +64,7 @@ test('_effectiveRenderScale clamps user ceiling * auto factor to [MIN, 1]', () =
 });
 
 test('min render scale floor is user-configurable + exposed on the api (#654)', () => {
-    const src = fs.readFileSync(highwayJs, 'utf8');
+    const src = highwaySources();
     // Hard floor constant kept; configurable floor read from localStorage.
     assert.match(src, /hwState\._autoScaleMin\s*=/, 'missing configurable _autoScaleMin');
     assert.match(src, /localStorage\.getItem\('highwayMinRenderScale'\)/,
@@ -65,7 +82,7 @@ test('min render scale floor is user-configurable + exposed on the api (#654)', 
 });
 
 test('_adaptRenderScale uses the draw budget + cooldown and re-applies via resize', () => {
-    const src = fs.readFileSync(highwayJs, 'utf8');
+    const src = highwaySources();
     const fn = extractBlock(src, 'function _adaptRenderScale(');
     assert.match(fn, /_DRAW_BUDGET_HI_MS/, 'must scale down past the high budget');
     assert.match(fn, /_DRAW_BUDGET_LO_MS/, 'must scale up below the low budget');
@@ -74,27 +91,27 @@ test('_adaptRenderScale uses the draw budget + cooldown and re-applies via resiz
 });
 
 test('draw() only adapts during active playback and feeds the HUD', () => {
-    const src = fs.readFileSync(highwayJs, 'utf8');
+    const src = highwaySources();
     const fn = extractBlock(src, 'function draw()');
     assert.match(fn, /if\s*\(\s*!_paused\s*\)\s*_adaptRenderScale/, 'must skip adaptation while paused');
     assert.match(fn, /_updatePerfHud\(\)/, 'must update the perf HUD each drawn frame');
 });
 
 test('bundle + canvas sizing use the effective scale, not the raw user value', () => {
-    const src = fs.readFileSync(highwayJs, 'utf8');
+    const src = highwaySources();
     assert.match(src, /renderScale\s*[:=]\s*_effectiveRenderScale\(\)/, 'bundle.renderScale must be the effective scale');
     assert.match(src, /canvas\.width\s*=\s*Math\.round\(w\s*\*\s*_effectiveRenderScale\(\)\)/, 'canvas backing store must use effective scale');
 });
 
 test('api exposes effective scale + perf stats', () => {
-    const src = fs.readFileSync(highwayJs, 'utf8');
+    const src = highwaySources();
     assert.match(src, /getEffectiveRenderScale\(\)\s*\{\s*return\s+_effectiveRenderScale\(\)/, 'api.getEffectiveRenderScale missing');
     assert.match(src, /getPerfStats\(\)\s*\{/, 'api.getPerfStats missing');
 });
 
 // Robustness fixes from the #655 Copilot review.
 test('render scale is sanitized on load and effective scale guards non-finite', () => {
-    const src = fs.readFileSync(highwayJs, 'utf8');
+    const src = highwaySources();
     assert.match(src, /parseFloat\(localStorage\.getItem\('renderScale'\)[\s\S]{0,160}?Number\.isFinite/,
         'render scale load must validate via Number.isFinite + clamp');
     const eff = extractBlock(src, 'function _effectiveRenderScale()');
@@ -102,7 +119,7 @@ test('render scale is sanitized on load and effective scale guards non-finite', 
 });
 
 test('stop() tears down the perf HUD and resets per-session accumulators', () => {
-    const src = fs.readFileSync(highwayJs, 'utf8');
+    const src = highwaySources();
     assert.match(src, /stop\(\)\s*\{[\s\S]{0,400}?_perfHud\.remove\(\)/,
         'stop() must remove the perf HUD so it cannot strand in the DOM');
     assert.match(src, /stop\(\)\s*\{[\s\S]{0,1200}?_autoScale\s*=\s*1/,
@@ -112,7 +129,7 @@ test('stop() tears down the perf HUD and resets per-session accumulators', () =>
 });
 
 test('perf HUD throttles its localStorage flag read off the hot path', () => {
-    const src = fs.readFileSync(highwayJs, 'utf8');
+    const src = highwaySources();
     const fn = extractBlock(src, 'function _updatePerfHud()');
     assert.match(fn, /_hudFlagAt/, 'HUD must cache the flag and re-read on an interval, not every frame');
 });

@@ -29,14 +29,31 @@ function extractBlock(src, signature) {
     return src.slice(start, i);
 }
 
+
+// R3c: highway.js is being carved into modules, so its source is no longer ONE file. Read the
+// whole set. Re-pinning these assertions at whichever file currently holds a constant just
+// means they break again on the next carve — and worse, a source-shape assertion that silently
+// stops finding its target is indistinguishable from one that passes.
+function highwaySources() {
+    const root = path.join(__dirname, '..', '..');
+    const jsDir = path.join(root, 'static', 'js');
+    const parts = [fs.readFileSync(path.join(root, 'static', 'highway.js'), 'utf8')];
+    for (const f of fs.readdirSync(jsDir).sort()) {
+        if (f.startsWith('highway-') && f.endsWith('.js')) {
+            parts.push(fs.readFileSync(path.join(jsDir, f), 'utf8'));
+        }
+    }
+    return parts.join('\n');
+}
+
 test('highway declares the paused-render throttle state', () => {
-    const src = fs.readFileSync(highwayJs, 'utf8');
-    assert.match(src, /const\s+_PAUSED_FRAME_INTERVAL_MS\s*=\s*\d+/, 'missing _PAUSED_FRAME_INTERVAL_MS cap');
+    const src = highwaySources();
+    assert.match(src, /(?:export\s+)?const\s+_PAUSED_FRAME_INTERVAL_MS\s*=\s*\d+/, 'missing _PAUSED_FRAME_INTERVAL_MS cap');
     assert.match(src, /hwState\._lastPausedDrawAt\s*=\s*0/, 'missing _lastPausedDrawAt accumulator');
 });
 
 test('draw() throttles full renders while the audio clock is stalled', () => {
-    const src = fs.readFileSync(highwayJs, 'utf8');
+    const src = highwaySources();
     const fn = extractBlock(src, 'function draw()');
     // Reuse getTime()'s pause signal rather than inventing a parallel one.
     assert.match(fn, /_chartLastAdvanceAt/, 'throttle must key off _chartLastAdvanceAt (the advance timestamp)');
@@ -46,7 +63,7 @@ test('draw() throttles full renders while the audio clock is stalled', () => {
 });
 
 test('throttle runs after the ready gate, before bundle/draw', () => {
-    const src = fs.readFileSync(highwayJs, 'utf8');
+    const src = highwaySources();
     const fn = extractBlock(src, 'function draw()');
     // Regex landmarks (not exact-string indexOf) so harmless spacing /
     // semicolon changes don't break the ordering guard — matches the

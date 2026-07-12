@@ -55,7 +55,7 @@ module.exports = [
     // module graph, which is what makes no-cycle meaningful here — a carved
     // module that imports app.js back would close a cycle and fail this gate.
     {
-        files: ['**/src/**/*.js', '**/*.mjs', 'static/app.js', 'static/js/**/*.js'],
+        files: ['**/src/**/*.js', '**/*.mjs', 'static/app.js', 'static/js/**/*.js', 'static/highway.js'],
         languageOptions: { ecmaVersion: 'latest', sourceType: 'module' },
         plugins: { 'import-x': importX },
         // v4 flat-config resolver (resolver-next + createNodeResolver). Without

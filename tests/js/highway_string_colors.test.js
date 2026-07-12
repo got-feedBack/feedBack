@@ -37,18 +37,35 @@ function extractBlock(src, signature) {
 
 // ── 2D highway (static/highway.js) ────────────────────────────────────────
 
+
+// R3c: highway.js is being carved into modules, so its source is no longer ONE file. Read the
+// whole set. Re-pinning these assertions at whichever file currently holds a constant just
+// means they break again on the next carve — and worse, a source-shape assertion that silently
+// stops finding its target is indistinguishable from one that passes.
+function highwaySources() {
+    const root = path.join(__dirname, '..', '..');
+    const jsDir = path.join(root, 'static', 'js');
+    const parts = [fs.readFileSync(path.join(root, 'static', 'highway.js'), 'utf8')];
+    for (const f of fs.readdirSync(jsDir).sort()) {
+        if (f.startsWith('highway-') && f.endsWith('.js')) {
+            parts.push(fs.readFileSync(path.join(jsDir, f), 'utf8'));
+        }
+    }
+    return parts.join('\n');
+}
+
 test('2D palette arrays are mutable (let) with frozen DEFAULT_* originals', () => {
-    const src = fs.readFileSync(highwayJs, 'utf8');
-    assert.match(src, /const\s+DEFAULT_STRING_COLORS\s*=/, 'DEFAULT_STRING_COLORS must exist for reset');
-    assert.match(src, /const\s+DEFAULT_STRING_DIM\s*=/, 'DEFAULT_STRING_DIM must exist for reset');
-    assert.match(src, /const\s+DEFAULT_STRING_BRIGHT\s*=/, 'DEFAULT_STRING_BRIGHT must exist for reset');
+    const src = highwaySources();
+    assert.match(src, /(?:export\s+)?const\s+DEFAULT_STRING_COLORS\s*=/, 'DEFAULT_STRING_COLORS must exist for reset');
+    assert.match(src, /(?:export\s+)?const\s+DEFAULT_STRING_DIM\s*=/, 'DEFAULT_STRING_DIM must exist for reset');
+    assert.match(src, /(?:export\s+)?const\s+DEFAULT_STRING_BRIGHT\s*=/, 'DEFAULT_STRING_BRIGHT must exist for reset');
     assert.match(src, /hwState\.STRING_COLORS\s*=\s*DEFAULT_STRING_COLORS\.slice\(\)/, 'STRING_COLORS must be a mutable copy of the defaults');
     assert.match(src, /hwState\.STRING_DIM\s*=\s*DEFAULT_STRING_DIM\.slice\(\)/, 'STRING_DIM must be a mutable copy of the defaults');
     assert.match(src, /hwState\.STRING_BRIGHT\s*=\s*DEFAULT_STRING_BRIGHT\.slice\(\)/, 'STRING_BRIGHT must be a mutable copy of the defaults');
 });
 
 test('2D public API exposes getStringColors / setStringColors', () => {
-    const src = fs.readFileSync(highwayJs, 'utf8');
+    const src = highwaySources();
     assert.match(src, /getStringColors\s*\(\s*\)\s*\{\s*return\s+hwState\.STRING_COLORS\.slice\(\)/, 'getStringColors must return a copy');
     const fn = extractBlock(src, 'setStringColors(arr)');
     // Each provided index sets base + derived dim/bright; missing → default.
@@ -110,7 +127,7 @@ test('app.js color manager name-maps to both highways, with identity no-op + bui
 // ── Executable: dim/bright derivation math ────────────────────────────────
 
 function loadColorMath() {
-    const src = fs.readFileSync(highwayJs, 'utf8');
+    const src = highwaySources();
     const snippet = [
         extractBlock(src, 'function _clampByte(n)'),
         extractBlock(src, 'function _parseHex(hex)'),
