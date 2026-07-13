@@ -59,6 +59,8 @@ READERS = [
     "lib/songmeta.py",
     "lib/gp2notation.py",        # rewrites manifest.yaml; stamps feedpak_version
     "lib/routers/ws_highway.py", # reads `authors` off a feedpak manifest
+    "lib/routers/chart.py",      # Get-info panel: binds `m = load_manifest(...)`
+    "lib/routers/song.py",       # enrichment gap-fill: reads the manifest directly
 ]
 
 # Where check_readers_complete() looks for modules READERS may have missed.
@@ -69,12 +71,11 @@ READER_SEARCH = ["lib/**/*.py", "server.py"]
 # score zero on all of them, which is what keeps their keys out of the scan.
 FEEDPAK_SIGNALS = re.compile(r"import sloppak|from sloppak|load_manifest|manifest\.yaml|feedpak")
 
-# Does this module touch manifest keys at all?
-KEY_OPS = re.compile(r"(manifest|mf)\.(get|setdefault)\(|(manifest|mf)\[")
-
-# Locals that hold a manifest dict. The loaders use a uniform idiom
-# (`manifest.get("key")`), so binding by name is sufficient today. See
-# "Limitations" in docs/feedpak-spec-gate.md for the hardening path.
+# Locals assumed to hold a manifest dict by NAME. This is only the fallback for
+# manifests that arrive as function parameters (ws_highway's `manifest` arg);
+# locals ASSIGNED from load_manifest(...) are discovered flow-aware in
+# keys_touched(), whatever they are called — chart.py's `m` taught us that a
+# name list alone silently misses real readers.
 MANIFEST_VARS = {"manifest", "mf"}
 
 # Packs committed to this repo, checked against the spec's reference validator.
@@ -97,13 +98,39 @@ def _fail(msg: str) -> None:
     print(f"::error::{msg}")
 
 
-def _is_manifest_receiver(node: ast.expr) -> bool:
+def _manifest_locals(tree: ast.AST) -> set[str]:
+    """Names of locals assigned from `load_manifest(...)` anywhere in `tree`.
+
+    Flow-aware receiver discovery: chart.py binds `m = load_manifest(p) or {}`,
+    and a fixed name list (`manifest`, `mf`) silently missed it — the module's
+    reads went entirely unscanned. Whatever the local is called, an assignment
+    whose right-hand side mentions load_manifest marks it as a manifest dict.
+    """
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        try:
+            rhs = ast.unparse(node.value) if node.value else ""
+        except Exception:
+            continue
+        if "load_manifest" not in rhs:
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        for t in targets:
+            if isinstance(t, ast.Name):
+                names.add(t.id)
+    return names
+
+
+def _is_manifest_receiver(node: ast.expr, receivers: set[str]) -> bool:
     """True when `node` evaluates to a manifest dict.
 
-    Covers the plain `manifest.get(...)` idiom plus the wrapped form used in
-    lib/enrichment.py: `(sloppak_mod.load_manifest(p) or {}).get("key")`.
+    Covers named receivers (fixed names + flow-discovered locals) plus the
+    inline wrapped form used in lib/enrichment.py:
+    `(sloppak_mod.load_manifest(p) or {}).get("key")`.
     """
-    if isinstance(node, ast.Name) and node.id in MANIFEST_VARS:
+    if isinstance(node, ast.Name) and node.id in receivers:
         return True
     try:
         src = ast.unparse(node)
@@ -124,6 +151,7 @@ def keys_touched(path: Path) -> tuple[set[str], set[str]]:
     reads: set[str] = set()
     writes: set[str] = set()
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    receivers = MANIFEST_VARS | _manifest_locals(tree)
     for node in ast.walk(tree):
         if (
             isinstance(node, ast.Call)
@@ -132,7 +160,7 @@ def keys_touched(path: Path) -> tuple[set[str], set[str]]:
             # stamps feedpak_version that way, and a subscript-only scan misses
             # it entirely, letting an emitted key slip past the gate.
             and node.func.attr in ("get", "setdefault")
-            and _is_manifest_receiver(node.func.value)
+            and _is_manifest_receiver(node.func.value, receivers)
             and node.args
             and isinstance(node.args[0], ast.Constant)
             and isinstance(node.args[0].value, str)
@@ -141,7 +169,7 @@ def keys_touched(path: Path) -> tuple[set[str], set[str]]:
             bucket.add(node.args[0].value)
         elif (
             isinstance(node, ast.Subscript)
-            and _is_manifest_receiver(node.value)
+            and _is_manifest_receiver(node.value, receivers)
             and isinstance(node.slice, ast.Constant)
             and isinstance(node.slice.value, str)
         ):
@@ -238,7 +266,17 @@ def check_readers_complete() -> bool:
             if rel in listed:
                 continue
             src = path.read_text(encoding="utf-8", errors="replace")
-            if KEY_OPS.search(src) and FEEDPAK_SIGNALS.search(src):
+            if not FEEDPAK_SIGNALS.search(src):
+                continue
+            # Same scanner the coverage check uses — a separate "does it touch
+            # keys" regex diverged from it once already (`m = load_manifest(...)`
+            # in chart.py matched neither `manifest` nor `mf`, so the module
+            # went unlisted AND unscanned). One detector, one truth.
+            try:
+                reads, writes = keys_touched(path)
+            except SyntaxError:
+                continue
+            if reads or writes:
                 missing.append(rel)
 
     for rel in missing:
@@ -372,11 +410,20 @@ def check_reverse(spec: Path) -> bool:
         print("  reverse: no committed packs — skipped")
         return True
 
-    proc = subprocess.run(
-        [sys.executable, str(spec / "tools" / "validate.py"), *[str(p) for p in packs]],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(spec / "tools" / "validate.py"), *[str(p) for p in packs]],
+            capture_output=True,
+            text=True,
+            # The validator takes seconds for all committed packs; a pathological
+            # pack or validator bug must fail the job, not hang the runner until
+            # the Actions-level timeout.
+            timeout=300,
+        )
+    except subprocess.TimeoutExpired:
+        _fail("the spec's reference validator did not finish within 300s — pathological pack or validator bug?")
+        print("  reverse: FAILED")
+        return False
     sys.stdout.write("".join(f"  {ln}\n" for ln in proc.stdout.splitlines() if ln.strip()))
     if proc.returncode != 0:
         _fail(

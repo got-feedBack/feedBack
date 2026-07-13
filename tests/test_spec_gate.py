@@ -59,6 +59,28 @@ def test_load_manifest_wrapped_get_is_seen(tmp_path):
     assert "original_audio" in reads
 
 
+def test_flow_aware_receiver_any_name(tmp_path):
+    # lib/routers/chart.py binds `m = load_manifest(p) or {}` — a fixed name
+    # list missed it and the module's reads went entirely unscanned. Locals
+    # assigned from load_manifest must be receivers whatever they're called.
+    reads, writes = _touch(
+        tmp_path,
+        """
+        pak_info = sloppak_mod.load_manifest(p) or {}
+        x = pak_info.get("stems")
+        pak_info["genres"] = ["metal"]
+        """,
+    )
+    assert reads == {"stems"} and writes == {"genres"}
+
+
+def test_plain_dict_named_m_is_not_a_receiver(tmp_path):
+    # Flow-awareness must not make every short local a manifest: `m` bound to
+    # something other than load_manifest stays out of the scan.
+    reads, writes = _touch(tmp_path, 'm = {}\nx = m.get("title")')
+    assert reads == set() and writes == set()
+
+
 def test_unrelated_dicts_are_ignored(tmp_path):
     reads, writes = _touch(tmp_path, 'x = config.get("title"); settings["artist"] = 1')
     assert reads == set() and writes == set()
