@@ -8,6 +8,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Career passports (backend)** — the badge-journey layer on top of career stars.
+  New career-plugin endpoints: `GET /api/plugins/career/passports` (per-instrument
+  passport walls: genre badges computed on read from `song_stats` × the library's
+  effective genre — Bronze = N genre songs at K★, data-driven in
+  `plugins/career/passports.json`, default 5 songs at 2★ — plus qualifying-song
+  "ticket stubs", the library genre list, and drill status), `POST /passports/commit`
+  (instrument commitment), `POST /passports/open` (open a genre
+  passport), and `POST /drill-state` (intake for the relayed Virtuoso
+  `virtuoso.progress` snapshot, so drill requirements can gate badges
+  server-side). Badges are never stored; the only persisted state (commitments,
+  opened passports, drill snapshot) lives under `CONFIG_DIR/career/` and rides the
+  settings export/import bundle via `settings.server_files`. Instruments are
+  attributed via the existing progression arrangement→instrument mapping;
+  non-graded instruments (bass, drums) render shown-not-judged — repertoire
+  without a pass bar, never a false badge denial.
+- **Career passports (UI)** — the Career screen gains a Passports tab beside
+  Venues: a physical per-instrument passport book (embossed leather cover, 3D
+  page-turn) with a wax-seal commitment ceremony (Stage 0), rubber-stamp badge
+  slam with ink bleed and deterministic per-genre jitter, qualifying songs as
+  collected ticket stubs, and unopened genres as an "Explore next"
+  travel-brochure rack (invitations, never greyed-out slots or completion
+  meters). Badge earns chime + notify immediately; the stamp slam plays when
+  the passport is next opened. Four small synthesized sound effects ship as
+  plugin assets. The career screen also relays the Virtuoso `virtuoso.progress`
+  localStorage snapshot to the drill-state intake on `virtuoso:progress` bus
+  events (debounced, plus a one-time bootstrap), closing the
+  fires-into-a-void seam without touching the virtuoso plugin.
 - **CI gate: core must stay faithful to the feedpak spec (`feedpak-spec` job).** feedpak is published as
   an open format with its own repo, normative spec, JSON Schemas, and reference validator — but nothing
   stopped core from reading a manifest key the spec never defined, which is exactly what happened with
@@ -53,6 +80,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine (`app.js`, `highway.js`, `playSong`, `showScreen`, the capability registry).
 
 ### Fixed
+- **Career passports review polish** — the passport tabs and book overlay carry
+  proper ARIA semantics (`aria-selected`/`aria-controls`/`tabpanel`;
+  `role="dialog"` + `aria-modal` with focus moved to the close button on open
+  and restored on close), and a corrupt stored seen-badges value (e.g. a stray
+  `"null"`) can no longer throw on every passport refresh.
 - **The packaged desktop app could not start (`ModuleNotFoundError: No module named
   'appstate'`).** feedback-desktop's `scripts/bundle-slopsmith.sh` copies a *hardcoded
   list* of core files into the app bundle — `server.py`, `VERSION`, `lib/`, `data/`,
