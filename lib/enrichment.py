@@ -368,10 +368,12 @@ def _acoustid_gate() -> "JSONResponse | None":
 
 def _song_audio_file(filename: str) -> "str | None":
     """Resolve a LIBRARY song (by filename/id) to a local master-audio file for
-    fingerprinting: the full-mix `original_audio` extracted from a sloppak, or a
-    loose folder's audio. None when the song can't be found or ships no full-mix
-    audio (some packs carry only stems). Mirrors serve_sloppak_file's containment
-    guards so a crafted filename can't read outside DLC_DIR / the pack."""
+    fingerprinting: a sloppak's complete mixdown, or a loose folder's audio. None
+    when the song can't be found or carries no mixdown (a pack that kept only its
+    separated stems — an acoustic fingerprint of one re-summed from them would not
+    match the recording, so we decline rather than submit a lossy reconstruction).
+    Mirrors serve_sloppak_file's containment guards so a crafted filename can't
+    read outside DLC_DIR / the pack."""
     dlc = _get_dlc_dir()
     if not dlc:
         return None
@@ -383,7 +385,20 @@ def _song_audio_file(filename: str) -> "str | None":
             canon = resolved.relative_to(dlc.resolve()).as_posix()
         except ValueError:
             return None
-        rel = (sloppak_mod.load_manifest(resolved) or {}).get("original_audio")
+        manifest = sloppak_mod.load_manifest(resolved) or {}
+        # The mixdown is the RESERVED `full` stem (spec §5.3). Unlike playback,
+        # fingerprinting wants it even when it is the pack's ONLY stem — a
+        # single-mix pack is exactly the master audio we want to fingerprint —
+        # so this asks find_full_mix() rather than partition_stems().
+        stems = manifest.get("stems") or []
+        full = sloppak_mod.find_full_mix(
+            [s for s in stems if isinstance(s, dict)]
+        )
+        rel = full.get("file") if full else None
+        # DEPRECATED fallback: packs written before the spec reserved `full` put
+        # the mixdown behind a top-level `original_audio:` key instead (#933).
+        if not isinstance(rel, str) or not rel.strip():
+            rel = manifest.get("original_audio")
         if not isinstance(rel, str) or not rel.strip():
             return None
         src = sloppak_mod.get_cached_source_dir(canon)

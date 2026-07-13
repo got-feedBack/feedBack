@@ -34,17 +34,23 @@
 
 exceptions:
   - key: original_audio
-    issue: https://github.com/got-feedback/feedback/issues/933
+    issue: https://github.com/got-feedback/feedback/issues/945
     reason: >-
       Added by #583 (the full mix played while every stem fader sits at unity,
-      since demucs recombination is lossy). Core, lib/enrichment.py, and the
-      stems plugin all depend on it, but it never went through a FEP and the
+      since demucs recombination is lossy). It never went through a FEP and the
       spec does not define it — the drift this gate exists to prevent.
 
-      The resolution is REMOVAL, not a FEP: the spec already carries the mixdown
-      as a stem ({id: full, file: stems/full.ogg}), so this key added a second,
-      redundant location for audio to a format that already had one. See #933.
+      #933 fixed the drift: feedpak 1.15.0 RESERVES the stem id `full` for the
+      complete mixdown (feedpak-spec#53), and core now reads the full mix from
+      that stem. Nothing depends on this key any more — not the loader, not
+      lib/enrichment.py, not the stems plugin, and the packer no longer writes it.
 
-      Grandfathered so the gate can land green and start blocking the *next*
-      instance immediately, rather than blocking on #933. This entry goes away
-      when core no longer reads or writes the key.
+      What remains is a READ-ONLY deprecated fallback in lib/sloppak.py
+      (_legacy_full_mix), kept for one release because every pack produced before
+      the spec caught up carries `original_audio: original/full.ogg` and would
+      otherwise silently lose its pristine mix. tools/migrate_full_mix_stem.py
+      rewrites those packs into the spec shape.
+
+      This entry disappears with that fallback — tracked by #945, which cannot be
+      forgotten: the gate fails if the entry goes stale, and deleting the read is
+      what makes it stale.

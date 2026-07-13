@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **The full mix is a stem** (#933) — core no longer depends on `original_audio:`, a
+  top-level manifest key this repo invented (#583) that the feedpak spec never had.
+  The format already carried the pre-separation mixdown as a stem; feedpak 1.15.0
+  (feedpak-spec#53) reserves the id **`full`** for it, so that is where core reads it
+  from now.
+
+  `full` is a mixdown, not a layer — it already contains every instrument — so
+  `load_song()` lifts it OUT of `LoadedSloppak.stems` onto `LoadedSloppak.full_mix`.
+  Nothing that sums stems or renders one fader per stem can see it, which is what
+  makes retaining it safe; leaving it in the list would double the whole song and
+  leave "guitar" audible with the guitar fader muted. That trap is exactly why the
+  packer invented the key instead of putting the mixdown where the format says it
+  goes — the bug was in the reader, and this fixes the reader.
+
+  Consequences worth knowing:
+  - The highway WS `song_info` frame gains `full_mix_url` / `has_full_mix`.
+    `original_audio_url` / `has_original_audio` remain as **deprecated aliases**
+    (same values) for one release so a client built against the old frame keeps
+    working; they go with the fallback below (#945).
+  - `stems` on `song_info`, and `stem_ids` / `stem_count` in the library index, now
+    describe *instrument* stems only — a separated pack that retains its mixdown no
+    longer advertises a bogus "full" stem chip or an inflated stem count.
+  - Audio fingerprinting (`lib/enrichment.py`) now resolves the mixdown the same
+    way, which **widens** its coverage: it previously returned `None` for any pack
+    without the invented key, so fingerprinting silently did nothing for the
+    overwhelming majority of packs.
+  - Core still **reads** `original_audio:` as a deprecated fallback, because every
+    pack written before the spec caught up carries it and would otherwise lose its
+    pristine mix. `tools/migrate_full_mix_stem.py` rewrites those packs into the
+    spec shape (moves `original/full.ogg` → `stems/full.ogg`, adds the `full` stem
+    at `default: off`, drops the key); the fallback and the aliases are removed once
+    they are migrated (#945).
+
 ### Added
 - **Genres fall back to MusicBrainz enrichment** — the effective genre now
   resolves override → pack genre → the enrichment match's primary genre
