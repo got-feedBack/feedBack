@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Gigs (the career verb, frontend)** — book a gig from any opened passport:
+  a gig poster proposes the setlist (re-roll for a different bill; save or
+  copy the poster as a PNG), "Play the gig" hands the set to the play queue
+  with the venue on stage, a floating strip tracks the set, and finishing it
+  logs dated entries with per-song accuracies in the passport book — with an
+  encore celebration (crowd eruption + confetti) when the whole set clears
+  the bar, and a summary poster to share. Quitting mid-set simply abandons
+  it: no log, no fail state.
 - **Career on the Profile and Home pages** — the Profile gains a passport
   wall (earned-badge covers per instrument, hours, gig count; absent until a
   passport exists), injected through the same mount-point + rendered-event
