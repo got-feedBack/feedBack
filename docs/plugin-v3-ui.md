@@ -192,10 +192,12 @@ out of the capability graph.
 
 ## Injecting into core shells (profile, dashboard)
 
-Core screens that accept plugin sections render **empty mount points** and
-announce each (re)build with a DOM event, because their `innerHTML` swap wipes
-anything previously injected. A plugin listens for the event and fills the
-mount by id — the same seam every time:
+Core screens that accept plugin sections render **mount points** — usually
+empty, sometimes holding core's own **fallback content** (the Dashboard's
+career slot ships the plugin-count stat) — and announce each (re)build with a
+DOM event, because their `innerHTML` swap wipes anything previously injected.
+A plugin listens for the event and **replaces the mount's content** (never
+append — a fallback may be present) by id — the same seam every time:
 
 | Shell | Event | Mounts |
 | --- | --- | --- |

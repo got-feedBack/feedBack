@@ -937,12 +937,15 @@
         const walls = [];
         for (const inst of (_pp.config || {}).instruments || []) {
             const d = (_pp.instruments || {})[inst];
-            if (!d || !d.committed_at) continue;
+            // A commitment with no opened passport isn't a wall yet — the
+            // external surfaces (profile, home card) stay ABSENT until a
+            // passport exists (absent-not-empty).
+            if (!d || !d.committed_at || !(d.passports || []).length) continue;
             const earned = (d.passports || []).filter((p) => p.badge === 'earned' || p.badge === 'gold');
             badges += earned.length;
             seconds += (d.passports || []).reduce((t, p) => t + (p.seconds_total || 0), 0);
             gigs += d.gig_count || 0;
-            walls.push({ inst, earned, opened: (d.passports || []).length });
+            walls.push({ inst, earned, opened: d.passports.length });
         }
         if (!walls.length) return null;
         return { badges, seconds, gigs, walls };

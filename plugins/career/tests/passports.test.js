@@ -159,6 +159,10 @@ test('careerTotals / wall + dash card stay absent without commitment', () => {
     t.setView({ config: { instruments: ['guitar'] },
         instruments: { guitar: { committed_at: null, passports: [] } } });
     assert.equal(t.careerTotals(), null);
+    // Committed but zero passports opened: still absent (no zero-wall).
+    t.setView({ config: { instruments: ['guitar'] },
+        instruments: { guitar: { committed_at: 'x', passports: [] } } });
+    assert.equal(t.careerTotals(), null);
     // Committed with an earned badge + hours → totals aggregate.
     t.setView({ config: { instruments: ['guitar', 'bass'] },
         instruments: {
