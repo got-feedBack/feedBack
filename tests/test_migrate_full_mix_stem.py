@@ -264,6 +264,59 @@ def test_verify_rejects_a_retained_mixdown_that_plays_on_open(tmp_path: Path):
     assert mig.verify_zip(pak) == "full-stem-default-on"
 
 
+@pytest.mark.parametrize(
+    "default, expected",
+    [
+        ({"default": "off"}, "ok"),          # the one safe, canonical shape
+        ({"default": "OFF"}, "ok"),          # case-insensitive
+        ({"default": " off "}, "ok"),        # surrounding whitespace tolerated
+        ({}, "full-stem-default-not-off"),   # MISSING — core defaults to True (ON)
+        ({"default": ""}, "full-stem-default-not-off"),      # empty → ON in core
+        ({"default": False}, "full-stem-default-not-off"),   # boolean, not the string
+        ({"default": True}, "full-stem-default-on"),         # boolean truthy → plays
+        ({"default": "false"}, "full-stem-default-not-off"), # off-ish but non-canonical
+        ({"default": "0"}, "full-stem-default-not-off"),
+        ({"default": "no"}, "full-stem-default-not-off"),
+        ({"default": "maybe"}, "full-stem-default-not-off"), # malformed
+        ({"default": "on"}, "full-stem-default-on"),
+        ({"default": "yes"}, "full-stem-default-on"),
+        ({"default": "1"}, "full-stem-default-on"),
+    ],
+)
+def test_verify_requires_an_explicit_off_on_a_retained_mixdown(tmp_path, default, expected):
+    """Beside instrument stems, `full` is safe only with an explicit normalized
+    `off`. Core defaults an ABSENT `default` to ON and treats empty/unknown as
+    ON, so a missing or blank default is the double-audio hazard itself, not a
+    lesser one — `verify` must not certify it."""
+    m = _manifest(
+        stems=[
+            {"id": "full", "file": "stems/full.ogg", **default},
+            {"id": "guitar", "file": "stems/guitar.ogg", "default": "on"},
+        ]
+    )
+    del m["original_audio"]
+    pak = _write_pack(
+        tmp_path / f"{tmp_path.name}.feedpak",
+        m,
+        files={"stems/full.ogg": b"M", "stems/guitar.ogg": b"g"},
+    )
+    assert mig.verify_zip(pak) == expected
+
+
+def test_verify_ignores_default_on_a_sole_full_stem(tmp_path: Path):
+    """A single `full` stem IS the audio — the len>1 gate means its default is
+    not policed, so an on/absent default is fine (off would mute the pack)."""
+    for default in ({"default": "on"}, {}, {"default": ""}):
+        m = _manifest(stems=[{"id": "full", "file": "stems/full.ogg", **default}])
+        del m["original_audio"]
+        pak = _write_pack(
+            tmp_path / f"{tmp_path.name}-{len(default)}.feedpak",
+            m,
+            files={"stems/full.ogg": b"M"},
+        )
+        assert mig.verify_zip(pak) == "ok"
+
+
 def test_verify_rejects_an_unmigrated_pack(tmp_path: Path):
     pak = _write_pack(tmp_path / "song.feedpak", _manifest())
     assert mig.verify_zip(pak) == "still-has-key"

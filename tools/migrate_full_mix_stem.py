@@ -256,8 +256,24 @@ def verify_zip(path: Path) -> str:
             return "full-stem-missing-file"
         # A retained mixdown that plays on open would double the mix in any reader
         # that sums the stem list — the whole hazard this migration must not create.
-        if len(stems) > 1 and str(full.get("default", "")).lower() in ("true", "on", "yes", "1"):
-            return "full-stem-default-on"
+        # Beside instrument stems, `full` MUST carry an explicit, normalized "off":
+        #   - core (lib/sloppak.py) defaults an ABSENT `default` to True (ON) and
+        #     treats an empty / unrecognized string as ON, so a missing or blank
+        #     default is not merely non-canonical — core would play the mixdown on
+        #     open, doubling the song. It is the exact hazard, not a lesser one.
+        #   - the migrator always writes the literal "off", so requiring it also
+        #     certifies the pack is in the shape this tool produces — the most
+        #     portable spelling, understood even by a reader that only knows
+        #     "on"/"off" and would choke on a boolean or `false`/`0`/`no`.
+        # So: `on`-ish values are reported as actively-playing; everything that is
+        # not a normalized "off" (missing, empty, boolean, `false`/`no`/`0`,
+        # malformed) is reported as an unsafe/non-canonical default.
+        if len(stems) > 1:
+            default = str(full.get("default", "")).strip().lower()
+            if default in ("true", "on", "yes", "1"):
+                return "full-stem-default-on"
+            if default != "off":
+                return "full-stem-default-not-off"
     return "ok"
 
 
