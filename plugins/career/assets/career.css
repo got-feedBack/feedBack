@@ -124,7 +124,7 @@
     text-align: center;
 }
 .pp-cover { transition: transform 0.15s ease, box-shadow 0.15s ease; }
-.pp-cover:hover { transform: translateY(-4px) !important; box-shadow: 0 10px 22px rgba(0, 0, 0, 0.55); }
+.pp-cover:not(.pp-tilt):hover { transform: translateY(-4px) !important; box-shadow: 0 10px 22px rgba(0, 0, 0, 0.55); }
 .pp-cover-title {
     font-weight: 700;
     font-size: 0.85rem;
@@ -474,4 +474,88 @@
     color: #8a7a5e;
     margin-top: 0.75rem;
     font-variant-numeric: tabular-nums;
+}
+
+/* ── Visuals pack: trading-card tilt, emerging ink, gold foil ──────────── */
+
+/* Trading-card tilt (earned artifacts; JS feeds --pp-tilt-* on hover-capable
+   pointers only). */
+.pp-tilt {
+    position: relative;
+    overflow: hidden;
+    will-change: transform;
+}
+.pp-cover.pp-tilt {
+    transform: perspective(700px)
+        rotateX(var(--pp-tilt-x, 0deg)) rotateY(var(--pp-tilt-y, 0deg))
+        rotate(var(--pp-cover-rot, 0deg));
+    transition: transform 0.12s ease, box-shadow 0.15s ease;
+}
+.pp-cover.pp-tilt:hover { box-shadow: 0 12px 26px rgba(0, 0, 0, 0.6); }
+.pp-stamp-page.pp-tilt {
+    overflow: visible;
+    transform: perspective(600px)
+        rotateX(var(--pp-tilt-x, 0deg)) rotateY(var(--pp-tilt-y, 0deg))
+        rotate(var(--pp-rot));
+    transition: transform 0.12s ease;
+}
+.pp-tilt::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(105deg,
+        transparent calc(var(--pp-glint-x, 50%) - 14%),
+        rgba(255, 255, 255, 0.16) var(--pp-glint-x, 50%),
+        transparent calc(var(--pp-glint-x, 50%) + 14%));
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    pointer-events: none;
+}
+.pp-tilt:hover::after { opacity: 1; }
+
+/* Emerging-stamp ink: the ghost fills as qualifying songs land. */
+.pp-stamp-ghost::before {
+    content: '';
+    position: absolute;
+    inset: 7%;
+    border-radius: 999px;
+    background: conic-gradient(rgba(154, 91, 22, 0.16) var(--pp-fill, 0%), transparent 0);
+    pointer-events: none;
+}
+
+/* Gold foil preview — honest "coming", never earnable-looking. */
+.pp-gold-foil {
+    position: relative;
+    overflow: hidden;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 0.9rem;
+    padding: 0.28rem 0.85rem;
+    border-radius: 999px;
+    border: 2px dashed #c8b273;
+    color: #a8946d;
+    font-size: 0.58rem;
+    font-weight: 700;
+    letter-spacing: 0.32em;
+}
+.pp-gold-foil::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(100deg, transparent 40%, rgba(255, 223, 128, 0.35) 50%, transparent 60%);
+    transform: translateX(-120%);
+    animation: pp-foil 3.4s ease-in-out infinite;
+}
+@keyframes pp-foil {
+    0%, 55% { transform: translateX(-120%); }
+    100% { transform: translateX(120%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .pp-gold-foil::after { animation: none; }
+    .pp-cover.pp-tilt, .pp-stamp-page.pp-tilt { transition: none; }
+    /* The hover glint is motion theatrics too — not just the JS tilt. */
+    .pp-tilt::after { display: none; }
 }

@@ -138,3 +138,15 @@ test('fmtHours: silent under a minute, minutes under an hour, tenths after', () 
     assert.equal(fmtHours(null), '');
     assert.equal(fmtHours('junk'), '');
 });
+
+test('ppFillFraction: song progress toward the bar, in-progress only', () => {
+    const { ppFillFraction } = load().__careerPassportTest;
+    const p = (badge, q, songs) => ({ badge, qualifying_count: q, requirement: { songs } });
+    assert.equal(ppFillFraction(p('in_progress', 3, 5)), 0.6);
+    assert.equal(ppFillFraction(p('in_progress', 0, 5)), 0);
+    assert.equal(ppFillFraction(p('in_progress', 7, 5)), 1);   // clamped
+    assert.equal(ppFillFraction(p('earned', 5, 5)), 0);        // no fill once earned
+    assert.equal(ppFillFraction(p('shown_not_judged', 3, 5)), 0);
+    assert.equal(ppFillFraction(p('in_progress', 3, 0)), 0);   // no bar → no fill
+    assert.equal(ppFillFraction(null), 0);
+});

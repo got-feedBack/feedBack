@@ -479,12 +479,17 @@
 
     function ppCoverHTML(inst, p) {
         const rot = ppJitter(inst + p.genre_key, 1.6).toFixed(2);
-        const stamp = p.badge === 'earned'
+        const earned = p.badge === 'earned';
+        const stamp = earned
             ? `<span class="pp-stamp pp-stamp-mini" style="--pp-rot:${ppJitter(p.genre_key, 8).toFixed(1)}deg">BRONZE</span>`
             : '';
         const stubs = p.qualifying_count === 1 ? '1 stub' : `${p.qualifying_count} stubs`;
         const hours = fmtHours(p.seconds_total);
-        return `<button class="pp-cover pp-leather-${esc(inst)}" data-pp-open="${esc(p.genre_key)}" style="transform:rotate(${rot}deg)">
+        // Earned covers are trading cards: rotation moves into a CSS var so
+        // the pointer-tracked tilt transform can compose with it.
+        const style = earned
+            ? `--pp-cover-rot:${rot}deg` : `transform:rotate(${rot}deg)`;
+        return `<button class="pp-cover${earned ? ' pp-tilt' : ''} pp-leather-${esc(inst)}" data-pp-open="${esc(p.genre_key)}" style="${style}">
             <span class="pp-cover-title">${esc(p.genre.toUpperCase())}</span>
             <span class="pp-cover-inst">${esc(ppLabel(inst))} passport</span>
             ${stamp}
@@ -560,6 +565,15 @@
         </div>`;
     }
 
+    // Emerging-stamp ink: how much of the ghost stamp has "carved in".
+    // Song progress toward the bar only — the invite line stays the words.
+    function ppFillFraction(p) {
+        if (!p || p.badge !== 'in_progress') return 0;
+        const need = Number((p.requirement || {}).songs) || 0;
+        if (need <= 0) return 0;
+        return Math.max(0, Math.min(1, (p.qualifying_count || 0) / need));
+    }
+
     function ppBookHTML(inst, p, pendingSlam) {
         const req = p.requirement || {};
         const need = Math.max(0, (req.songs || 0) - p.qualifying_count);
@@ -582,13 +596,15 @@
         if (p.badge === 'shown_not_judged') {
             badgeArea = `<div class="pp-snj">Shown, not judged — your ${esc(ppLabel(inst).toLowerCase())} repertoire speaks for itself.</div>`;
         } else if (p.badge === 'earned') {
-            badgeArea = `<div class="pp-stamp pp-stamp-page${pendingSlam ? ' pp-stamp-hidden' : ''}" style="--pp-rot:${ppJitter(p.genre_key, 7).toFixed(1)}deg">
+            badgeArea = `<div class="pp-stamp pp-stamp-page${pendingSlam ? ' pp-stamp-hidden' : ' pp-tilt'}" style="--pp-rot:${ppJitter(p.genre_key, 7).toFixed(1)}deg">
                 <span class="pp-stamp-genre">${esc(p.genre.toUpperCase())}</span>
                 <span class="pp-stamp-tier">BRONZE</span>
             </div>
+            <div class="pp-gold-foil" aria-hidden="true">GOLD</div>
             <div class="pp-gold-note">Gold rung coming — improvise it, verified.</div>`;
         } else {
-            badgeArea = `<div class="pp-stamp pp-stamp-page pp-stamp-ghost" style="--pp-rot:${ppJitter(p.genre_key, 7).toFixed(1)}deg">
+            const fill = (ppFillFraction(p) * 100).toFixed(0);
+            badgeArea = `<div class="pp-stamp pp-stamp-page pp-stamp-ghost" style="--pp-rot:${ppJitter(p.genre_key, 7).toFixed(1)}deg; --pp-fill:${fill}%">
                 <span class="pp-stamp-genre">${esc(p.genre.toUpperCase())}</span>
                 <span class="pp-stamp-tier">BRONZE</span>
             </div>
@@ -708,6 +724,49 @@
         }, 1500);
     }
 
+    // ── Trading-card tilt (earned artifacts only) ─────────────────────────
+    let _tiltRaf = 0;
+    let _tiltEl = null;
+
+    function tiltAllowed() {
+        try {
+            return window.matchMedia('(hover: hover)').matches &&
+                !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        } catch (_) { return false; }
+    }
+
+    function resetTilt(el) {
+        if (!el) return;
+        el.style.removeProperty('--pp-tilt-x');
+        el.style.removeProperty('--pp-tilt-y');
+        el.style.removeProperty('--pp-glint-x');
+    }
+
+    function onTiltMove(e) {
+        if (!tiltAllowed()) return;
+        const card = e.target && e.target.closest ? e.target.closest('.pp-tilt') : null;
+        if (_tiltEl && _tiltEl !== card) { resetTilt(_tiltEl); _tiltEl = null; }
+        if (!card) return;
+        _tiltEl = card;
+        if (_tiltRaf) return;
+        const x = e.clientX;
+        const y = e.clientY;
+        _tiltRaf = requestAnimationFrame(() => {
+            _tiltRaf = 0;
+            const r = card.getBoundingClientRect();
+            if (!r.width || !r.height) return;
+            const px = (x - r.left) / r.width;
+            const py = (y - r.top) / r.height;
+            card.style.setProperty('--pp-tilt-x', `${((0.5 - py) * 10).toFixed(2)}deg`);
+            card.style.setProperty('--pp-tilt-y', `${((px - 0.5) * 12).toFixed(2)}deg`);
+            card.style.setProperty('--pp-glint-x', `${(px * 100).toFixed(1)}%`);
+        });
+    }
+
+    function onTiltLeave() {
+        if (_tiltEl) { resetTilt(_tiltEl); _tiltEl = null; }
+    }
+
     function openGenre(inst, genre) {
         fetch(`${API}/passports/open`, {
             method: 'POST',
@@ -798,7 +857,11 @@
 
     function boot() {
         const screen = document.getElementById('plugin-career');
-        if (screen) screen.addEventListener('click', onClick);
+        if (screen) {
+            screen.addEventListener('click', onClick);
+            screen.addEventListener('pointermove', onTiltMove);
+            screen.addEventListener('pointerleave', onTiltLeave);
+        }
         const sm = window.feedBack;
         if (sm && typeof sm.on === 'function') {
             // New song stats can add stars → thresholds may cross mid-session.
@@ -819,7 +882,7 @@
     // the badge-diff logic; nothing here touches the DOM.
     window.__careerPassportTest = {
         ppKey, ppJitter, ppLabel, detectNewBadges, seenBadges, markBadgeSeen,
-        fmtHours,
+        fmtHours, ppFillFraction,
     };
 
     if (document.readyState === 'loading') {

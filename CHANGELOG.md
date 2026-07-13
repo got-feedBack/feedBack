@@ -38,6 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   top-tier clean pass in one key (`keysCleared`), any depth rung, or
   mastery — rather than only the maxed-speed depth flips. Genres without a
   curated drill stay songs-only.
+- **Career passport visuals pack** — earned covers and badge stamps become
+  trading cards (pointer-tracked tilt + light glint, hover-capable devices
+  only); the ghost stamp visibly "carves in" as qualifying songs land (a
+  conic ink fill, no numbers added); the Gold rung preview is a small foil
+  chip with a shimmer sweep, still honestly labeled coming. All theatrics
+  disabled under `prefers-reduced-motion`.
 - **Career passports (backend)** — the badge-journey layer on top of career stars.
   New career-plugin endpoints: `GET /api/plugins/career/passports` (per-instrument
   passport walls: genre badges computed on read from `song_stats` × the library's
