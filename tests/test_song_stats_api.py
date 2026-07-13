@@ -480,8 +480,11 @@ def test_seconds_only_post_accrues_without_touching_position(client):
     # overwrite Continue with the end-of-song offset).
     assert row["plays"] == 0
     assert row["last_position"] == pytest.approx(42.0)
-    # But the song WAS played — recency ordering must see it.
-    assert row["last_played_at"]
+    # Recency must come from the seconds-only POST itself — prove it on a
+    # FRESH row (the position touch above already stamps last_played_at,
+    # which would make an assertion here vacuous).
+    r2 = client.post("/api/stats", json={"filename": "fresh.archive", "seconds": 30})
+    assert r2.json()["stats"]["last_played_at"]
     # Still counts as playing today for the streak.
     assert r.json()["progress"]["current_streak"] == 1
 
