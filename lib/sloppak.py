@@ -34,6 +34,21 @@ FEEDPAK_EXT = ".feedpak"
 SLOPPAK_EXT = ".sloppak"
 SONG_EXTS = (FEEDPAK_EXT, SLOPPAK_EXT)  # accepted on read/discovery
 
+# ── The full mix ──────────────────────────────────────────────────────────────
+#
+# Spec §5.3 RESERVES the stem id `full` for the song's complete mixdown: the
+# whole song in one file, as heard before source separation. It is a stem — it
+# lives in `stems` like every other audio file in a pack — but it is a *mixdown,
+# not a layer*. A reader that sums stems must never include it in the sum: it
+# already contains every instrument, so summing it doubles the whole song and
+# muting `guitar` still leaves guitar audible inside it.
+#
+# Keeping it matters because separation is lossy: re-summing guitar+bass+drums+
+# vocals does NOT reproduce the file they came from. The mixdown is the only
+# faithful rendering of the song a pack can carry, so we play it whenever every
+# stem sits at unity and nothing is muted.
+FULL_MIX_STEM_ID = "full"
+
 import yaml
 
 from jsonc import load_json
@@ -49,6 +64,97 @@ from song import (
 )
 import drums as drums_mod
 import notation as notation_mod
+
+
+def find_full_mix(stems: list[dict]) -> dict | None:
+    """The RESERVED `full` stem (spec §5.3) — the pack's complete mixdown — or None.
+
+    Answers "what is this pack's master audio", which is what fingerprinting
+    wants. For playback use partition_stems() instead: a pack whose *only* stem
+    is `full` has no mixdown to play *separately from* its stems, and this
+    function still returns it.
+    """
+    return next(
+        (s for s in stems if str(s.get("id", "")) == FULL_MIX_STEM_ID), None
+    )
+
+
+def partition_stems(stems: list[dict]) -> tuple[dict | None, list[dict]]:
+    """Split stem descriptors into (mixdown, instrument_stems) for PLAYBACK.
+
+    The mixdown is lifted OUT of the stem list because every consumer of `stems`
+    treats that list as layers to sum or to show as mixer channels, and `full` is
+    neither (spec §5.3). Leaving it in is precisely the bug that made the packer
+    invent `original_audio` in the first place: a listed full mix plays on top of
+    the stems.
+
+    A pack whose only stem is `full` is a single-mix pack, not a separated one:
+    there are no instruments to be pristine *against*, so `full` stays the sole
+    playable stem and no mixdown is surfaced. That keeps the freshly-converted
+    single-stem pack — much the most common shape — behaving exactly as before.
+
+    EVERY entry with the reserved id is removed, not just the one we surface. A
+    malformed pack that lists `full` twice would otherwise leave a copy of the
+    whole song behind in the stem list, to be summed with the instruments — the
+    precise failure this function exists to prevent, reintroduced by a duplicate.
+    """
+    if len(stems) < 2:
+        return None, stems
+    full = find_full_mix(stems)
+    if full is None:
+        return None, stems
+    return full, [s for s in stems if str(s.get("id", "")) != FULL_MIX_STEM_ID]
+
+
+def _legacy_full_mix(manifest: dict, source_dir: Path) -> str | None:
+    """Full mix from the DEPRECATED `original_audio:` manifest key, or None.
+
+    Before feedpak 1.15.0 reserved `full`, §5.3 said the mixdown was "commonly
+    replaced" by the per-instrument stems on splitting — so it had nowhere to
+    live, and this repo invented a top-level key pointing at a parallel
+    `original/` directory (#583) to hold it. That key was never in the spec, and
+    #933 removed our dependence on it: the mixdown is a stem.
+
+    We still READ it, because every pack written before the spec caught up
+    carries `original_audio: original/full.ogg` and would otherwise lose its full
+    mix. We never write it. Delete this once those packs are migrated (#945);
+    `tools/migrate_full_mix_stem.py` is the migration.
+
+    NOTE the string literal below. tools/check_spec_conformance.py AST-scans for
+    `manifest.get("<literal>")` to prove every manifest key core reads is one the
+    spec declares. Hoisting "original_audio" into a named constant would hide
+    this read from that scan — the gate would conclude core no longer touches the
+    key, and the grandfather entry that documents this debt would go stale. The
+    literal is what keeps the deprecation honest and visible to CI. Leave it.
+
+    Same permissive, path-traversal-guarded posture as the optional side-files: a
+    missing / escaping / unreadable file leaves the pack without a full mix (the
+    player falls back to the separated stems) rather than aborting the load.
+    Returns the manifest-relative string, so callers build its URL exactly as
+    they build a stem's.
+    """
+    rel_raw = manifest.get("original_audio")
+    if not isinstance(rel_raw, str) or not rel_raw.strip():
+        return None
+    rel = rel_raw.strip()
+    try:
+        target = (source_dir / rel).resolve()
+        target.relative_to(source_dir.resolve())
+    except ValueError:
+        log.warning("sloppak: original_audio path %r escapes source_dir — skipped", rel)
+        return None
+    except OSError as e:
+        log.warning("sloppak: original_audio path resolution failed (%s) — skipped", e)
+        return None
+    if not target.is_file():
+        return None
+    log.info(
+        "sloppak: pack uses the deprecated `original_audio:` key (%r) — the full mix "
+        "is a stem (id `full`, feedpak spec §5.3). Re-pack with "
+        "tools/migrate_full_mix_stem.py; support for this key will be removed.",
+        rel,
+    )
+    return rel
 
 
 # ── Format detection ──────────────────────────────────────────────────────────
@@ -367,14 +473,21 @@ class LoadedSloppak:
     # song.arrangements (not to manifest["arrangements"]) — skipped entries are
     # absent so indexing by song.arrangements index is safe.
     arrangement_ids: list[str | None] = field(default_factory=list)
-    # Manifest-relative path to the single full-mix audio file, taken from the
-    # manifest `original_audio:` key (e.g. "original/full.ogg"). This is the
-    # pre-separation mixdown that exists alongside the per-instrument `stems`.
-    # None when the key is absent, points outside source_dir, or the file is
-    # missing on disk. Served to the front-end via the highway WS as
-    # `original_audio_url`; the stems plugin uses it to play the untouched mix
-    # when every stem slider is at unity (and the separate stems otherwise).
-    original_audio: str | None = None
+    # Manifest-relative path to the pack's complete mixdown — the whole song in
+    # one file, as heard before source separation. This is the RESERVED `full`
+    # stem (spec §5.3), lifted out of `stems` above precisely because it is NOT
+    # an instrument layer: summing it with the per-instrument stems it was split
+    # into would double the entire song. See partition_stems().
+    #
+    # None when the pack has no mixdown to offer *separately* from its stems —
+    # which includes the common single-mix pack, whose only stem IS the mixdown
+    # (there is nothing to be pristine against, so it stays in `stems`).
+    #
+    # Served to the front-end via the highway WS as `full_mix_url`; the stems
+    # plugin plays it while every stem slider sits at unity and crosses to the
+    # separated stems the moment one drops below 100% — demucs recombination is
+    # lossy, so the mixdown is strictly the better audio when nothing is muted.
+    full_mix: str | None = None
 
 
 def load_song(
@@ -766,6 +879,13 @@ def load_song(
             default_on = bool(default_val)
         stems.append({"id": sid, "file": sfile, "default": default_on})
 
+    # The complete mixdown is a stem (spec §5.3), but it is not a *layer*: lift
+    # it out so that no consumer of `stems` — the mixer, the library's stem
+    # chips, the WS payload — sums it with, or lists it beside, the instruments
+    # it was separated into. `full_mix_stem` is None for a single-mix pack,
+    # whose only stem IS the mixdown and stays in the list.
+    full_mix_stem, stems = partition_stems(stems)
+
     # Optional keys.json — song-level, instrument-independent key/scale track
     # (manifest `keys:` key, spec §7.7). Permissive like the other side-files:
     # missing / unreadable / malformed -> None, never fatal. Stored as a
@@ -828,28 +948,22 @@ def load_song(
                     }
 
     _fpv = manifest.get("feedpak_version")
-    # Optional full-mix audio — manifest `original_audio:` key. The single
-    # pre-separation mixdown that ships alongside the per-instrument stems.
-    # Same permissive, path-traversal-guarded posture as drum_tab above: a
-    # missing/escaping/absent file simply leaves the full mix unavailable (the
-    # player falls back to the separate stems) rather than aborting the load.
-    # We store the manifest-relative string so server.py can build its URL the
-    # same way it builds stem URLs (via the /api/sloppak/.../file/ endpoint).
-    original_audio_data: str | None = None
-    original_audio_rel = manifest.get("original_audio")
-    if isinstance(original_audio_rel, str) and original_audio_rel.strip():
-        rel = original_audio_rel.strip()
-        try:
-            oa_path = (source_dir / rel).resolve()
-            oa_path.relative_to(source_dir.resolve())
-        except ValueError:
-            log.warning("sloppak: original_audio path %r escapes source_dir — skipped", rel)
-            oa_path = None
-        except OSError as e:
-            log.warning("sloppak: original_audio path resolution failed (%s) — skipped", e)
-            oa_path = None
-        if oa_path is not None and oa_path.is_file():
-            original_audio_data = rel
+    # The pack's full mix. Normally the RESERVED `full` stem partitioned out
+    # above (spec §5.3) — no path work needed, it was validated with the other
+    # stems and its URL is built the same way. Only when the pack has no `full`
+    # stem do we fall back to the DEPRECATED `original_audio:` key, which is the
+    # shape every pack written before feedpak 1.15.0 uses.
+    if full_mix_stem is not None:
+        full_mix_data: str | None = full_mix_stem["file"]
+    elif find_full_mix(stems) is not None:
+        # Single-mix pack: its ONE stem is the mixdown, so there is no mixdown to
+        # offer *apart from* the stems. Never fall through to the legacy key here
+        # — a pack that both carries a `full` stem and names the old key would
+        # otherwise surface the mixdown twice (once as the stem the player is
+        # already playing, once as a "pristine" track to cross to).
+        full_mix_data = None
+    else:
+        full_mix_data = _legacy_full_mix(manifest, source_dir)
 
     return LoadedSloppak(
         song=song,
@@ -864,7 +978,7 @@ def load_song(
         keys=keys_data,
         notation_by_id=notation_by_id_data,
         arrangement_ids=arrangement_ids_acc,
-        original_audio=original_audio_data,
+        full_mix=full_mix_data,
     )
 
 
@@ -909,7 +1023,7 @@ def extract_meta(path: Path) -> dict:
     tuning_offsets = _tuning_for_meta(arr_list)
 
     stems_list = manifest.get("stems", []) or []
-    stem_ids: list[str] = []
+    valid_stems: list[dict] = []
     for s in stems_list:
         if not isinstance(s, dict):
             continue
@@ -923,7 +1037,13 @@ def extract_meta(path: Path) -> dict:
             isinstance(sid, str) and sid
             and isinstance(sfile, str) and sfile
         ):
-            stem_ids.append(sid)
+            valid_stems.append({"id": sid, "file": sfile})
+    # Partition exactly as load_song() does, for the same reason the library
+    # filter must not lie: `full` is the mixdown, not an instrument (spec §5.3).
+    # A separated pack that retains it would otherwise offer the user a "full"
+    # stem chip alongside guitar/bass/drums and count it as a seventh stem.
+    _full, instrument_stems = partition_stems(valid_stems)
+    stem_ids = [s["id"] for s in instrument_stems]
     stem_count = len(stem_ids)
 
     return {

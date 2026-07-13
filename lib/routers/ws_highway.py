@@ -321,11 +321,16 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
         audio_url = None
         audio_error: str | None = None  # Surfaced in song_info when audio_url is None
         stems_payload: list[dict] = []
-        # URL of the single full-mix audio (sloppak `original_audio:`), when the
-        # pack ships one. The stems plugin uses this to play the untouched mix
-        # while every stem slider is at unity; None otherwise (separate stems
-        # only, loose folder, or archive).
-        original_audio_url: str | None = None
+        # URL of the pack's complete mixdown — the RESERVED `full` stem (spec
+        # §5.3), which sloppak.load_song() lifts out of `stems` because it is a
+        # mixdown, not a layer. The stems plugin plays it while every stem slider
+        # is at unity (separation is lossy, so it beats re-summing the stems) and
+        # crosses to the separated stems as soon as one is attenuated.
+        #
+        # None when the pack has no mixdown to offer separately from its stems:
+        # a single-mix pack (its one stem IS the mixdown), a loose folder, or an
+        # archive.
+        full_mix_url: str | None = None
         if is_loose:
             # Loose folder filenames are relative paths (artist/album/song).
             # Hash the *canonical* dlc-relative path (so two URL spellings
@@ -365,21 +370,25 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
                 url = f"/api/sloppak/{q_fn}/file/{quote(s['file'])}"
                 stems_payload.append({"id": s["id"], "url": url, "default": s["default"]})
             # Full-mix URL (served by the same /api/sloppak/.../file/ endpoint).
-            if loaded_slop is not None and loaded_slop.original_audio:
-                original_audio_url = (
-                    f"/api/sloppak/{q_fn}/file/{quote(loaded_slop.original_audio)}"
+            if loaded_slop is not None and loaded_slop.full_mix:
+                full_mix_url = (
+                    f"/api/sloppak/{q_fn}/file/{quote(loaded_slop.full_mix)}"
                 )
             if stems_payload:
                 # Stems present: keep the core <audio> pointed at stem[0]. This
                 # URL is only ever heard in the degraded path (stems plugin
                 # refuses takeover / decode fails); the full-mix↔stems switch is
-                # driven client-side by `original_audio_url`, not `audio_url`.
+                # driven client-side by `full_mix_url`, not `audio_url`.
                 audio_url = stems_payload[0]["url"]
-            elif original_audio_url:
+            elif full_mix_url:
                 # Stem-less full-mix pack: nothing to separate, so play the full
                 # mix natively through the core <audio>. The stems plugin's
                 # onSongReady returns early on an empty stems list (no graph).
-                audio_url = original_audio_url
+                # Reachable only via the deprecated `original_audio:` key, whose
+                # packs put the mixdown outside `stems` — a pack that carries its
+                # mixdown as the `full` stem has it IN `stems`, so it lands in the
+                # branch above with stems_payload == [full].
+                audio_url = full_mix_url
             else:
                 audio_error = "This sloppak has no playable stems."
         else:
@@ -521,16 +530,31 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
             # for the credits overlay, so minigames / synthetic highway uses
             # (no manifest) never trigger it.
             "authors": _sanitize_authors(loaded_slop.manifest) if (is_slop and loaded_slop is not None) else [],
+            # Instrument stems ONLY. The pack's complete mixdown (the RESERVED
+            # `full` stem, spec §5.3) is deliberately NOT in this list: consumers
+            # sum `stems` into one mix and render one fader per entry, and the
+            # mixdown is neither a layer nor an instrument — summing it would
+            # double the whole song. It is surfaced separately, below.
             "stems": stems_payload,
-            # Full-mix audio (sloppak `original_audio:`) served alongside the
-            # separate `stems`. The stems plugin plays this single file while
-            # every stem slider is at unity and switches to the separate stems
-            # the moment one drops below 100%. None when the pack ships stems
-            # only. `has_*` flags mirror the has_drum_tab/has_keys convention so
-            # a client can branch without re-deriving from the URLs.
-            "original_audio_url": original_audio_url,
-            "has_original_audio": bool(original_audio_url),
+            # The complete mixdown, served by the same /api/sloppak/.../file/
+            # endpoint as the stems. The stems plugin plays this single file
+            # while every stem slider is at unity and crosses to the separated
+            # stems the moment one drops below 100% — separation is lossy, so the
+            # mixdown is strictly better audio when nothing is muted. None when
+            # the pack has no mixdown apart from its stems. The `has_*` flags
+            # mirror the has_drum_tab/has_keys convention so a client can branch
+            # without re-deriving from the URLs.
+            "full_mix_url": full_mix_url,
+            "has_full_mix": bool(full_mix_url),
             "has_stems": bool(stems_payload),
+            # DEPRECATED aliases of the two keys above, kept so a client built
+            # against the old frame keeps working across one release. They were
+            # named after `original_audio:` — a manifest key this repo invented
+            # and the feedpak spec never had (#933). The key is gone; the mixdown
+            # is a stem. Remove these once the shipped stems plugin reads
+            # `full_mix_url` (#945).
+            "original_audio_url": full_mix_url,
+            "has_original_audio": bool(full_mix_url),
             # Surface a drum_tab presence flag so the visualization picker
             # can auto-activate the drums plugin even when the chosen
             # arrangement isn't named "Drums" (drum_tab.json lives next

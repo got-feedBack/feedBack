@@ -1908,17 +1908,21 @@ function createHighway() {
                                     // never routable.
                                     const isAudioUrl = msg.audio_url.startsWith('/audio/');
                                     // "Full mix" covers BOTH single-mix pack shapes:
-                                    //  - stem-less packs (original_audio: in the manifest,
-                                    //    audio_url == original_audio_url), and
-                                    //  - single-stem packs (stems: [full.ogg] only) — the server
-                                    //    puts the full mix in the stems list, has_original_audio
-                                    //    is false, and audio_url points at the one stem. With one
-                                    //    stem there is no per-stem mix to preserve, so routing it
-                                    //    natively loses nothing. Real multi-stem (>1) stays out
-                                    //    until Phase 2.
+                                    //  - single-stem packs (stems: [full.ogg] only) — the pack's
+                                    //    one stem IS its mixdown, so the server leaves it in the
+                                    //    stems list, has_full_mix is false, and audio_url points
+                                    //    at that one stem; and
+                                    //  - legacy stem-less packs, whose mixdown sits outside stems
+                                    //    behind the deprecated original_audio: key, so has_stems
+                                    //    is false and audio_url == full_mix_url.
+                                    // Either way there is one audible source and no per-stem mix
+                                    // to preserve, so routing it natively loses nothing. A pack
+                                    // that retains its `full` stem ALONGSIDE separated stems is
+                                    // multi-stem (has_full_mix && has_stems) and stays out until
+                                    // Phase 2 — routing it natively would drop the mixer.
                                     const isFeedpakFullMix = !isAudioUrl
                                         && msg.audio_url.startsWith('/api/sloppak/')
-                                        && ((!!msg.has_original_audio && !msg.has_stems)
+                                        && ((!!msg.has_full_mix && !msg.has_stems)
                                             || (msg.stems || []).length === 1);
                                     // Record the loaded song's audio so app.js can re-route it
                                     // between the HTML5 and JUCE paths if the audio engine is
@@ -1943,7 +1947,7 @@ function createHighway() {
                                         'isFeedpakFullMix=', isFeedpakFullMix,
                                         'has_stems=', !!msg.has_stems,
                                         'stems=', (msg.stems || []).length,
-                                        'has_original_audio=', !!msg.has_original_audio,
+                                        'has_full_mix=', !!msg.has_full_mix,
                                         'format=', msg.format,
                                         'alreadyLoaded=', alreadyLoaded,
                                         'juceApi=', !!window.feedBackDesktop?.audio);
