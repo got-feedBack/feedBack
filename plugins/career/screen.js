@@ -38,6 +38,8 @@
     let _ppCeremonyActive = false;
     let _ppBootstrapped = false;
     let _ppNotified = {};        // badges chimed this session (slam still pending)
+    let _ppGigProposal = null;   // the booking poster's proposal, while open
+    let _ppGigRun = null;        // {songs, venue_id, genre, genre_key, instrument, idx} mid-set
 
     function $(id) { return document.getElementById(id); }
 
@@ -686,15 +688,24 @@
                     `<div class="pp-nearest-row"><em>${esc(s.title)}</em> — best ${pct(s.best_accuracy)}%, ${starGl} at ${pct(s.bar_at)}%</div>`).join('')}
             </div>`;
         }
+        let gigLog = '';
+        if ((p.gigs || []).length) {
+            gigLog = `<div class="pp-giglog">
+                <div class="pp-giglog-head">Gigs played</div>
+                ${p.gigs.slice(0, 6).map((g) =>
+                    `<div class="pp-giglog-row">${esc((g.at || '').slice(0, 10))} · ${esc(_venueName(g.venue_id))}${g.encore ? ' · <b>encore</b>' : ''}</div>`).join('')}
+            </div>`;
+        }
         return `<div class="pp-book-wrap" data-pp-close-bg="1" role="dialog" aria-modal="true" aria-label="${esc(p.genre)} ${esc(ppLabel(inst))} passport">
             <div class="pp-book">
                 <div class="pp-page pp-page-left">
                     <div class="pp-page-head">${esc(p.genre)} — ${esc(ppLabel(inst))}</div>
                     ${badgeArea}${odometer}${drills}
+                    <button class="career-btn career-btn-primary pp-gig-book" data-pp-gig="${esc(p.genre_key)}">Book a gig</button>
                 </div>
                 <div class="pp-page pp-page-right">
                     <div class="pp-page-head">Ticket stubs</div>
-                    <div class="pp-stubs">${stubsHTML}${nearest}</div>
+                    <div class="pp-stubs">${stubsHTML}${nearest}${gigLog}</div>
                 </div>
                 <div class="pp-book-cover pp-leather-${esc(inst)}">
                     <span class="pp-cover-title">${esc(p.genre.toUpperCase())}</span>
@@ -743,6 +754,7 @@
 
     function closeBook() {
         _ppBook = null;
+        _ppGigProposal = null;   // a dismissed poster is a dismissed booking
         const overlay = $('pp-overlay');
         if (overlay) { overlay.classList.add('hidden'); overlay.innerHTML = ''; }
         if (_ppReturnFocus && typeof _ppReturnFocus.focus === 'function' &&
@@ -894,6 +906,29 @@
         return canvas;
     }
 
+    // One export path for every canvas artifact: copy (with download
+    // fallback + notice) or save, failures audible.
+    function exportCanvasPng(canvas, filename, mode, noun) {
+        canvas.toBlob(async (blob) => {
+            const fail = (why) => {
+                if (window.fbNotify) window.fbNotify.show({ icon: '⚠️', title: `${noun} export failed`, message: why });
+            };
+            if (!blob) { fail('The canvas produced no image.'); return; }
+            try {
+                const io = await import('/static/js/blob-io.js');
+                if (mode === 'copy') {
+                    const ok = await io.copyImageBlob(blob);
+                    if (ok) {
+                        if (window.fbNotify) window.fbNotify.show({ icon: '📋', title: `${noun} copied`, message: 'Paste it anywhere.' });
+                        return;
+                    }
+                    if (window.fbNotify) window.fbNotify.show({ icon: '💾', title: 'Clipboard unavailable', message: `Saved the ${noun.toLowerCase()} instead.` });
+                }
+                io.downloadBlob(blob, filename);
+            } catch (e) { fail('Export helper unavailable.'); }
+        }, 'image/png');
+    }
+
     function exportPassportCard(mode) {
         if (!_ppBook || !_pp) return;
         const { inst, gkey } = _ppBook;
@@ -901,25 +936,7 @@
             .find((x) => x.genre_key === gkey);
         if (!p) return;
         const canvas = drawPassportCard(inst, p);
-        canvas.toBlob(async (blob) => {
-            const fail = (why) => {
-                if (window.fbNotify) window.fbNotify.show({ icon: '⚠️', title: 'Card export failed', message: why });
-            };
-            if (!blob) { fail('The canvas produced no image.'); return; }
-            const filename = `passport-${inst}-${gkey.replace(/[^a-z0-9-]+/g, '-')}.png`;
-            try {
-                const io = await import('/static/js/blob-io.js');
-                if (mode === 'copy') {
-                    const ok = await io.copyImageBlob(blob);
-                    if (ok) {
-                        if (window.fbNotify) window.fbNotify.show({ icon: '📋', title: 'Card copied', message: 'Paste it anywhere.' });
-                        return;
-                    }
-                    if (window.fbNotify) window.fbNotify.show({ icon: '💾', title: 'Clipboard unavailable', message: 'Saved the card instead.' });
-                }
-                io.downloadBlob(blob, filename);
-            } catch (e) { fail('Export helper unavailable.'); }
-        }, 'image/png');
+        exportCanvasPng(canvas, `passport-${inst}-${gkey.replace(/[^a-z0-9-]+/g, '-')}.png`, mode, 'Card');
     }
 
     // ── Career surfaces outside the plugin screen ─────────────────────────
@@ -1040,6 +1057,303 @@
         }
     }
 
+    // ── Gigs: booking poster → set runner → summary ──────────────────────
+
+    function _venueName(venueId) {
+        const v = (_state && _state.venues || []).find((x) => x.id === venueId);
+        return v ? v.name : (venueId || 'the stage');
+    }
+
+    function gigPosterHTML(prop) {
+        const bill = prop.songs.map((s, i) =>
+            `<div class="pp-poster-line"><span>${i + 1}.</span> ${esc(s.title)}${s.artist ? ` <em>${esc(s.artist)}</em>` : ''}</div>`).join('');
+        return `<div class="pp-book-wrap" data-pp-close-bg="1" role="dialog" aria-modal="true" aria-label="Gig poster">
+            <div class="pp-poster">
+                <div class="pp-poster-venue">${esc(prop.venue_name || 'The stage')}</div>
+                <div class="pp-poster-presents">presents</div>
+                <div class="pp-poster-title">${esc(prop.genre.toUpperCase())} NIGHT</div>
+                <div class="pp-poster-inst">${esc(ppLabel(prop.instrument))} · tonight</div>
+                <div class="pp-poster-bill">${bill}</div>
+                <div class="pp-poster-actions">
+                    <button class="career-btn career-btn-primary" data-pp-gig-play="1">Play the gig</button>
+                    <button class="career-btn career-btn-ghost" data-pp-gig-reroll="1">Re-roll</button>
+                    <button class="career-btn career-btn-ghost" data-pp-poster="save">Save</button>
+                    <button class="career-btn career-btn-ghost" data-pp-poster="copy">Copy</button>
+                </div>
+                <button class="pp-book-close" data-pp-close="1" aria-label="Close">✕</button>
+            </div>
+        </div>`;
+    }
+
+    async function bookGig(gkey) {
+        if (!_pp) return;
+        const inst = activeInstrument();
+        const p = (((_pp.instruments || {})[inst] || {}).passports || [])
+            .find((x) => x.genre_key === gkey);
+        if (!p) return;
+        try {
+            const res = await fetch(`${API}/gigs/propose`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ instrument: inst, genre: p.genre }),
+            });
+            if (!res.ok) return;
+            _ppGigProposal = await res.json();
+        } catch (_) { return; }
+        const overlay = $('pp-overlay');
+        if (!overlay) return;
+        _ppBook = null; // the poster replaces the book in the overlay
+        overlay.innerHTML = gigPosterHTML(_ppGigProposal);
+        overlay.classList.remove('hidden');
+        sfx('page');
+    }
+
+    function startGig() {
+        const prop = _ppGigProposal;
+        const q = window.feedBack && window.feedBack.playQueue;
+        if (!prop || !q || typeof q.start !== 'function' || typeof window.playSong !== 'function') return;
+        // The gig BORROWS the stage: stash whatever venue/viz the user had so
+        // the set ending gives it back (unlike "Play here", which is an
+        // explicit persistent choice on the venue card).
+        let restore = null;
+        try {
+            if (prop.venue_id) {
+                restore = {
+                    venue: localStorage.getItem(VENUE_OVERRIDE_KEY),
+                    viz: localStorage.getItem('vizSelection'),
+                };
+                localStorage.setItem(VENUE_OVERRIDE_KEY, prop.venue_id);
+                localStorage.setItem('vizSelection', 'venue');
+                if (typeof window.setViz === 'function') window.setViz('venue');
+            }
+        } catch (_) { restore = null; /* viz optional */ }
+        _appliedManifestVenue = null;
+        _ppGigRun = {
+            songs: prop.songs,
+            venue_id: prop.venue_id,
+            genre: prop.genre,
+            genre_key: prop.genre_key,
+            instrument: prop.instrument,
+            idx: 0,
+            restore,
+        };
+        closeBook();
+        _ppGigProposal = null;
+        // RAW filenames: the queue itself encodes for playSong — pre-encoding
+        // double-encodes and breaks loading + the stats/gig filename join.
+        if (!q.start(prop.songs.map((s) => s.filename), { source: 'gig' })) {
+            _ppGigRun = null;
+            return;
+        }
+        renderGigStrip();
+    }
+
+    function restoreGigStage(run) {
+        const r = run && run.restore;
+        if (!r) return;
+        try {
+            if (r.venue == null) localStorage.removeItem(VENUE_OVERRIDE_KEY);
+            else localStorage.setItem(VENUE_OVERRIDE_KEY, r.venue);
+            if (r.viz && r.viz !== 'venue') {
+                localStorage.setItem('vizSelection', r.viz);
+                if (typeof window.setViz === 'function') window.setViz(r.viz);
+            }
+        } catch (_) { /* best effort */ }
+        _appliedManifestVenue = null;
+    }
+
+    function renderGigStrip() {
+        if (!_ppGigRun || !document.body || typeof document.createElement !== 'function') return;
+        let strip = document.getElementById('pp-gig-strip');
+        if (!strip) {
+            strip = document.createElement('div');
+            strip.id = 'pp-gig-strip';
+            strip.className = 'pp-gig-strip';
+            document.body.appendChild(strip);
+        }
+        const run = _ppGigRun;
+        const next = run.songs[run.idx + 1];
+        strip.innerHTML = `<b>GIG</b> · ${esc(run.genre)} at ${esc(_venueName(run.venue_id))} · set ${Math.min(run.idx + 1, run.songs.length)}/${run.songs.length}${next ? ` — next: <em>${esc(next.title)}</em>` : ' — closer!'}`;
+    }
+
+    function removeGigStrip() {
+        const strip = document.getElementById('pp-gig-strip');
+        if (strip) strip.remove();
+    }
+
+    function abandonGig() {
+        // No fail state: an abandoned set logs nothing and says nothing.
+        const run = _ppGigRun;
+        _ppGigRun = null;
+        removeGigStrip();
+        restoreGigStage(run);
+    }
+
+    function completeGig() {
+        const run = _ppGigRun;
+        _ppGigRun = null;
+        removeGigStrip();
+        restoreGigStage(run);
+        // The final song's own stats POST races this moment (both ride
+        // song:ended): wait for its stats:recorded — or a short timeout, since
+        // an UNSCORED play never emits one — so /gigs reads the set's real
+        // accuracies, not last week's.
+        const lastFile = run.songs[run.songs.length - 1].filename;
+        const sm = window.feedBack;
+        let done = false;
+        const proceed = () => {
+            if (done) return;
+            done = true;
+            if (sm && typeof sm.off === 'function') { try { sm.off('stats:recorded', onRec); } catch (_) { /* ok */ } }
+            postGig(run);
+        };
+        const onRec = (e) => {
+            const d = (e && e.detail) || {};
+            if (d.filename === lastFile) proceed();
+        };
+        if (sm && typeof sm.on === 'function') sm.on('stats:recorded', onRec);
+        setTimeout(proceed, 3500);
+    }
+
+    async function postGig(run) {
+        let gig = null;
+        try {
+            const res = await fetch(`${API}/gigs`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    instrument: run.instrument,
+                    genre: run.genre,
+                    venue_id: run.venue_id,
+                    songs: run.songs.map((s) => s.filename),
+                }),
+            });
+            if (res.ok) gig = (await res.json()).gig;
+        } catch (_) { /* summary still shows, unlogged */ }
+        showGigSummary(run, gig);
+        refreshPassports();
+    }
+
+    function showGigSummary(run, gig) {
+        if (!document.body || typeof document.createElement !== 'function') return;
+        const entries = (gig && gig.songs) || run.songs.map((s) => ({ filename: s.filename, title: s.title, accuracy: null }));
+        const encore = !!(gig && gig.encore);
+        if (encore && !reducedMotion()) {
+            const crowd = window.v3VenueCrowd;
+            if (crowd && typeof crowd.celebrate === 'function') {
+                try { crowd.celebrate(); } catch (_) { /* optional */ }
+            }
+        }
+        const el = document.createElement('div');
+        el.id = 'pp-gig-summary';
+        el.className = 'pp-ceremony-overlay';
+        el.innerHTML = `<canvas class="pp-confetti"></canvas>
+            <div class="pp-poster pp-poster-summary">
+                <div class="pp-poster-venue">${esc(_venueName(run.venue_id))}</div>
+                <div class="pp-poster-title">${esc(run.genre.toUpperCase())} NIGHT</div>
+                <div class="pp-poster-inst">${encore ? 'ENCORE! ' : ''}the set, as played</div>
+                <div class="pp-poster-bill">${entries.map((s, i) =>
+                    `<div class="pp-poster-line"><span>${i + 1}.</span> ${esc(s.title)}${s.accuracy != null ? ` <b>${Math.floor(s.accuracy * 100)}%</b>` : ''}</div>`).join('')}</div>
+                <div class="pp-poster-actions">
+                    <button class="career-btn career-btn-ghost" data-pp-poster="save">Save poster</button>
+                    <button class="career-btn career-btn-ghost" data-pp-poster="copy">Copy poster</button>
+                    <button class="career-btn career-btn-primary" data-pp-gig-done="1">Done</button>
+                </div>
+            </div>`;
+        el.addEventListener('click', (e) => {
+            if (e.target === el || e.target.closest('[data-pp-gig-done]')) {
+                el.remove();
+            } else if (e.target.closest('[data-pp-poster]')) {
+                exportGigPoster(e.target.closest('[data-pp-poster]').dataset.ppPoster,
+                    { ...run, encore, entries });
+            }
+        });
+        document.body.appendChild(el);
+        if (encore && !reducedMotion()) confettiBurst(el.querySelector('.pp-confetti'));
+    }
+
+    function drawGigPoster(data) {
+        const W = 480;
+        const H = 640;
+        const canvas = document.createElement('canvas');
+        canvas.width = W;
+        canvas.height = H;
+        const ctx = canvas.getContext('2d');
+        const bg = ctx.createLinearGradient(0, 0, 0, H);
+        bg.addColorStop(0, '#141019');
+        bg.addColorStop(1, '#241318');
+        ctx.fillStyle = bg;
+        ctx.fillRect(0, 0, W, H);
+        ctx.strokeStyle = 'rgba(217,162,83,0.5)';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(16, 16, W - 32, H - 32);
+        ctx.textAlign = 'center';
+        ctx.fillStyle = 'rgba(240,226,195,0.65)';
+        ctx.font = '400 18px Georgia, serif';
+        ctx.fillText(_venueName(data.venue_id), W / 2, 76, W - 80);
+        ctx.font = '400 12px Georgia, serif';
+        ctx.fillText('P R E S E N T S', W / 2, 102);
+        ctx.fillStyle = '#d9a253';
+        ctx.font = '800 40px Georgia, serif';
+        ctx.fillText(`${data.genre.toUpperCase()}`, W / 2, 160, W - 60);
+        ctx.font = '800 26px Georgia, serif';
+        ctx.fillText('NIGHT', W / 2, 194);
+        if (data.encore) {
+            ctx.fillStyle = '#f3d179';
+            ctx.font = '700 16px Georgia, serif';
+            ctx.fillText('— E N C O R E —', W / 2, 226);
+        }
+        ctx.fillStyle = 'rgba(240,226,195,0.85)';
+        ctx.font = '400 18px Georgia, serif';
+        const entries = data.entries || data.songs || [];
+        entries.slice(0, 6).forEach((sng, i) => {
+            const acc = sng.accuracy != null ? `  ·  ${Math.floor(sng.accuracy * 100)}%` : '';
+            ctx.fillText(`${sng.title}${acc}`, W / 2, 290 + i * 44, W - 80);
+        });
+        ctx.fillStyle = 'rgba(240,226,195,0.4)';
+        ctx.font = '400 13px Georgia, serif';
+        ctx.fillText(`${ppLabel(data.instrument || 'guitar')} · fee[dB]ack career`, W / 2, H - 42);
+        return canvas;
+    }
+
+    function exportGigPoster(mode, data) {
+        exportCanvasPng(drawGigPoster(data),
+            `gig-${(data.genre_key || 'set').replace(/[^a-z0-9-]+/g, '-')}.png`, mode, 'Poster');
+    }
+
+    // Queue lifecycle: advance the strip per song; complete or abandon.
+    function onGigSongLoading() {
+        if (!_ppGigRun) return;
+        renderGigStrip();
+    }
+
+    function onGigSongEnded() {
+        if (!_ppGigRun) return;
+        const q = window.feedBack && window.feedBack.playQueue;
+        if (!q || typeof q.remaining !== 'function') return;
+        // Only OUR live queue counts: remaining()===0 is also true for a
+        // cleared/foreign queue (a manual play silently clears the gig queue,
+        // and that unrelated song's end must not log a gig).
+        if (q.source && q.source() !== 'gig') { abandonGig(); return; }
+        if (!q.remaining()) {
+            if (q.active && q.active()) completeGig();
+            else abandonGig();
+            return;
+        }
+        _ppGigRun.idx = Math.min(_ppGigRun.idx + 1, _ppGigRun.songs.length - 1);
+        renderGigStrip();
+    }
+
+    function onGigSongStop() {
+        // A deliberate quit mid-set (Escape clears the queue) abandons the
+        // gig — but the LAST song's teardown also fires song:stop after
+        // song:ended, so only abandon while songs genuinely remain.
+        if (!_ppGigRun) return;
+        const q = window.feedBack && window.feedBack.playQueue;
+        const active = q && typeof q.active === 'function' ? q.active() : false;
+        if (!active) abandonGig();
+    }
+
     function openGenre(inst, genre) {
         fetch(`${API}/passports/open`, {
             method: 'POST',
@@ -1087,6 +1401,18 @@
         if (e.target.closest('[data-pp-close]') ||
             (e.target.dataset && e.target.dataset.ppCloseBg)) {
             closeBook();
+            return;
+        }
+        const gigBtn = e.target.closest('[data-pp-gig]');
+        if (gigBtn) { bookGig(gigBtn.dataset.ppGig); return; }
+        if (e.target.closest('[data-pp-gig-play]')) { startGig(); return; }
+        if (e.target.closest('[data-pp-gig-reroll]')) {
+            if (_ppGigProposal) bookGig(_ppGigProposal.genre_key);
+            return;
+        }
+        const posterBtn = e.target.closest('[data-pp-poster]');
+        if (posterBtn && _ppGigProposal) {
+            exportGigPoster(posterBtn.dataset.ppPoster, _ppGigProposal);
             return;
         }
         const cardBtn = e.target.closest('[data-pp-card]');
@@ -1144,6 +1470,10 @@
         if (sm && typeof sm.on === 'function') {
             // New song stats can add stars → thresholds may cross mid-session.
             sm.on('stats:recorded', () => refresh());
+            // Gig runner lifecycle (no-ops when no gig is live).
+            sm.on('song:loading', onGigSongLoading);
+            sm.on('song:ended', onGigSongEnded);
+            sm.on('song:stop', onGigSongStop);
             // Virtuoso's progress emits are the drill-state relay trigger; the
             // payload is a thin delta, so the relay reads the full localStorage
             // snapshot instead (see relayDrillState).
@@ -1151,7 +1481,9 @@
         }
         showCareerTab(lsGet(PP_TAB_KEY) === 'passports' ? 'passports' : 'venues');
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && _ppBook) closeBook();
+            if (e.key !== 'Escape') return;
+            const overlay = $('pp-overlay');
+            if (_ppBook || (overlay && !overlay.classList.contains('hidden'))) closeBook();
         });
         // Core re-renders profile/dashboard shells (innerHTML wipe) and
         // announces the fresh mount points — same seam achievements uses.
@@ -1165,6 +1497,9 @@
     window.__careerPassportTest = {
         ppKey, ppJitter, ppLabel, detectNewBadges, seenBadges, markBadgeSeen,
         fmtHours, ppFillFraction, careerTotals, closestAskHTML,
+        onGigSongEnded, onGigSongStop,
+        setGigRun(r) { _ppGigRun = r; },
+        getGigRun() { return _ppGigRun; },
         setView(v) { _pp = v; },
     };
 

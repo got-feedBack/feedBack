@@ -177,3 +177,24 @@ test('careerTotals / wall + dash card stay absent without commitment', () => {
     assert.equal(totals.seconds, 3720);
     assert.equal(totals.walls.length, 1);
 });
+
+test('gig runner lifecycle: advance on ended, abandon on dead-queue stop', () => {
+    const w = load();
+    const t = w.__careerPassportTest;
+    let remaining = 1;
+    w.feedBack = { playQueue: { remaining: () => remaining, active: () => remaining > 0 } };
+    t.setGigRun({
+        songs: [{ filename: 'a', title: 'A' }, { filename: 'b', title: 'B' }],
+        venue_id: null, genre: 'Soul', genre_key: 'soul', instrument: 'guitar', idx: 0,
+    });
+    // First song ends, one remains → the strip advances, no completion.
+    t.onGigSongEnded();
+    assert.equal(t.getGigRun().idx, 1);
+    // Stop while the queue is still active (end-of-song teardown) → run survives.
+    t.onGigSongStop();
+    assert.notEqual(t.getGigRun(), null);
+    // User quits: queue cleared → stop with a dead queue abandons (no log).
+    remaining = 0;
+    t.onGigSongStop();
+    assert.equal(t.getGigRun(), null);
+});

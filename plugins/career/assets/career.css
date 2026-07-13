@@ -714,3 +714,67 @@
     .pp-dash-card:hover .pp-dash-shine { animation: none; }
     .pp-wall-cover, .pp-dash-card { transition: none; }
 }
+
+/* ── Gigs: poster, runner strip, summary, log ───────────────────────────── */
+
+.pp-poster {
+    position: relative;
+    width: min(92vw, 420px);
+    padding: 2rem 1.6rem 1.4rem;
+    border-radius: 0.5rem;
+    background: linear-gradient(180deg, #141019, #241318);
+    border: 2px solid rgba(217, 162, 83, 0.45);
+    box-shadow: 0 10px 32px rgba(0, 0, 0, 0.6);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.35rem;
+    text-align: center;
+}
+.pp-poster-venue { color: rgba(240, 226, 195, 0.7); font-size: 0.95rem; letter-spacing: 0.08em; }
+.pp-poster-presents { color: rgba(240, 226, 195, 0.4); font-size: 0.58rem; letter-spacing: 0.4em; text-transform: uppercase; }
+.pp-poster-title {
+    color: #d9a253;
+    font-size: 1.7rem;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    line-height: 1.15;
+    overflow-wrap: anywhere;
+}
+.pp-poster-inst { color: rgba(240, 226, 195, 0.5); font-size: 0.68rem; letter-spacing: 0.2em; text-transform: uppercase; }
+.pp-poster-bill { margin: 0.9rem 0 0.5rem; display: flex; flex-direction: column; gap: 0.35rem; width: 100%; }
+.pp-poster-line { color: rgba(240, 226, 195, 0.85); font-size: 0.85rem; }
+.pp-poster-line span { color: rgba(217, 162, 83, 0.7); margin-right: 0.35rem; }
+.pp-poster-line em { color: rgba(240, 226, 195, 0.5); font-style: italic; font-size: 0.72rem; }
+.pp-poster-line b { color: #f3d179; margin-left: 0.3rem; }
+.pp-poster-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: center; margin-top: 0.6rem; }
+.pp-poster-summary { cursor: default; }
+
+.pp-gig-strip {
+    position: fixed;
+    top: 0.5rem;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 35; /* above the rail (30), under popovers (40) — the chrome invariant */
+    background: rgba(10, 8, 14, 0.85);
+    border: 1px solid rgba(217, 162, 83, 0.4);
+    border-radius: 999px;
+    color: rgba(240, 226, 195, 0.85);
+    font-size: 0.72rem;
+    padding: 0.3rem 0.9rem;
+    pointer-events: none;
+    backdrop-filter: blur(2px);
+}
+.pp-gig-strip b { color: #d9a253; letter-spacing: 0.2em; }
+.pp-gig-strip em { color: #f3ead2; font-style: italic; }
+
+.pp-giglog { margin-top: 0.6rem; border-top: 1px dashed rgba(138, 122, 94, 0.4); padding-top: 0.5rem; }
+.pp-giglog-head {
+    font-size: 0.58rem;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: #8a7a5e;
+    margin-bottom: 0.25rem;
+}
+.pp-giglog-row { font-size: 0.7rem; color: #6d5d40; padding: 0.1rem 0; }
+.pp-giglog-row b { color: #9a5b16; letter-spacing: 0.06em; }
