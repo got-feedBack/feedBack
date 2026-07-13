@@ -218,6 +218,7 @@ import {
     setAvOffsetMs,
     setInstrumentPathway,
     setupAppUpdates,
+    setupWindowOptions,
     syncDefaultArrangementPin,
 } from './js/settings.js';
 import {

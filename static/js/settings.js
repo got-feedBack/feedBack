@@ -100,6 +100,7 @@ export async function loadSettings() {
     // failed fetch below still leaves the desktop updater wired up.
     // setupAppUpdates() is idempotent via _appUpdatesWired.
     setupAppUpdates();
+    setupWindowOptions();
     const resp = await fetch('/api/settings');
     const data = await resp.json();
     // Null-guard the form fields: on the v3 tabbed settings page the markup is
@@ -165,6 +166,47 @@ export async function loadSettings() {
     // Hydrate the highway-color settings UI (theme select + per-string pickers)
     // — the runtime apply path (initHighwayColors) doesn't render these controls.
     hwcInitSettingsUI();
+}
+
+// ── Window options (desktop-only) ────────────────────────────────────────
+// Desktop-only window preferences (start-in-fullscreen, …). The whole block
+// stays hidden in the plain web / Docker app; unhide + wire only when the
+// feedBack-desktop bridge (window.feedBackDesktop.window) exposes the getter
+// and setter. Persistence lives desktop-side because only the Electron main
+// process can read the pref at window-creation time — core just proxies.
+export let _windowOptionsWired = false;
+
+export function setupWindowOptions() {
+    const block = document.getElementById('window-options-block');
+    if (!block) return;
+    const winApi = window.feedBackDesktop?.window;
+    // Per-method capability check: a partial/older bridge may expose `window`
+    // without this shape. Leave the block hidden rather than half-wiring it.
+    if (!winApi
+        || typeof winApi.getStartFullscreen !== 'function'
+        || typeof winApi.setStartFullscreen !== 'function') {
+        return;
+    }
+
+    block.classList.remove('hidden');
+
+    const cb = document.getElementById('setting-start-fullscreen');
+    if (!cb) return;
+
+    // Hydrate from the desktop-persisted value. The getter may be sync or
+    // async (IPC round-trip); Promise.resolve normalises both.
+    Promise.resolve(winApi.getStartFullscreen()).then(function (on) {
+        cb.checked = !!on;
+    }).catch(function () { /* leave unchecked on error */ });
+
+    // Guard only the listener against double-binding; unhide + re-hydrate
+    // stay idempotent so re-entering Settings refreshes the checkbox.
+    if (!_windowOptionsWired) {
+        _windowOptionsWired = true;
+        cb.addEventListener('change', function () {
+            try { winApi.setStartFullscreen(cb.checked); } catch (_) { /* best-effort */ }
+        });
+    }
 }
 
 export const APP_UPDATE_CHANNELS = ['stable', 'rc', 'beta', 'alpha'];
