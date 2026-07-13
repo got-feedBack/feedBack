@@ -3,7 +3,20 @@
         "songs": 5,
         "min_stars": 2
     },
-    "genres": {},
+    "genres": {
+        "blues": { "virtuoso_nodes": { "guitar": ["blues_shuffle"] } },
+        "rock": { "virtuoso_nodes": { "guitar": ["rock_power_backbeat"] } },
+        "metal": { "virtuoso_nodes": { "guitar": ["melodic_metal_gallop"] } },
+        "funk": { "virtuoso_nodes": { "guitar": ["sixteenth_pocket"] } },
+        "jazz": { "virtuoso_nodes": { "guitar": ["vl_shells"] } }
+    },
+    "drill_labels": {
+        "blues_shuffle": "Blues Shuffle",
+        "rock_power_backbeat": "Power Chords & Backbeat",
+        "melodic_metal_gallop": "Gallop Picking",
+        "sixteenth_pocket": "16th Pocket",
+        "vl_shells": "Shell Voicings"
+    },
     "graded_instruments": [
         "guitar",
         "keys"

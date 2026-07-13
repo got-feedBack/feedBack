@@ -27,13 +27,47 @@ def _passport(client, instrument="guitar", genre_key="blues"):
 
 
 def test_badge_earned_at_five_genre_songs_two_stars(client, meta_db):
+    # Soul has no curated drill requirement — songs alone mint the badge.
+    for i in range(5):
+        meta_db.add(f"soul{i}.feedpak", 0, 0.8, genre="Soul", arrangements=LEAD)
+    _open(client, "guitar", "Soul")
+    p = _passport(client, "guitar", "soul")
+    assert p["badge"] == "earned"
+    assert p["qualifying_count"] == 5
+    assert all(s["qualifies"] and s["stars"] == 2 for s in p["songs"])
+
+
+def test_shipped_blues_drill_gates_and_keys_cleared_clears_it(client, meta_db):
+    # Blues ships a guitar drill (blues_shuffle): songs alone are not enough.
     for i in range(5):
         meta_db.add(f"blues{i}.feedpak", 0, 0.8, genre="Blues", arrangements=LEAD)
     _open(client)
     p = _passport(client)
+    assert p["badge"] == "in_progress"
+    assert p["drills"]["required"] == ["blues_shuffle"]
+    # One key cleared (a top-tier clean pass) counts as cleared — the depth
+    # rungs are a higher bar than Bronze needs.
+    res = client.post("/api/plugins/career/drill-state", json={
+        "mode": "casual", "xp": 10,
+        "byNode": {"blues_shuffle": {"reps": 12, "keysCleared": ["E"],
+                                     "depth": {"travel": None, "clean": None},
+                                     "masteredAt": None}}})
+    assert res.status_code == 200
+    p = _passport(client)
+    assert p["drills"]["cleared"] == ["blues_shuffle"]
     assert p["badge"] == "earned"
-    assert p["qualifying_count"] == 5
-    assert all(s["qualifies"] and s["stars"] == 2 for s in p["songs"])
+
+
+def test_drill_lists_are_per_instrument(client, meta_db):
+    # Keys is graded but Blues curates only a GUITAR drill — a keys passport
+    # earns on songs alone.
+    keys_arr = [{"type": "lead", "name": "Keys"}]
+    for i in range(5):
+        meta_db.add(f"kb{i}.feedpak", 0, 0.9, genre="Blues", arrangements=keys_arr)
+    _open(client, "keys")
+    p = _passport(client, "keys")
+    assert p["drills"]["required"] == []
+    assert p["badge"] == "earned"
 
 
 def test_badge_in_progress_below_the_bar(client, meta_db):
@@ -155,3 +189,22 @@ def test_hours_odometer_sums_seconds_per_instrument_and_genre(client, meta_db):
     _open(client, "bass")
     assert _passport(client, "guitar")["seconds_total"] == 900
     assert _passport(client, "bass")["seconds_total"] == 1200
+
+
+def test_drill_state_merge_is_gained_only(client, meta_db):
+    # A cleared drill survives a later STALE snapshot that lacks it
+    # (multi-browser race / settings import / the boot relay).
+    for i in range(5):
+        meta_db.add(f"blues{i}.feedpak", 0, 0.8, genre="Blues", arrangements=LEAD)
+    _open(client)
+    client.post("/api/plugins/career/drill-state", json={
+        "byNode": {"blues_shuffle": {"keysCleared": ["E"]}}})
+    assert _passport(client)["badge"] == "earned"
+    # Stale relay: empty byNode, then one with the node but nothing earned.
+    client.post("/api/plugins/career/drill-state", json={"byNode": {}})
+    client.post("/api/plugins/career/drill-state", json={
+        "byNode": {"blues_shuffle": {"reps": 2, "keysCleared": [],
+                                     "depth": {"travel": None}, "masteredAt": None}}})
+    p = _passport(client)
+    assert p["drills"]["cleared"] == ["blues_shuffle"]
+    assert p["badge"] == "earned"

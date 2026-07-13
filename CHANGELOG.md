@@ -28,6 +28,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resume position (and still counts as playing today for the streak).
   Passports surface it honestly: "14.2 h in Blues" under the badge and on the
   shelf cover — a true fact that only grows, never a target or a meter.
+- **Career passport drills, curated** — Bronze in blues/rock/metal/funk/jazz
+  now also asks for that genre's signature Virtuoso drill (Blues Shuffle,
+  Power Chords & Backbeat, Gallop Picking, 16th Pocket, Shell Voicings — one
+  per genre, data-driven in `passports.json` with display labels). Drill
+  lists are per-instrument (`virtuoso_nodes: {instrument: [nodes]}`; a flat
+  list still means guitar), so a keys passport never demands a guitar drill.
+  A drill counts as cleared on the first real completion artifact — a
+  top-tier clean pass in one key (`keysCleared`), any depth rung, or
+  mastery — rather than only the maxed-speed depth flips. Genres without a
+  curated drill stay songs-only.
 - **Career passports (backend)** — the badge-journey layer on top of career stars.
   New career-plugin endpoints: `GET /api/plugins/career/passports` (per-instrument
   passport walls: genre badges computed on read from `song_stats` × the library's

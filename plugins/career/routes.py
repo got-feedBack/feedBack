@@ -276,7 +276,7 @@ def _library_genres():
                   key=lambda r: (-r["songs_in_library"], r["genre_key"]))
 
 
-def _badge_requirement(gkey):
+def _badge_requirement(gkey, instrument="guitar"):
     cfg = _state["passports_content"]
     req = dict(cfg.get("badge_requirement") or {})
     req.setdefault("songs", 5)
@@ -284,8 +284,15 @@ def _badge_requirement(gkey):
     override = (cfg.get("genres") or {}).get(gkey)
     if isinstance(override, dict):
         req.update(override)
-    req["virtuoso_nodes"] = [n for n in (req.get("virtuoso_nodes") or [])
-                             if isinstance(n, str)]
+    # virtuoso_nodes: {instrument: [node_ids]} — a passport only carries its
+    # own instrument's drills. A flat list keeps meaning guitar (back-compat;
+    # virtuoso's drill content is guitar-first).
+    nodes = req.get("virtuoso_nodes") or []
+    if isinstance(nodes, dict):
+        nodes = nodes.get(instrument) or []
+    elif instrument != "guitar":
+        nodes = []
+    req["virtuoso_nodes"] = [n for n in nodes if isinstance(n, str)]
     return req
 
 
@@ -298,14 +305,50 @@ def _drill_by_node():
     return doc.get("received_at"), by_node
 
 
+def _merge_drill_nodes(old, new):
+    """Gained-only merge of virtuoso byNode snapshots: a completion artifact
+    once relayed never un-earns via a stale snapshot (multi-browser races,
+    settings import, the once-per-session boot relay). Incoming wins the
+    descriptive fields; masteredAt / depth flips / keysCleared only grow."""
+    out = dict(old)
+    for node_id, incoming in new.items():
+        if not isinstance(incoming, dict):
+            continue
+        cur = out.get(node_id)
+        if not isinstance(cur, dict):
+            out[node_id] = incoming
+            continue
+        merged = dict(cur)
+        merged.update(incoming)
+        merged["masteredAt"] = cur.get("masteredAt") or incoming.get("masteredAt")
+        d_old = cur.get("depth") if isinstance(cur.get("depth"), dict) else {}
+        d_new = incoming.get("depth") if isinstance(incoming.get("depth"), dict) else {}
+        depth = dict(d_new)
+        for axis, val in d_old.items():
+            if val and not depth.get(axis):
+                depth[axis] = val
+        if depth:
+            merged["depth"] = depth
+        keys_old = cur.get("keysCleared") if isinstance(cur.get("keysCleared"), list) else []
+        keys_new = incoming.get("keysCleared") if isinstance(incoming.get("keysCleared"), list) else []
+        merged["keysCleared"] = keys_old + [k for k in keys_new if k not in keys_old]
+        out[node_id] = merged
+    return out
+
+
 def _node_cleared(by_node, node_id):
-    """A drill counts as cleared on real completion evidence: mastered, or any
-    depth rung flipped true (virtuoso's gained-only false→true artifacts)."""
+    """A drill counts as cleared on real completion evidence: mastered, any
+    depth rung flipped true, or a key cleared (a top-tier clean pass in one
+    key — virtuoso's first gained-only artifact, and an achievable Bronze
+    bar; the depth rungs additionally require a maxed speed tier)."""
     entry = by_node.get(node_id)
     if not isinstance(entry, dict):
         return False
     depth = entry.get("depth") if isinstance(entry.get("depth"), dict) else {}
-    return bool(entry.get("masteredAt")) or any(bool(v) for v in depth.values())
+    keys = entry.get("keysCleared")
+    return (bool(entry.get("masteredAt"))
+            or any(bool(v) for v in depth.values())
+            or bool(isinstance(keys, list) and keys))
 
 
 def _passports_view():
@@ -323,7 +366,7 @@ def _passports_view():
         for gkey, meta in sorted(opened.items(),
                                  key=lambda kv: ((kv[1] or {}).get("opened_at") or "", kv[0])):
             meta = meta if isinstance(meta, dict) else {}
-            req = _badge_requirement(gkey)
+            req = _badge_requirement(gkey, inst)
             songs = list(played.get((inst, gkey), {}).values())
             for s in songs:
                 s["qualifies"] = s["stars"] >= req["min_stars"]
@@ -362,6 +405,8 @@ def _passports_view():
             "badge_requirement": cfg.get("badge_requirement") or {},
             "graded_instruments": sorted(graded),
             "instruments": list(cfg.get("instruments") or []),
+            # Career-side display names for virtuoso drill node ids.
+            "drill_labels": dict(cfg.get("drill_labels") or {}),
         },
         "instruments": instruments,
         "genres": _library_genres(),
@@ -536,11 +581,16 @@ def setup(app, context):
         # Only the fields the badge check reads are kept.
         if not isinstance(body, dict) or not isinstance(body.get("byNode"), dict):
             raise HTTPException(400, "Expected a progress snapshot with byNode.")
-        snapshot = {"mode": body.get("mode"), "xp": body.get("xp"),
-                    "byNode": body["byNode"]}
-        if len(json.dumps(snapshot)) > DRILL_SNAPSHOT_MAX_BYTES:
+        # Bound the INCOMING snapshot before the merge — the gained-only merge
+        # drops junk entries, which must not become a size-guard bypass.
+        if len(json.dumps(body["byNode"])) > DRILL_SNAPSHOT_MAX_BYTES:
             raise HTTPException(413, "Snapshot too large.")
         with _lock:
+            _, existing = _drill_by_node()
+            snapshot = {"mode": body.get("mode"), "xp": body.get("xp"),
+                        "byNode": _merge_drill_nodes(existing, body["byNode"])}
+            if len(json.dumps(snapshot)) > DRILL_SNAPSHOT_MAX_BYTES:
+                raise HTTPException(413, "Snapshot too large.")
             _save_json(_drill_file(), {"received_at": _now_iso(),
                                        "snapshot": snapshot})
         return {"ok": True}

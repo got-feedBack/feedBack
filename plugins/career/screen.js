@@ -460,9 +460,11 @@
         renderPassports();
         if (!_ppBootstrapped) {
             _ppBootstrapped = true;
-            // First run on this browser: seed the server with the local drill
-            // snapshot if it has never received one.
-            if (!(view.drill_state || {}).received_at) relayDrillState();
+            // Sync the local drill snapshot once per session — drill progress
+            // made before the career plugin existed (or a relay POST that
+            // failed) must not deny a gated badge until the next virtuoso
+            // event happens to fire. Tiny payload, single-user app.
+            relayDrillState();
         }
     }
 
@@ -562,6 +564,20 @@
         const req = p.requirement || {};
         const need = Math.max(0, (req.songs || 0) - p.qualifying_count);
         const starGl = '★'.repeat(req.min_stars || 0);
+        const reqNodes = (p.drills || {}).required || [];
+        const clearedNodes = new Set((p.drills || {}).cleared || []);
+        const labels = ((_pp && _pp.config) || {}).drill_labels || {};
+        const pendingDrills = reqNodes.filter((n) => !clearedNodes.has(n));
+        // The invite names what actually blocks the stamp: songs first, then
+        // the genre drill once the song bar is met.
+        let invite;
+        if (need > 0) {
+            invite = need === 1 ? `One more ${starGl} song mints this stamp.`
+                : `${need} more ${starGl} songs mint this stamp.`;
+        } else {
+            const names = pendingDrills.map((n) => labels[n] || n).join(', ');
+            invite = `Clear ${names || 'the genre drill'} in Virtuoso to mint this stamp.`;
+        }
         let badgeArea = '';
         if (p.badge === 'shown_not_judged') {
             badgeArea = `<div class="pp-snj">Shown, not judged — your ${esc(ppLabel(inst).toLowerCase())} repertoire speaks for itself.</div>`;
@@ -576,17 +592,15 @@
                 <span class="pp-stamp-genre">${esc(p.genre.toUpperCase())}</span>
                 <span class="pp-stamp-tier">BRONZE</span>
             </div>
-            <div class="pp-invite">${need === 1 ? `One more ${starGl} song mints this stamp.` : `${need} more ${starGl} songs mint this stamp.`}</div>`;
+            <div class="pp-invite">${esc(invite)}</div>`;
         }
         const hours = fmtHours(p.seconds_total);
         const odometer = hours
             ? `<div class="pp-hours">${hours} in ${esc(p.genre)}</div>` : '';
         let drills = '';
-        const reqNodes = (p.drills || {}).required || [];
         if (reqNodes.length) {
-            const cleared = new Set((p.drills || {}).cleared || []);
             drills = `<div class="pp-drills">${reqNodes.map((n) =>
-                `<div class="pp-drill${cleared.has(n) ? ' cleared' : ''}">${cleared.has(n) ? '✓' : '○'} ${esc(n)}</div>`).join('')}</div>`;
+                `<div class="pp-drill${clearedNodes.has(n) ? ' cleared' : ''}">${clearedNodes.has(n) ? '✓' : '○'} ${esc(labels[n] || n)}</div>`).join('')}</div>`;
         }
         // Graded instruments collect stubs at the badge bar; shown-not-judged
         // instruments have no bar — every played genre song is repertoire.
