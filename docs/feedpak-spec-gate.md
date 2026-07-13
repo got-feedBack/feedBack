@@ -37,13 +37,18 @@ properties, and they cover the drift that actually occurs.
 
 | Layer | Check | Catches |
 |---|---|---|
-| 1. key-coverage | Every manifest key core reads is declared in the spec's `manifest.schema.json`. | Core growing a key the spec never defined — the #933 class. |
+| 1. key-coverage | Every manifest key core reads **or writes** is declared in the spec's `manifest.schema.json`. | Core growing a key the spec never defined — the #933 class. |
 | 2. forward | Core's `load_song()` ingests every example pack the spec ships. | The spec adding or tightening something core ignores or breaks on. |
 | 3. reverse | Every pack committed to this repo passes the spec's `tools/validate.py`. | Core (or a contributor) committing a pack the spec would reject. |
 
-Layer 1 works by walking the AST of the modules listed in `READERS` and collecting every literal key read
-off a manifest dict (`manifest.get("x")`, `manifest["x"]`, and the wrapped
+Layer 1 works by walking the AST of the modules listed in `READERS` and collecting every literal key touched
+on a manifest dict (`manifest.get("x")`, `manifest["x"]`, and the wrapped
 `(load_manifest(p) or {}).get("x")` form used in `lib/enrichment.py`).
+
+**Reads and writes are both checked, and reported differently.** A key core *writes*
+(`manifest["x"] = v`, as `lib/songmeta.py` does) is spec surface pointed outward: it puts a key into every
+pack we emit, so an undeclared one seeds the ecosystem with non-spec data. Subscripts are classified by AST
+context — `Store` is a write, `Load` is a read — so `manifest["year"] = ...` is not miscounted as a read.
 
 ## When it fails
 

@@ -83,9 +83,17 @@ def _is_manifest_receiver(node: ast.expr) -> bool:
     return "load_manifest" in src
 
 
-def keys_read(path: Path) -> set[str]:
-    """Every literal top-level manifest key read by `path`."""
-    found: set[str] = set()
+def keys_touched(path: Path) -> tuple[set[str], set[str]]:
+    """Literal top-level manifest keys `path` reads and writes, separately.
+
+    Writes matter as much as reads: `manifest["k"] = v` means core *emits* `k`
+    into a pack it ships, so an undeclared key there puts non-spec surface into
+    the wild — the same drift, pointed outward. `manifest["k"]` in a subscript
+    is a read only when its context is a Load; an `ast.walk` that ignores `ctx`
+    would score `manifest["year"] = ...` (lib/songmeta.py) as a read.
+    """
+    reads: set[str] = set()
+    writes: set[str] = set()
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     for node in ast.walk(tree):
         if (
@@ -97,15 +105,16 @@ def keys_read(path: Path) -> set[str]:
             and isinstance(node.args[0], ast.Constant)
             and isinstance(node.args[0].value, str)
         ):
-            found.add(node.args[0].value)
+            reads.add(node.args[0].value)
         elif (
             isinstance(node, ast.Subscript)
             and _is_manifest_receiver(node.value)
             and isinstance(node.slice, ast.Constant)
             and isinstance(node.slice.value, str)
         ):
-            found.add(node.slice.value)
-    return found
+            target = writes if isinstance(node.ctx, ast.Store) else reads
+            target.add(node.slice.value)
+    return reads, writes
 
 
 def load_exceptions() -> dict[str, str]:
@@ -133,22 +142,25 @@ def check_key_coverage(spec: Path) -> bool:
         _fail("spec manifest.schema.json declares no properties — wrong path or bad checkout?")
         return False
 
-    read: set[str] = set()
+    reads: set[str] = set()
+    writes: set[str] = set()
     for rel in READERS:
         path = REPO / rel
         if not path.exists():
             _fail(f"reader {rel} not found — was it renamed? Update READERS in {Path(__file__).name}.")
             return False
-        read |= keys_read(path)
+        r, w = keys_touched(path)
+        reads |= r
+        writes |= w
 
     exceptions = load_exceptions()
-    undeclared = {
-        k for k in (read - declared) if not k.startswith(EXPERIMENTAL_PREFIX)
-    }
-    unexcused = sorted(undeclared - set(exceptions))
     ok = True
 
-    for key in unexcused:
+    def _undeclared(keys: set[str]) -> list[str]:
+        flagged = {k for k in (keys - declared) if not k.startswith(EXPERIMENTAL_PREFIX)}
+        return sorted(flagged - set(exceptions))
+
+    for key in _undeclared(reads):
         _fail(
             f"core reads manifest key '{key}', which the feedpak spec does not define. "
             f"Add it to the spec (github.com/got-feedback/feedpak-spec) before merging, "
@@ -157,8 +169,19 @@ def check_key_coverage(spec: Path) -> bool:
         )
         ok = False
 
+    for key in _undeclared(writes):
+        _fail(
+            f"core writes manifest key '{key}', which the feedpak spec does not define — "
+            f"that puts non-spec surface into every pack we emit. Add it to the spec "
+            f"(github.com/got-feedback/feedpak-spec) before merging, rename it to "
+            f"'{EXPERIMENTAL_PREFIX}{key}' if it is deliberately pre-spec, or record it in "
+            f"{EXCEPTIONS_FILE.name} with a tracking issue."
+        )
+        ok = False
+
     # A stale exception is its own bug: it means the spec caught up and nobody
     # cleaned up, so the allowlist slowly becomes a place drift hides.
+    touched = reads | writes
     for key, issue in exceptions.items():
         if key in declared:
             _fail(
@@ -166,14 +189,14 @@ def check_key_coverage(spec: Path) -> bool:
                 f"Remove the exception and close {issue}."
             )
             ok = False
-        elif key not in read:
+        elif key not in touched:
             _fail(
-                f"'{key}' is listed in {EXCEPTIONS_FILE.name} but core no longer reads it. "
-                f"Remove the exception."
+                f"'{key}' is listed in {EXCEPTIONS_FILE.name} but core no longer reads or writes "
+                f"it. Remove the exception."
             )
             ok = False
 
-    print(f"  spec declares {len(declared)} keys; core reads {len(read)}")
+    print(f"  spec declares {len(declared)} keys; core reads {len(reads)}, writes {len(writes)}")
     if exceptions:
         print(f"  allowlisted (pending spec): {', '.join(sorted(exceptions))}")
     print(f"  key-coverage: {'OK' if ok else 'FAILED'}")
@@ -182,8 +205,12 @@ def check_key_coverage(spec: Path) -> bool:
 
 def check_forward(spec: Path) -> bool:
     """Layer 2 — core must ingest every example pack the spec ships."""
+    examples_dir = spec / "examples"
+    if not examples_dir.is_dir():
+        _fail(f"{examples_dir} is missing — wrong path or bad checkout?")
+        return False
     examples = sorted(
-        p for p in (spec / "examples").iterdir()
+        p for p in examples_dir.iterdir()
         if p.suffix in (".feedpak", ".sloppak")
     )
     if not examples:
@@ -193,23 +220,24 @@ def check_forward(spec: Path) -> bool:
     sys.path.insert(0, str(REPO / "lib"))
     import sloppak  # noqa: E402  (path must be set first — flat imports, no package)
 
-    cache = Path(tempfile.mkdtemp())
     ok = True
-    for pack in examples:
-        try:
-            loaded = sloppak.load_song(pack.name, pack.parent, cache)
-        except Exception as e:
-            _fail(
-                f"core failed to load the spec's own example pack {pack.name}: "
-                f"{type(e).__name__}: {e}. A spec-valid pack must load."
-            )
-            ok = False
-            continue
-        if not loaded.song.arrangements:
-            _fail(f"core loaded {pack.name} but found no arrangements")
-            ok = False
-            continue
-        print(f"  loaded {pack.name}: {len(loaded.song.arrangements)} arrangement(s)")
+    with tempfile.TemporaryDirectory() as tmp:
+        cache = Path(tmp)
+        for pack in examples:
+            try:
+                loaded = sloppak.load_song(pack.name, pack.parent, cache)
+            except Exception as e:
+                _fail(
+                    f"core failed to load the spec's own example pack {pack.name}: "
+                    f"{type(e).__name__}: {e}. A spec-valid pack must load."
+                )
+                ok = False
+                continue
+            if not loaded.song.arrangements:
+                _fail(f"core loaded {pack.name} but found no arrangements")
+                ok = False
+                continue
+            print(f"  loaded {pack.name}: {len(loaded.song.arrangements)} arrangement(s)")
     print(f"  forward: {'OK' if ok else 'FAILED'}")
     return ok
 

@@ -137,6 +137,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        # This job runs repository code (tools/check_spec_conformance.py) and
+        # never pushes; don't leave the token in git config for it.
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@v5
         with:
@@ -149,6 +153,13 @@ jobs:
           sha=$(grep -vE '^[[:space:]]*(#|$)' .feedpak-spec-ref | head -n1 | tr -d '[:space:]')
           if [ -z "$sha" ]; then
             echo "::error file=.feedpak-spec-ref::no commit SHA found in .feedpak-spec-ref"
+            exit 1
+          fi
+          # actions/checkout resolves branches and tags in `ref` too, so a
+          # non-SHA here would silently un-pin the spec — the one thing this
+          # file exists to prevent. Demand a full 40-char SHA.
+          if ! printf '%s' "$sha" | grep -qE '^[0-9a-fA-F]{40}$'; then
+            echo "::error file=.feedpak-spec-ref::expected a full 40-character commit SHA, got '$sha' — a branch or tag name would defeat the pin"
             exit 1
           fi
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
@@ -167,8 +178,10 @@ jobs:
           pip install -r requirements.txt
           # CI-only: the spec's reference validator needs jsonschema. Not a
           # runtime dependency — this gate never runs on the serve/Docker path
-          # (constitution Principle I).
-          pip install jsonschema
+          # (constitution Principle I). Pinned for the same reason the spec SHA
+          # is: an upstream release must not turn this job red on a PR that
+          # changed neither this repo nor the spec.
+          pip install 'jsonschema==4.26.0'
 
       - name: Check feedpak spec conformance
         run: python tools/check_spec_conformance.py --spec .feedpak-spec
