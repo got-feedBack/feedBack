@@ -26,11 +26,14 @@ Endpoints (all under /api/plugins/career/):
   POST   /passports/commit            commit to an instrument (the wax seal, Stage 0)
   POST   /passports/open              open a genre passport for an instrument
   POST   /drill-state                 relayed virtuoso.progress snapshot (drill intake)
+  POST   /gigs/propose                build a playable setlist for a genre gig
+  POST   /gigs                        log a COMPLETED gig (abandoned sets never log)
 """
 
 import hashlib
 import json
 import logging
+import random
 import re
 import shutil
 import tempfile
@@ -383,6 +386,7 @@ def _passports_view():
     cfg = _state["passports_content"]
     graded = set(cfg.get("graded_instruments") or [])
     st = _career_state()
+    all_gigs = st.get("gigs") if isinstance(st.get("gigs"), list) else []
     played, played_seconds = _played_by_instrument_genre()
     received_at, by_node = _drill_by_node()
     instruments = {}
@@ -439,7 +443,11 @@ def _passports_view():
                 "drills": {"required": required, "cleared": cleared},
                 "badge": badge,
             })
-        instruments[inst] = {"committed_at": committed_at, "passports": passports}
+        inst_gigs = [g for g in all_gigs if g.get("instrument") == inst]
+        for p in passports:
+            p["gigs"] = [g for g in inst_gigs if g.get("genre_key") == p["genre_key"]][-20:][::-1]
+        instruments[inst] = {"committed_at": committed_at, "passports": passports,
+                             "gig_count": len(inst_gigs)}
     return {
         "config": {
             "badge_requirement": cfg.get("badge_requirement") or {},
@@ -452,6 +460,60 @@ def _passports_view():
         "genres": _library_genres(),
         "drill_state": {"received_at": received_at},
     }
+
+
+def _gig_config():
+    cfg = _state["passports_content"].get("gig")
+    cfg = cfg if isinstance(cfg, dict) else {}
+
+    def _num(key, default, cast):
+        # Tuning data, not code: junk falls back instead of 500ing both gig
+        # endpoints, and a legitimate 0 (stakes_songs: 0) is respected.
+        val = cfg.get(key)
+        if isinstance(val, bool) or not isinstance(val, (int, float)):
+            return default
+        return cast(val)
+
+    return {
+        "min_songs": max(1, _num("min_songs", 3, int)),
+        "max_songs": max(1, _num("max_songs", 5, int)),
+        "stakes_songs": max(0, _num("stakes_songs", 2, int)),
+        "encore_accuracy": _num("encore_accuracy", 0.75, float),
+    }
+
+
+def _current_venue():
+    """Highest unlocked venue (the room you can book today)."""
+    stars_total, _, _ = _stars()
+    best = None
+    for v in _state["content"]["venues"]:
+        if stars_total >= v["star_threshold"]:
+            if best is None or v["star_threshold"] >= best["star_threshold"]:
+                best = v
+    return best
+
+
+def _unplayed_genre_songs(gkey, exclude, limit):
+    """Library songs of a genre with no stats yet — a young passport's gig
+    still gets a full set (playing them is how stubs start).
+    ponytail: full stat-less scan + python-side genre match (a few ms at 7k
+    songs, single-user); push the match into SQL if propose ever feels slow."""
+    db = _state["meta_db"]
+    if db is None:
+        return []
+    rows = db.conn.execute(
+        f"SELECT filename, title, artist, {_genre_expr(db)} AS g FROM songs "
+        "WHERE filename NOT IN (SELECT filename FROM song_stats)"
+    ).fetchall()
+    out = []
+    for filename, title, artist, genre in rows:
+        if _genre_key(genre) != gkey or filename in exclude:
+            continue
+        out.append({"filename": filename, "title": title or filename,
+                    "artist": artist or ""})
+        if len(out) >= limit:
+            break
+    return out
 
 
 def _validate_pack_dir(pack_dir: Path):
@@ -634,6 +696,125 @@ def setup(app, context):
             _save_json(_drill_file(), {"received_at": _now_iso(),
                                        "snapshot": snapshot})
         return {"ok": True}
+
+    @app.post(f"/api/plugins/{PLUGIN_ID}/gigs/propose")
+    def propose_gig(body: dict = Body(...)):
+        inst = str((body or {}).get("instrument") or "")
+        genre = _genre_display((body or {}).get("genre"))
+        gkey = genre.lower()
+        if inst not in (_state["passports_content"].get("instruments") or []):
+            raise HTTPException(400, "Unknown instrument.")
+        if not gkey or len(genre) > GENRE_MAX_LEN:
+            raise HTTPException(400, "Provide a genre.")
+        cfg = _gig_config()
+        try:
+            size = int((body or {}).get("size") or 4)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "size must be a number.")
+        size = max(cfg["min_songs"], min(cfg["max_songs"], size))
+        played, _seconds = _played_by_instrument_genre()
+        stubs = list(played.get((inst, gkey), {}).values())
+        req = _badge_requirement(gkey, inst)
+        qualifying = [s for s in stubs if s["stars"] >= req["min_stars"]]
+        rest = [s for s in stubs if s["stars"] < req["min_stars"]]
+        # The set: mostly songs you own, plus a couple of stakes songs near
+        # the bar; a young passport fills from unplayed genre songs so the
+        # first gig is how stubs start. random per call = free re-roll.
+        random.shuffle(qualifying)
+        rest.sort(key=lambda s: -s["best_accuracy"])
+        picks = qualifying[:max(1, size - cfg["stakes_songs"])]
+        for s in rest:
+            if len(picks) >= size:
+                break
+            picks.append(s)
+        # Surplus qualifying songs backfill a short set — a mature passport
+        # with no near-bar songs left must still fill the bill.
+        for s in qualifying[len(picks):] if len(picks) < size else []:
+            if len(picks) >= size:
+                break
+            if s not in picks:
+                picks.append(s)
+        if len(picks) < size:
+            exclude = {s["filename"] for s in picks}
+            picks.extend(_unplayed_genre_songs(gkey, exclude, size - len(picks)))
+        if not picks:
+            raise HTTPException(404, "No songs of this genre in the library.")
+        venue = _current_venue()
+        return {
+            "instrument": inst,
+            "genre": genre,
+            "genre_key": gkey,
+            "venue_id": venue["id"] if venue else None,
+            "venue_name": venue["name"] if venue else "",
+            "songs": [{"filename": s["filename"], "title": s.get("title") or s["filename"],
+                       "artist": s.get("artist") or ""} for s in picks[:size]],
+        }
+
+    @app.post(f"/api/plugins/{PLUGIN_ID}/gigs")
+    def log_gig(body: dict = Body(...)):
+        # Called by the runner ONLY when the set completed — an abandoned set
+        # never logs (no fail state; the gig you finished is the gig you
+        # played). Accuracies come from song_stats, freshly written by the
+        # set's own plays.
+        inst = str((body or {}).get("instrument") or "")
+        genre = _genre_display((body or {}).get("genre"))
+        gkey = genre.lower()
+        venue_id = str((body or {}).get("venue_id") or "")
+        songs = (body or {}).get("songs")
+        if inst not in (_state["passports_content"].get("instruments") or []):
+            raise HTTPException(400, "Unknown instrument.")
+        if not gkey or len(genre) > GENRE_MAX_LEN:
+            raise HTTPException(400, "Provide a genre.")
+        if venue_id and (not VENUE_ID_RE.fullmatch(venue_id) or _venue(venue_id) is None):
+            raise HTTPException(400, "Unknown venue.")
+        if (not isinstance(songs, list) or not songs or len(songs) > 8
+                or not all(isinstance(f, str) and f.strip() for f in songs)):
+            raise HTTPException(400, "songs must be 1-8 filenames.")
+        db = _state["meta_db"]
+        entries = []
+        accuracies = []
+        for filename in songs:
+            title = filename
+            accuracy = None
+            if db is not None:
+                # The NEWEST row is the set's own just-recorded play — a
+                # MAX(last_accuracy) across arrangements would happily log a
+                # stale higher score from another instrument's old session.
+                row = db.conn.execute(
+                    "SELECT last_accuracy FROM song_stats WHERE filename = ? "
+                    "ORDER BY last_played_at DESC LIMIT 1",
+                    (filename,)).fetchone()
+                if row and row[0] is not None:
+                    accuracy = round(float(row[0]), 4)
+                    accuracies.append(accuracy)
+                trow = db.conn.execute(
+                    "SELECT title FROM songs WHERE filename = ?", (filename,)).fetchone()
+                if trow and trow[0]:
+                    title = trow[0]
+            entries.append({"filename": filename, "title": title, "accuracy": accuracy})
+        # Encore needs the WHOLE set scored at the bar — one scored song must
+        # not earn an encore for a set that was 4/5 unheard.
+        encore = (len(accuracies) == len(songs) and
+                  sum(accuracies) / len(accuracies) >= _gig_config()["encore_accuracy"])
+        gig = {
+            "at": _now_iso(),
+            "venue_id": venue_id or None,
+            "instrument": inst,
+            "genre": genre,
+            "genre_key": gkey,
+            "songs": entries,
+            "encore": encore,
+        }
+        with _lock:
+            st = _career_state()
+            if not isinstance(st.get("gigs"), list):
+                st["gigs"] = []
+            st["gigs"].append(gig)
+            # ponytail: hard cap — nothing reads past the last 20 per
+            # passport; the state file must not grow (and export) forever.
+            st["gigs"] = st["gigs"][-500:]
+            _save_json(_state_file(), st)
+        return {"ok": True, "gig": gig}
 
     @app.post(f"/api/plugins/{PLUGIN_ID}/packs/{{venue_id}}/download")
     def start_download(venue_id: str):

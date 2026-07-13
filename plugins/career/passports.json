@@ -3,6 +3,12 @@
         "songs": 5,
         "min_stars": 2
     },
+    "gig": {
+        "min_songs": 3,
+        "max_songs": 5,
+        "stakes_songs": 2,
+        "encore_accuracy": 0.75
+    },
     "families": [
         { "key": "metal", "match": ["metal", "djent", "grindcore", "thrash", "doom"] },
         { "key": "blues", "match": ["blues"] },

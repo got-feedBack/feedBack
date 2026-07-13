@@ -272,3 +272,89 @@ def test_nearest_targets_the_qualifying_bar_not_next_star(client, meta_db):
     p = _passport(client, "guitar", "soul")
     assert [s["filename"] for s in p["nearest"]] == ["one_star.feedpak", "zero_star.feedpak"]
     assert all(s["bar_at"] == 0.75 for s in p["nearest"])
+# ── Gigs ──────────────────────────────────────────────────────────────────────
+
+def test_gig_propose_mixes_owned_and_stakes(client, meta_db):
+    for i in range(4):
+        meta_db.add(f"own{i}.feedpak", 0, 0.85, genre="Soul", arrangements=LEAD)
+    meta_db.add("stake.feedpak", 0, 0.70, genre="Soul", arrangements=LEAD)
+    meta_db.add_song_only("fresh.feedpak", genre="Soul")
+    res = client.post("/api/plugins/career/gigs/propose",
+                      json={"instrument": "guitar", "genre": "Soul", "size": 4})
+    assert res.status_code == 200
+    gig = res.json()
+    files = [s["filename"] for s in gig["songs"]]
+    assert len(files) == 4
+    assert "stake.feedpak" in files          # a near-bar song gives the set stakes
+    assert gig["venue_id"] == "bar"          # 9 stars < 50: the dive bar
+
+    # A young passport (nothing played) still gets a playable set from the
+    # library's unplayed genre songs.
+    res2 = client.post("/api/plugins/career/gigs/propose",
+                       json={"instrument": "guitar", "genre": "Ska"})
+    assert res2.status_code == 404           # no ska in the library at all
+    meta_db.add_song_only("ska1.feedpak", genre="Ska")
+    res3 = client.post("/api/plugins/career/gigs/propose",
+                       json={"instrument": "guitar", "genre": "Ska"})
+    assert [s["filename"] for s in res3.json()["songs"]] == ["ska1.feedpak"]
+
+
+def test_gig_log_computes_encore_and_surfaces_in_passports(client, meta_db):
+    for i in range(2):
+        meta_db.add(f"s{i}.feedpak", 0, 0.9, genre="Soul", arrangements=LEAD,
+                    last_accuracy=0.9)
+    _open(client, "guitar", "Soul")
+    res = client.post("/api/plugins/career/gigs", json={
+        "instrument": "guitar", "genre": "Soul", "venue_id": "bar",
+        "songs": ["s0.feedpak", "s1.feedpak"]})
+    assert res.status_code == 200
+    gig = res.json()["gig"]
+    assert gig["encore"] is True             # avg 0.9 ≥ 0.75
+    assert gig["songs"][0]["accuracy"] == 0.9
+    view = client.get("/api/plugins/career/passports").json()
+    assert view["instruments"]["guitar"]["gig_count"] == 1
+    p = _passport(client, "guitar", "soul")
+    assert len(p["gigs"]) == 1 and p["gigs"][0]["encore"] is True
+
+
+def test_gig_log_validation_and_no_fail_state(client):
+    # Unknown venue / bad songs shapes are rejected; nothing is ever logged
+    # as a failed gig — the endpoint only appends completed sets.
+    assert client.post("/api/plugins/career/gigs", json={
+        "instrument": "guitar", "genre": "Soul", "venue_id": "nope",
+        "songs": ["x"]}).status_code == 400
+    assert client.post("/api/plugins/career/gigs", json={
+        "instrument": "guitar", "genre": "Soul", "songs": []}).status_code == 400
+    assert client.post("/api/plugins/career/gigs", json={
+        "instrument": "guitar", "genre": "Soul",
+        "songs": ["f"] * 9}).status_code == 400
+
+
+def test_gig_accuracy_reads_newest_row_and_encore_needs_full_set(client, meta_db):
+    # Newest row wins: a stale higher accuracy on another arrangement must
+    # not inflate the gig log.
+    meta_db.add("dual.feedpak", 1, 0.95, genre="Soul", arrangements=BASS,
+                last_accuracy=0.95, last_played_at="2026-06-01T00:00:00")
+    meta_db.add("dual.feedpak", 0, 0.60, genre="Soul", arrangements=LEAD,
+                last_accuracy=0.60, last_played_at="2026-07-14T00:00:00")
+    res = client.post("/api/plugins/career/gigs", json={
+        "instrument": "guitar", "genre": "Soul", "songs": ["dual.feedpak"]})
+    assert res.json()["gig"]["songs"][0]["accuracy"] == 0.6
+
+    # A set with an unscored song never earns the encore off one good song.
+    meta_db.add("scored.feedpak", 0, 0.9, genre="Soul", arrangements=LEAD,
+                last_accuracy=0.9, last_played_at="2026-07-14T00:01:00")
+    res2 = client.post("/api/plugins/career/gigs", json={
+        "instrument": "guitar", "genre": "Soul",
+        "songs": ["scored.feedpak", "ghost.feedpak"]})
+    assert res2.json()["gig"]["encore"] is False
+
+
+def test_gig_propose_backfills_from_surplus_qualifying(client, meta_db):
+    # Mature passport: plenty of qualifying songs, nothing near the bar,
+    # nothing unplayed — the set still fills to size.
+    for i in range(8):
+        meta_db.add(f"own{i}.feedpak", 0, 0.9, genre="Ska", arrangements=LEAD)
+    res = client.post("/api/plugins/career/gigs/propose",
+                      json={"instrument": "guitar", "genre": "Ska", "size": 5})
+    assert len(res.json()["songs"]) == 5

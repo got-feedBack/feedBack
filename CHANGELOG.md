@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   copied straight to the clipboard for pasting outside the app (shared
   `blob-io` helpers replace the download idiom previously duplicated in
   settings-io and diagnostics-export).
+- **Gigs (backend)** — career mode gains its verb: `POST
+  /api/plugins/career/gigs/propose` builds a playable setlist for an
+  instrument+genre (your qualifying songs plus a couple of stakes songs near
+  the bar; a young passport fills from unplayed genre songs — the first gig
+  is how stubs start; re-roll by calling again), naming the room your stars
+  can book. `POST /gigs` logs a **completed** set — per-song accuracies read
+  from the set's own freshly-recorded stats, an encore flag at the
+  data-driven bar (avg ≥ 75%) — into the career state; abandoned sets never
+  log (no fail state: the gig you finished is the gig you played). Passports
+  carry their gig log; instruments their gig count.
 
 ### Changed
 - **The full mix is a stem** (#933) — core no longer depends on `original_audio:`, a
