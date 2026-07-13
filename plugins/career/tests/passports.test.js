@@ -88,6 +88,33 @@ test('detectNewBadges notifies once per badge, never after it is seen', () => {
     assert.equal(w2.notifications.length, 0);
 });
 
+test('a new badge triggers the crowd celebrate() exactly once', () => {
+    const w = load();
+    let calls = 0;
+    w.v3VenueCrowd = { celebrate: () => { calls += 1; } };
+    const view = { instruments: { guitar: { passports: [
+        { genre_key: 'blues', genre: 'Blues', badge: 'earned' }] } } };
+    w.__careerPassportTest.detectNewBadges(view);
+    assert.equal(calls, 1);
+    // Same session, same view: no re-celebration.
+    w.__careerPassportTest.detectNewBadges(view);
+    assert.equal(calls, 1);
+});
+
+test('ceremony degrades when the crowd layer is absent or throws', () => {
+    const w = load();
+    const view = { instruments: { guitar: { passports: [
+        { genre_key: 'blues', genre: 'Blues', badge: 'earned' }] } } };
+    // No v3VenueCrowd at all (already exercised elsewhere, explicit here).
+    w.__careerPassportTest.detectNewBadges(view);
+    assert.equal(w.notifications.length, 1);
+    // celebrate() throwing must not break detection.
+    const w2 = load();
+    w2.v3VenueCrowd = { celebrate: () => { throw new Error('no pack'); } };
+    w2.__careerPassportTest.detectNewBadges(view);
+    assert.equal(w2.notifications.length, 1);
+});
+
 test('seenBadges tolerates corrupt stored values', () => {
     for (const bad of ['null', '[1,2]', '"x"', '{{{']) {
         const w = load({ 'feedBack-career-badges-seen': bad });

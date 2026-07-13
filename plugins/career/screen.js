@@ -34,6 +34,8 @@
     let _ppRelayTimer = 0;
     let _ppBook = null;          // {inst, gkey} of the open spread
     let _ppReturnFocus = null;   // element to refocus when the book closes
+    let _ppCeremonyQueue = [];   // badges awaiting their ceremony overlay
+    let _ppCeremonyActive = false;
     let _ppBootstrapped = false;
     let _ppNotified = {};        // badges chimed this session (slam still pending)
 
@@ -308,9 +310,10 @@
         lsSet(PP_SEEN_KEY, JSON.stringify(seen));
     }
 
-    // New badge → chime + notification once per session; the stamp SLAM plays
-    // when the passport is next opened (and only then is the badge marked
-    // seen, so a pending slam survives a reload).
+    // New badge → chime + notification + the venue ceremony, once per
+    // session; the stamp SLAM plays when the passport is next opened (and
+    // only then is the badge marked seen, so a pending slam survives a
+    // reload).
     function detectNewBadges(view) {
         const seen = seenBadges();
         for (const inst of Object.keys(view.instruments || {})) {
@@ -326,8 +329,107 @@
                         message: `${p.genre} — Bronze, ready to stamp into your ${ppLabel(inst)} passport.`,
                     });
                 }
+                badgeCeremony(inst, p);
             }
         }
+    }
+
+    function reducedMotion() {
+        try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (_) { return false; }
+    }
+
+    // The badge moment: the crowd erupts first (if a venue pack is live —
+    // badges land post-stats:recorded while the player is still on screen),
+    // then a body-level overlay. It CANNOT live in #pp-overlay: #plugin-career
+    // is display:none during playback.
+    function badgeCeremony(inst, p) {
+        // Reduced motion: the chime + fbNotify already delivered the news —
+        // no overlay, and no app-initiated crowd eruption either.
+        if (reducedMotion()) return;
+        const crowd = window.v3VenueCrowd;
+        if (crowd && typeof crowd.celebrate === 'function') {
+            try { crowd.celebrate(); } catch (_) { /* crowd layer optional */ }
+        }
+        if (!document.body || typeof document.createElement !== 'function') return;
+        // Several badges can land in one refresh (first load, drill-snapshot
+        // bootstrap): queue the ceremonies and play them back to back.
+        _ppCeremonyQueue.push({ inst, p });
+        if (!_ppCeremonyActive) setTimeout(drainCeremonies, 300);
+    }
+
+    function drainCeremonies() {
+        if (_ppCeremonyActive) return;
+        const queued = _ppCeremonyQueue.shift();
+        if (!queued) return;
+        _ppCeremonyActive = true;
+        showCeremonyOverlay(queued.inst, queued.p, () => {
+            _ppCeremonyActive = false;
+            setTimeout(drainCeremonies, 250);
+        });
+    }
+
+    function showCeremonyOverlay(inst, p, done) {
+        const el = document.createElement('div');
+        el.id = 'pp-ceremony';
+        el.className = 'pp-ceremony-overlay';
+        el.innerHTML = `
+            <canvas class="pp-confetti"></canvas>
+            <div class="pp-ceremony-card">
+                <div class="pp-stamp pp-stamp-page pp-ceremony-stamp" style="--pp-rot:${ppJitter(p.genre_key, 7).toFixed(1)}deg">
+                    <span class="pp-stamp-genre">${esc(p.genre.toUpperCase())}</span>
+                    <span class="pp-stamp-tier">BRONZE</span>
+                </div>
+                <div class="pp-ceremony-title">Badge earned</div>
+                <div class="pp-ceremony-sub">${esc(p.genre)} — ${esc(ppLabel(inst))} passport</div>
+            </div>`;
+        let timer = 0;
+        let closed = false;
+        const dismiss = () => {
+            if (closed) return;
+            closed = true;
+            clearTimeout(timer);
+            el.classList.add('pp-ceremony-out');
+            setTimeout(() => { el.remove(); done(); }, 350);
+        };
+        el.addEventListener('click', dismiss);
+        document.body.appendChild(el);
+        timer = setTimeout(dismiss, 4200);
+        confettiBurst(el.querySelector('.pp-confetti'));
+    }
+
+    function confettiBurst(canvas) {
+        if (!canvas || typeof canvas.getContext !== 'function') return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        canvas.width = canvas.clientWidth;
+        canvas.height = canvas.clientHeight;
+        const colors = ['#d9a253', '#b45309', '#facc15', '#06b6d4', '#e5e7eb'];
+        const parts = Array.from({ length: 42 }, () => ({
+            x: canvas.width / 2 + (Math.random() - 0.5) * 90,
+            y: canvas.height * 0.42,
+            vx: (Math.random() - 0.5) * 9,
+            vy: -(4 + Math.random() * 7),
+            rot: Math.random() * Math.PI,
+            vr: (Math.random() - 0.5) * 0.3,
+            w: 5 + Math.random() * 5,
+            h: 3 + Math.random() * 4,
+            c: colors[(Math.random() * colors.length) | 0],
+        }));
+        let frames = 0;
+        (function tick() {
+            if (!canvas.isConnected || frames++ > 240) return;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            for (const q of parts) {
+                q.x += q.vx; q.y += q.vy; q.vy += 0.18; q.rot += q.vr;
+                ctx.save();
+                ctx.translate(q.x, q.y);
+                ctx.rotate(q.rot);
+                ctx.fillStyle = q.c;
+                ctx.fillRect(-q.w / 2, -q.h / 2, q.w, q.h);
+                ctx.restore();
+            }
+            requestAnimationFrame(tick);
+        }());
     }
 
     // Relay the Virtuoso drill snapshot (localStorage doc, not the thin bus

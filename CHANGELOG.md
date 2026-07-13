@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Badge ceremony in the venue** — earning a genre badge now stages a moment:
+  the crowd layer erupts (new public `v3VenueCrowd.celebrate()` — instant
+  ecstatic loop bypassing the stability/dwell hysteresis, plus a cheer stinger;
+  a no-op without a venue pack) and a full-screen overlay drops the bronze
+  stamp with a shine sweep and a confetti burst over whatever screen is active
+  (badges land right after `stats:recorded`, while the player is still up).
+  Click or wait ~4s to dismiss; `prefers-reduced-motion` gets the existing
+  chime + notification only. The stamp still slams into the passport book on
+  next open, unchanged.
 - **Career passports (backend)** — the badge-journey layer on top of career stars.
   New career-plugin endpoints: `GET /api/plugins/career/passports` (per-instrument
   passport walls: genre badges computed on read from `song_stats` × the library's

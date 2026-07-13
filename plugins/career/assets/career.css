@@ -409,3 +409,60 @@
     .pp-slam, .pp-stamp-page::after { opacity: 1; }
     .pp-stamp-hidden { opacity: 0.92; }
 }
+
+/* Badge ceremony (body-level overlay — shows over the player) */
+.pp-ceremony-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 220;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(3, 7, 18, 0.55);
+    backdrop-filter: blur(1.5px);
+    animation: pp-ceremony-in 0.3s ease-out;
+    cursor: pointer;
+}
+.pp-ceremony-out { opacity: 0; transition: opacity 0.3s ease-out; }
+.pp-confetti { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.pp-ceremony-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    text-align: center;
+}
+.pp-ceremony-stamp {
+    position: relative;
+    overflow: hidden;
+    background: rgba(239, 230, 208, 0.97);
+    transform: rotate(var(--pp-rot)) scale(1.25);
+    animation: pp-slam 0.55s cubic-bezier(0.2, 0.8, 0.3, 1) 0.15s backwards;
+    margin-top: 0;
+}
+.pp-ceremony-stamp::before {
+    content: '';
+    position: absolute;
+    inset: -40%;
+    background: linear-gradient(115deg, transparent 42%, rgba(255, 255, 255, 0.55) 50%, transparent 58%);
+    transform: translateX(-120%);
+    animation: pp-shine 1.1s ease-out 0.75s forwards;
+    pointer-events: none;
+}
+@keyframes pp-shine {
+    to { transform: translateX(120%); }
+}
+@keyframes pp-ceremony-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+.pp-ceremony-title {
+    margin-top: 1rem;
+    font-size: 1.15rem;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: #f0e2c3;
+    text-shadow: 0 2px 8px rgba(0, 0, 0, 0.8);
+}
+.pp-ceremony-sub { font-size: 0.8rem; color: #d1d5db; text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8); }

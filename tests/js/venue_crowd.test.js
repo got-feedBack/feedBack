@@ -128,3 +128,22 @@ test('venue-scene-3d activates/deactivates the crowd layer', () => {
     assert.match(src, /syncCrowd\(false\)/);
     assert.match(src, /v3VenueCrowd/);
 });
+
+test('machine.force commits instantly and dwell holds the forced state', () => {
+    const m = crowd.createCrowdMachine();
+    m.force('ecstatic', 100000);
+    assert.equal(m.current, 'ecstatic');
+    // The real perf state cannot reassert until the dwell window passes.
+    m.update('smoke', 100000 + crowd.STABLE_MS);
+    assert.equal(m.update('smoke', 100000 + crowd.DWELL_MS - 1), null);
+    assert.equal(m.current, 'ecstatic');
+    assert.equal(m.update('smoke', 100000 + crowd.DWELL_MS), 'bored');
+    // Bogus states are ignored.
+    m.force('confused', 200000);
+    assert.equal(m.current, 'bored');
+});
+
+test('celebrate() is exported and no-ops without a manifest/active venue', () => {
+    assert.equal(typeof crowd.celebrate, 'function');
+    assert.equal(crowd.celebrate(), false);
+});

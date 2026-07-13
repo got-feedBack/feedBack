@@ -58,6 +58,15 @@
                 candidate = null;
                 lastSwitchAt = -Infinity;
             },
+            // Commit a state NOW, bypassing stability/dwell (badge ceremony).
+            // Stamping lastSwitchAt makes the dwell window hold the forced
+            // state before the real perf machine can reassert.
+            force(state, nowMs) {
+                if (!CROWD_STATES.includes(state)) return;
+                current = state;
+                candidate = null;
+                lastSwitchAt = nowMs;
+            },
             // Feed the latest perf state; returns the new crowd state when a
             // transition commits, else null.
             update(perfState, nowMs) {
@@ -564,6 +573,26 @@
         if (dev && !_manifest) setManifest(dev);
     }
 
+    // Badge-ceremony hook (career passports): the crowd erupts NOW — ecstatic
+    // loop bypassing stability/dwell (the dwell window then holds it while
+    // the real perf state waits its turn) plus a cheer. Degrades to a no-op
+    // without a pack / outside the player, like every other entry point.
+    function celebrate() {
+        if (!_venueActive || !_manifest || !_videos[0]) return false;
+        machine.force('ecstatic', now());
+        if (_stingerUntilEnded || _introActive) {
+            // A stinger/intro owns the idle layer (likely the end-of-song
+            // accuracy cheer — the crowd is already reacting); queue the
+            // ecstatic loop for when it ends, same as onPerformanceState.
+            _pendingLoop = 'ecstatic';
+        } else {
+            showLoop('ecstatic', FADE_MS);
+            _lastStingerAt = -Infinity; // a badge earn always gets its cheer
+            playStinger('cheer');
+        }
+        return true;
+    }
+
     function getState() {
         return {
             venueActive: _venueActive,
@@ -589,6 +618,7 @@
         setVenueActive,
         bindRuntime,
         getState,
+        celebrate,
     };
 
     if (root) root.v3VenueCrowd = api;
