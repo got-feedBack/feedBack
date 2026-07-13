@@ -248,8 +248,8 @@ def test_family_drills_stay_per_instrument(client, meta_db):
 
 
 def test_nearest_invitations_order_and_exclusions(client, meta_db):
-    # Non-qualifying songs sorted by distance to the NEXT star; qualifying
-    # songs never appear; capped at 3.
+    # Non-qualifying songs sorted by distance to the QUALIFYING bar;
+    # qualifying songs never appear; capped at 3.
     meta_db.add("q.feedpak", 0, 0.80, genre="Soul", arrangements=LEAD)      # qualifies
     meta_db.add("close.feedpak", 0, 0.74, genre="Soul", arrangements=LEAD)  # 1% to 2★
     meta_db.add("mid.feedpak", 0, 0.70, genre="Soul", arrangements=LEAD)    # 5% to 2★
