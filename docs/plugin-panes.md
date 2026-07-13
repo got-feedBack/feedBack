@@ -173,8 +173,27 @@ document.body.appendChild(myTooltip);
 panelEl.appendChild(myTooltip);
 ```
 
-Same for measuring. `window.innerWidth` is the *main* window's. Use
-`el.ownerDocument.defaultView` when you need the window your panel is actually in.
+**And every lookup for something inside your panel.** Once the panel has moved,
+`document.getElementById('my-panel-thing')` returns `null` — so every update it
+guards silently stops happening, precisely while the user is looking at the panel.
+No error. Just a UI that quietly goes dead.
+
+```js
+// WRONG — null once the panel is popped out.
+document.getElementById('my-panel-hint').textContent = msg;
+
+// RIGHT — search FROM the panel; works in either document.
+panelEl.querySelector('#my-panel-hint').textContent = msg;
+```
+
+Elements that live outside your panel (your plugin's *screen*, host chrome) never
+move, and should keep using `document.getElementById`. Audit which is which — in
+the stem mixer, four ids were inside the panel and a dozen were not.
+
+Same for measuring and popovers. `window.innerWidth` is the *main* window's, and a
+dismiss listener on `window` watches a window the user isn't clicking in. Use
+`el.ownerDocument` / `el.ownerDocument.defaultView` when you need the window your
+panel is actually in.
 
 ### 2. Don't hide your panel yourself
 
@@ -212,19 +231,87 @@ chipDetach = feedBack.panes.attachChip(panel, PANE_ID, { header: toolsEl });
 Call `chipDetach()` in your teardown too, or you leave a stub pointing at DOM that
 no longer exists.
 
-### 5. `isConnected` does not mean "docked"
+### 5. `isConnected` lies about a panel that is a pane
 
-A panel sitting in a pane window is **connected** — just not to *this* document.
-Code that asks "am I still mounted?" with `isConnected` will get `true` and act on
-a panel that is somewhere else entirely.
+This one has cost more debugging than everything else on this page combined, and
+it lies in **both directions**.
+
+**It says `true` when your panel is not here.** A panel sitting in a pane window is
+`isConnected` — just not to *this* document. Code asking "am I still mounted?" gets
+`true` and then acts on a panel that is somewhere else entirely.
+
+**It says `false` when your panel is perfectly fine.** The host *detaches* the
+element the moment a pop-out starts, before the new window has even loaded. In that
+gap `isConnected` is `false` — and any code that rebuilds on that basis builds a
+**second panel**, while the host is still holding the first.
+
+That second panel is the one your module variables now point at. The one the user
+can *see* is the original, owned by nobody. So:
+
+- its close button closes the *other*, invisible panel — "the X doesn't work"
+- your chip gets re-attached to the impostor — "the pop-out icon vanished"
+
+Two baffling symptoms, one duplicate, and nothing in the stack trace to suggest it.
+
+**Ask the pane system, not the DOM.** It knows where your element is:
 
 ```js
-const docked = el.ownerDocument === document;   // this is the question you meant
+function paneOwnsPanel() {
+    const panes = window.feedBack && window.feedBack.panes;
+    return !!(panes && panes.isOpen && panes.isOpen(MY_PANE_ID));
+}
+
+// "Is my panel gone?" — not "is it in this document?"
+if (panel && (panel.isConnected || paneOwnsPanel())) return panel;   // alive; possibly elsewhere
 ```
 
-Or take the optional `onHost(hostId, el)` callback, which fires on both moves.
+Every `isConnected` check on a panel that can be a pane needs this. In the stem
+mixer that was `ensureMixerPanel()` (which rebuilt) *and* the MutationObserver's
+fast path (which decided the UI was unmounted and swept on every mutation).
 
-### 6. Expect rAF to be throttled while your pane has focus
+For "which document is it in right now", use `el.ownerDocument === document`, or
+take the optional `onHost(hostId, el)` callback, which fires on both moves.
+
+### 6. If your plugin can be re-injected, it must be able to remove itself
+
+The host may run your script more than once — a screen re-entry, a version change.
+Without a teardown, the second run builds a second panel while the first one is
+still on screen, and every module variable in the new instance points at the new,
+invisible one. The user clicks the panel they can see; nothing happens.
+
+Everything stateful duplicates: observers, timers, listeners. And one thing is
+worse than duplicated — **your pane registration**:
+
+```js
+panes.register({ id, element: () => panel });   // resolved LAZILY, at open time
+```
+
+First registration wins, so a stale one hands the host `panel` from a **dead
+instance**. Popping out then moves a panel nobody owns.
+
+So publish a teardown handle and call it at the top of your script:
+
+```js
+if (window.__myPluginInstance?.destroy) {
+    try { window.__myPluginInstance.destroy(); } catch (e) { /* tear down what we can */ }
+}
+
+window.__myPluginInstance = {
+    destroy() {
+        observer?.disconnect();
+        clearTimeout(myTimer);
+        chipDetach?.();                       // attachChip() returned this
+        panes?.unregister?.(MY_PANE_ID);      // ← the one people forget
+        document.querySelectorAll('#my-panel').forEach((n) => n.remove());
+    },
+};
+```
+
+Belt and braces: when you build your panel, remove any node carrying its id that
+isn't yours. A zombie panel is worse than no panel — it looks alive and does
+nothing.
+
+### 7. Expect rAF to be throttled while your pane has focus
 
 Chromium throttles a **backgrounded** window's `requestAnimationFrame` — and the
 main window is exactly what's backgrounded while the user is looking at your pane.
@@ -234,14 +321,14 @@ Event-driven panels (sliders, buttons, presets) don't care. A panel that
 *animates continuously* may run slowly precisely when it's the only thing on
 screen. Drive such animation from data you already have, or accept the stutter.
 
-### 7. Don't synchronise anything
+### 8. Don't synchronise anything
 
 No `BroadcastChannel`, no `postMessage`, no second copy of your state, no mirrored
 UI. There is **one** realm and **one** panel. If you find yourself writing sync
 code, you have misunderstood the model — the whole point is that there is nothing
 to sync.
 
-### 8. Nothing here is required
+### 9. Nothing here is required
 
 On a host without the panes API, `feedBack.panes` is `undefined`. Skip both calls
 and your panel behaves exactly as it does today. Guard, don't depend:
