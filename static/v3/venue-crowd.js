@@ -34,6 +34,7 @@
     const STREAK_MILESTONES = [25, 50, 100];
     const CANPLAY_TIMEOUT_MS = 4000;
     const DEV_FLAG_KEY = 'feedBack-venue-crowd-dev';
+    const SFX_KEY = 'feedBack-venue-crowd-sfx';   // 'on' | 'off' (default off)
 
     // ---------------------------------------------------------------------
     // Pure, clock-injected decision logic (unit-tested in
@@ -144,7 +145,11 @@
             video: abs(m.intro && m.intro.video),
             audio: abs(m.intro && m.intro.audio),
         };
-        return { loops, stingers, intro };
+        const sfx = {
+            up: abs(m.sfx && m.sfx.up),
+            down: abs(m.sfx && m.sfx.down),
+        };
+        return { loops, stingers, intro, sfx };
     }
 
     function ensureVideos() {
@@ -410,6 +415,30 @@
         return true;
     }
 
+    let _sfxEl = null;
+
+    function sfxEnabled() {
+        try { return localStorage.getItem(SFX_KEY) === 'on'; } catch (_) { return false; }
+    }
+
+    // One-shot crowd reaction on committed mood transitions (toggleable):
+    // up the ladder → cheer, down → boos. Committed transitions are already
+    // hysteresis-limited, so this can't spam.
+    function playMoodSfx(direction) {
+        if (!sfxEnabled() || !_manifest || !_manifest.sfx || _introActive) return;
+        const url = direction > 0 ? _manifest.sfx.up : _manifest.sfx.down;
+        if (!url || typeof document === 'undefined') return;
+        if (!_sfxEl) {
+            _sfxEl = document.createElement('audio');
+            _sfxEl.preload = 'auto';
+            _sfxEl.style.display = 'none';
+            document.body.appendChild(_sfxEl);
+        }
+        _sfxEl.src = url;
+        _sfxEl.volume = 0.6;
+        _sfxEl.play().catch(() => { /* pre-gesture; skip silently */ });
+    }
+
     function onSongPlay() {
         // Song audio starting is the hard cue: the ambience must yield.
         fadeAudioOut(1000);
@@ -430,8 +459,10 @@
         if (sting && !_introActive && CROWD_RANK[machine.current] >= CROWD_RANK.neutral) {
             playStinger(sting);
         }
+        const prevRank = CROWD_RANK[machine.current];
         const next = machine.update(d.state, now());
         if (next) {
+            playMoodSfx(CROWD_RANK[next] - prevRank);
             // A stinger or the intro owns the idle layer; defer the switch.
             if (_stingerUntilEnded || _introActive) _pendingLoop = next;
             else showLoop(next, FADE_MS);
@@ -489,6 +520,7 @@
         _introGen++;
         _introActive = false;
         stopAudio();
+        if (_sfxEl && !_sfxEl.paused) _sfxEl.pause();
         _stingerUntilEnded = false;
         _pendingLoop = null;
         _loadingLoop = null;
