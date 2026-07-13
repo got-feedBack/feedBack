@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Genres fall back to MusicBrainz enrichment** — the effective genre now
   resolves override → pack genre → the enrichment match's primary genre
-  (matched rows only). Converted packs rarely carry a `genres` manifest key,
+  (matched or user-pinned manual rows only). Converted packs rarely carry a `genres` manifest key,
   which starved the library genre facet and career passports on real
   libraries; with the fallback, every enriched song's genre is browsable and
   passport-able immediately, and coverage grows as enrichment runs.
