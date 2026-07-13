@@ -305,7 +305,7 @@ def check_key_coverage(spec: Path) -> bool:
 
     print(f"  spec declares {len(declared)} keys; core reads {len(reads)}, writes {len(writes)}")
     if exceptions:
-        print(f"  allowlisted (pending spec): {', '.join(sorted(exceptions))}")
+        print(f"  grandfathered (tracked debt): {', '.join(sorted(exceptions))}")
     print(f"  key-coverage: {'OK' if ok else 'FAILED'}")
     return ok
 
@@ -417,7 +417,12 @@ def main() -> int:
         return 1
 
     print("[1/4] key-coverage — core reads/writes only keys the spec declares")
-    ok1 = check_readers_complete() & check_key_coverage(spec)
+    # Both run, always: a stale READERS list and an undeclared key are separate
+    # failures, and reporting only the first would hide the second. Hence two
+    # calls and an explicit `and` over the results, not a short-circuiting one.
+    readers_ok = check_readers_complete()
+    coverage_ok = check_key_coverage(spec)
+    ok1 = readers_ok and coverage_ok
     print("[2/4] allowlist-closed — the grandfather list may shrink, never grow")
     ok2 = check_allowlist_closed(args.baseline_exceptions, args.bootstrap_allowlist)
     print("[3/4] forward — core ingests the spec's example packs")

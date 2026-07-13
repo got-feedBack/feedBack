@@ -127,9 +127,11 @@ jobs:
   feedpak-spec:
     # Guard that core stays faithful to the feedpak format spec, which lives in
     # its own repo (got-feedback/feedpak-spec) and is the contract third-party
-    # packers and players build against. Three surface checks: core reads only
-    # manifest keys the spec declares; core ingests the spec's example packs;
-    # packs committed here pass the spec's reference validator. Motivated by
+    # packers and players build against. Four surface checks: core reads/writes
+    # only manifest keys the spec declares (and the scanned-module list can't
+    # fall behind); the exception allowlist never grows, so the FEP process is
+    # the only way a new key lands; core ingests the spec's example packs; packs
+    # committed here pass the spec's reference validator. Motivated by
     # #933, where a manifest key (`original_audio`) shipped in core without ever
     # reaching the spec. Pinned by SHA in .feedpak-spec-ref so a change over
     # there can't redden an unrelated PR here.
@@ -193,7 +195,16 @@ jobs:
           # and may only shrink. Prove that by diffing against the base branch —
           # without this, anyone could append an entry and route around the FEP
           # process from inside this repo.
-          git fetch --no-tags --depth=1 origin main
+          #
+          # Resolve the base rather than hardcoding `main`: ship-ci.yml also runs
+          # this workflow for PRs into release/** and for pushes to release/**,
+          # where a main baseline would diff against the wrong branch.
+          #   PR   -> the branch it merges into
+          #   push -> the branch itself (its tip already contains the change, so
+          #           this is a no-op; enforcement happens at PR time)
+          BASE="${{ github.event.pull_request.base.ref || github.ref_name }}"
+          echo "diffing the allowlist against origin/$BASE"
+          git fetch --no-tags --depth=1 origin "$BASE"
           if git cat-file -e FETCH_HEAD:feedpak-spec-exceptions.yml 2>/dev/null; then
             git show FETCH_HEAD:feedpak-spec-exceptions.yml > "$RUNNER_TEMP/baseline-exceptions.yml"
             echo "args=--baseline-exceptions $RUNNER_TEMP/baseline-exceptions.yml" >> "$GITHUB_OUTPUT"

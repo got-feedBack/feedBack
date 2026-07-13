@@ -20,8 +20,9 @@ The moment core reads a manifest key the spec doesn't define, that promise break
   `original/` directory that no code anywhere requires — the convention was reverse-engineered from an
   example in a *code comment*.
 
-The rule this gate enforces: **any manifest key core reads must be in the spec before core ships code that
-depends on it.** Spec first, implementation second.
+The rule this gate enforces: **any manifest key core reads _or writes_ must be in the spec before core
+ships code that depends on it.** Spec first, implementation second. Writes are not exempt — a key core
+writes lands in every pack we emit, so an undeclared one seeds the ecosystem with non-spec data.
 
 Note that "get it into the spec" is not automatically the right fix for an existing violation — for
 `original_audio` it isn't. The spec already carries the pre-separation mixdown as a stem
@@ -32,7 +33,7 @@ before the code merges.
 
 ## What it checks
 
-We can't mechanically prove core *interprets* a key the way the spec means. We can prove three surface
+We can't mechanically prove core *interprets* a key the way the spec means. We can prove four surface
 properties, and they cover the drift that actually occurs.
 
 | Layer | Check | Catches |
@@ -105,12 +106,17 @@ Known, and worth fixing in follow-ups rather than blocking on:
 
 - **Layer 1 is name-heuristic.** It recognises manifest dicts bound to locals named in `MANIFEST_VARS`
   (`manifest`, `mf`) plus the `load_manifest(...)` call form. This works because the loaders use a uniform
-  idiom, but it is fragile against a refactor that renames the local. The hardening step is to route all
-  manifest access through a single declared `KNOWN_MANIFEST_KEYS` registry in `lib/sloppak.py`; the gate
-  then compares registry against schema exactly instead of inferring.
+  idiom, but it is fragile against a refactor that renames the local. The `readers-complete` guard limits the
+  blast radius — a module that touches manifest keys can't go unscanned — but a *renamed local inside a
+  scanned module* would still slip. The hardening step is to route all manifest access through a single
+  declared `KNOWN_MANIFEST_KEYS` registry in `lib/sloppak.py`; the gate then compares registry against schema
+  exactly instead of inferring.
 - **Layer 1 covers top-level keys only.** Nested structure (`arrangements[].file`, `.id`, `.notation`) isn't
   checked. Extending to it means walking the schema's `$ref` subschemas.
-- **Layer 3 can't catch unknown keys**, because `manifest.schema.json` sets `additionalProperties: true` and
+- **Layer 1 recognises `get`, `setdefault`, and subscripts** as key access. `update()` and `pop()` aren't
+  used against a feedpak manifest anywhere in the tree, so they're deliberately not special-cased rather than
+  speculatively handled — but note `KEY_OPS` (which drives `readers-complete`) doesn't look for them either.
+- **Layer 4 can't catch unknown keys**, because `manifest.schema.json` sets `additionalProperties: true` and
   the reference validator deliberately "treats unknown keys/files as forward-compatible". Fixing this
   properly belongs in the spec (tighten the schema, or give the validator a `--strict` mode). Until then,
   layer 1 is the only thing standing between us and the next `original_audio`.

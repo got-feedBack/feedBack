@@ -11,13 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CI gate: core must stay faithful to the feedpak spec (`feedpak-spec` job).** feedpak is published as
   an open format with its own repo, normative spec, JSON Schemas, and reference validator — but nothing
   stopped core from reading a manifest key the spec never defined, which is exactly what happened with
-  `original_audio` (#583 → #933). `tools/check_spec_conformance.py` now enforces three surface properties
+  `original_audio` (#583 → #933). `tools/check_spec_conformance.py` now enforces four surface properties
   in CI: (1) **key-coverage** — every manifest key core reads *or writes* is declared in the spec's
   `manifest.schema.json`, found by walking the AST of `lib/sloppak.py`, `lib/enrichment.py`, and
-  `lib/songmeta.py` (writes are gated too, and reported separately: a key core writes lands in every pack
-  we emit, so an undeclared one seeds the ecosystem with non-spec data); (2) **forward** — core's
-  `load_song()` ingests every example pack the spec ships;
-  (3) **reverse** — every pack committed here passes the spec's own `tools/validate.py` (7/7 pass today).
+  `lib/songmeta.py`, `lib/gp2notation.py`, and `lib/routers/ws_highway.py` (writes are gated too — including
+  `setdefault()` — and reported separately: a key core writes lands in every pack we emit, so an undeclared
+  one seeds the ecosystem with non-spec data; a **readers-complete** guard fails the build if that module
+  list falls behind the codebase); (2) **allowlist-closed** — `feedpak-spec-exceptions.yml` never grows;
+  (3) **forward** — core's `load_song()` ingests every example pack the spec ships;
+  (4) **reverse** — every pack committed here passes the spec's own `tools/validate.py` (7/7 pass today).
   The spec is pinned by SHA in `.feedpak-spec-ref` so a change over there can't redden an unrelated PR
   here; bump it in its own PR, and a red result is the signal that core doesn't satisfy the new spec.
   **There is no in-repo escape hatch, by design.** A blocked PR has exactly one route: land the key in the

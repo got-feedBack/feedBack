@@ -47,4 +47,4 @@ exceptions:
 
       Grandfathered so the gate can land green and start blocking the *next*
       instance immediately, rather than blocking on #933. This entry goes away
-      when core stops reading the key.
+      when core no longer reads or writes the key.
