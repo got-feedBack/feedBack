@@ -275,4 +275,7 @@ def test_freqs_to_midis_rejects_garbage():
     from tunings import freqs_to_midis
     assert freqs_to_midis([82.41, 0]) is None          # non-positive
     assert freqs_to_midis([82.41, "x"]) is None        # non-numeric
+    assert freqs_to_midis([float("nan")]) is None      # non-finite (would raise in int(round(...)))
+    assert freqs_to_midis([float("inf")]) is None      # non-finite
+    assert freqs_to_midis([float("-inf")]) is None     # non-finite
     assert freqs_to_midis([]) == []                    # vacuously fine

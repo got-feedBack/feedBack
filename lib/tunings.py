@@ -101,14 +101,16 @@ def open_midis_to_freqs(midis: list[int], reference_pitch: float = DEFAULT_REFER
 def freqs_to_midis(freqs: list[float], reference_pitch: float = DEFAULT_REFERENCE_PITCH) -> list[int] | None:
     """Return absolute open-string MIDI notes for frequencies at the supplied
     A4 reference — the inverse of open_midis_to_freqs. None if any entry is
-    non-numeric or non-positive (a provider could hand us anything)."""
+    non-numeric, non-finite, or non-positive (a provider could hand us
+    anything; NaN/Infinity would otherwise raise inside int(round(...)) and
+    500 the /api/tunings endpoint)."""
     out: list[int] = []
     for f in freqs:
         try:
             f = float(f)
         except (TypeError, ValueError):
             return None
-        if f <= 0:
+        if not math.isfinite(f) or f <= 0:
             return None
         out.append(int(round(69 + 12 * math.log2(f / reference_pitch))))
     return out

@@ -120,11 +120,20 @@
             if (!r.ok) return;
             const data = await r.json();
             _tuningsByKey = data.tunings || {};
-            // Build TUNING_NOTE from the first (lowest) string frequency of each tuning.
+            // Build TUNING_NOTE from the lowest string of each tuning. Prefer the
+            // exact integer midis the server now sends (tuningMidis, #829) — the
+            // frequency path reconstructs the note via log2 against a hardcoded
+            // 440 and can land a semitone off at non-440 reference pitches.
+            // Frequencies remain the fallback for older cached responses.
+            const midisByKey = data.tuningMidis || {};
             TUNING_NOTE = {};
             for (const key of Object.keys(_tuningsByKey)) {
                 for (const [name, freqs] of Object.entries(_tuningsByKey[key])) {
-                    if (!(name in TUNING_NOTE) && Array.isArray(freqs) && freqs.length > 0) {
+                    if (name in TUNING_NOTE) continue;
+                    const midis = midisByKey[key] && midisByKey[key][name];
+                    if (Array.isArray(midis) && midis.length > 0 && Number.isFinite(midis[0])) {
+                        TUNING_NOTE[name] = NOTE_NAMES[((midis[0] % 12) + 12) % 12];
+                    } else if (Array.isArray(freqs) && freqs.length > 0) {
                         TUNING_NOTE[name] = _freqToNote(freqs[0]);
                     }
                 }
