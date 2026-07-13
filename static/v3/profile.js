@@ -191,6 +191,10 @@
             '<div class="space-y-6">' +
             headerCard +
             bestsCard +
+            // Passport wall — rendered by the career plugin on
+            // v3:profile-rendered (absent-not-empty: nothing shows until a
+            // passport exists).
+            '<div id="v3-profile-passports-mount"></div>' +
             // Feats of Power trophy shelf — rendered by the achievements plugin
             // (earned Feats only; hidden-until-earned, so empty when none).
             '<div id="v3-profile-feats-slot"></div>' +

@@ -458,6 +458,8 @@
         _pp = view;
         detectNewBadges(view);
         renderPassports();
+        renderProfileWall();
+        renderDashCard();
         if (!_ppBootstrapped) {
             _ppBootstrapped = true;
             // Sync the local drill snapshot once per session — drill progress
@@ -643,7 +645,11 @@
                 <span class="pp-stamp-tier">BRONZE</span>
             </div>
             <div class="pp-gold-foil" aria-hidden="true">GOLD</div>
-            <div class="pp-gold-note">Gold rung coming — improvise it, verified.</div>`;
+            <div class="pp-gold-note">Gold rung coming — improvise it, verified.</div>
+            <div class="pp-card-actions">
+                <button class="career-btn career-btn-ghost" data-pp-card="save">Save card</button>
+                <button class="career-btn career-btn-ghost" data-pp-card="copy">Copy card</button>
+            </div>`;
         } else {
             const fill = (ppFillFraction(p) * 100).toFixed(0);
             badgeArea = `<div class="pp-stamp pp-stamp-page pp-stamp-ghost" style="--pp-rot:${ppJitter(p.genre_key, 7).toFixed(1)}deg; --pp-fill:${fill}%">
@@ -823,6 +829,214 @@
         if (_tiltEl) { resetTilt(_tiltEl); _tiltEl = null; }
     }
 
+    // ── Shareable passport card (canvas → PNG, save or clipboard) ─────────
+    // Keep in sync with the .pp-leather-* gradients in assets/career.css —
+    // canvas can't consume a CSS class, so the pairs live twice on purpose.
+    const PP_LEATHER_HEX = {
+        guitar: ['#5c2321', '#401412'],
+        bass: ['#1f3252', '#131f36'],
+        keys: ['#1e4034', '#122a21'],
+        drums: ['#3f3f46', '#26262b'],
+    };
+
+    function drawPassportCard(inst, p) {
+        const W = 480;
+        const H = 640;
+        const canvas = document.createElement('canvas');
+        canvas.width = W;
+        canvas.height = H;
+        const ctx = canvas.getContext('2d');
+        const [c1, c2] = PP_LEATHER_HEX[inst] || PP_LEATHER_HEX.guitar;
+        const bg = ctx.createLinearGradient(0, 0, W, H);
+        bg.addColorStop(0, c1);
+        bg.addColorStop(1, c2);
+        ctx.fillStyle = bg;
+        ctx.fillRect(0, 0, W, H);
+        // Emboss frame
+        ctx.strokeStyle = 'rgba(240,226,195,0.35)';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(18, 18, W - 36, H - 36);
+        // Genre title
+        ctx.fillStyle = 'rgba(240,226,195,0.95)';
+        ctx.textAlign = 'center';
+        ctx.font = '700 34px Georgia, serif';
+        ctx.fillText(p.genre.toUpperCase(), W / 2, 92, W - 80);
+        ctx.font = '400 15px Georgia, serif';
+        ctx.fillStyle = 'rgba(240,226,195,0.55)';
+        ctx.fillText(`${ppLabel(inst).toUpperCase()} PASSPORT`, W / 2, 122);
+        // Stamp ring
+        const gold = p.badge === 'gold';
+        const ink = gold ? '#d9a253' : '#b06a2a';
+        const cy = 330;
+        ctx.strokeStyle = ink;
+        ctx.lineWidth = 6;
+        ctx.beginPath();
+        ctx.arc(W / 2, cy, 118, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(W / 2, cy, 106, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = ink;
+        ctx.font = '800 26px Georgia, serif';
+        ctx.fillText(p.genre.toUpperCase(), W / 2, cy - 6, 190);
+        ctx.font = '600 16px Georgia, serif';
+        ctx.fillText(gold ? 'G O L D' : 'B R O N Z E', W / 2, cy + 28);
+        // Facts
+        const stubCount = (p.songs || []).filter((sng) => sng.qualifies).length;
+        const hours = fmtHours(p.seconds_total);
+        ctx.fillStyle = 'rgba(240,226,195,0.75)';
+        ctx.font = '400 17px Georgia, serif';
+        ctx.fillText(`${stubCount} ticket stub${stubCount === 1 ? '' : 's'}${hours ? ` · ${hours} played` : ''}`, W / 2, 512);
+        ctx.fillStyle = 'rgba(240,226,195,0.4)';
+        ctx.font = '400 13px Georgia, serif';
+        ctx.fillText('fee[dB]ack · career passport', W / 2, H - 44);
+        return canvas;
+    }
+
+    function exportPassportCard(mode) {
+        if (!_ppBook || !_pp) return;
+        const { inst, gkey } = _ppBook;
+        const p = (((_pp.instruments || {})[inst] || {}).passports || [])
+            .find((x) => x.genre_key === gkey);
+        if (!p) return;
+        const canvas = drawPassportCard(inst, p);
+        canvas.toBlob(async (blob) => {
+            const fail = (why) => {
+                if (window.fbNotify) window.fbNotify.show({ icon: '⚠️', title: 'Card export failed', message: why });
+            };
+            if (!blob) { fail('The canvas produced no image.'); return; }
+            const filename = `passport-${inst}-${gkey.replace(/[^a-z0-9-]+/g, '-')}.png`;
+            try {
+                const io = await import('/static/js/blob-io.js');
+                if (mode === 'copy') {
+                    const ok = await io.copyImageBlob(blob);
+                    if (ok) {
+                        if (window.fbNotify) window.fbNotify.show({ icon: '📋', title: 'Card copied', message: 'Paste it anywhere.' });
+                        return;
+                    }
+                    if (window.fbNotify) window.fbNotify.show({ icon: '💾', title: 'Clipboard unavailable', message: 'Saved the card instead.' });
+                }
+                io.downloadBlob(blob, filename);
+            } catch (e) { fail('Export helper unavailable.'); }
+        }, 'image/png');
+    }
+
+    // ── Career surfaces outside the plugin screen ─────────────────────────
+    // Profile passport wall + the home-page career card. Both inject into
+    // core-owned mounts announced by v3:profile-rendered /
+    // v3:dashboard-rendered (the achievements seam). Absent-not-empty: with
+    // no committed instrument they render nothing and the dashboard keeps
+    // its built-in fallback stat.
+
+    function careerTotals() {
+        if (!_pp) return null;
+        let badges = 0;
+        let seconds = 0;
+        let gigs = 0;
+        const walls = [];
+        for (const inst of (_pp.config || {}).instruments || []) {
+            const d = (_pp.instruments || {})[inst];
+            if (!d || !d.committed_at) continue;
+            const earned = (d.passports || []).filter((p) => p.badge === 'earned' || p.badge === 'gold');
+            badges += earned.length;
+            seconds += (d.passports || []).reduce((t, p) => t + (p.seconds_total || 0), 0);
+            gigs += d.gig_count || 0;
+            walls.push({ inst, earned, opened: (d.passports || []).length });
+        }
+        if (!walls.length) return null;
+        return { badges, seconds, gigs, walls };
+    }
+
+    function closestAskHTML() {
+        if (!_pp) return '';
+        let best = null;
+        for (const inst of (_pp.config || {}).instruments || []) {
+            for (const p of (((_pp.instruments || {})[inst] || {}).passports || [])) {
+                if (p.badge !== 'in_progress') continue;
+                const need = Math.max(0, ((p.requirement || {}).songs || 0) - p.qualifying_count);
+                if (!best || need < best.need) best = { p, need };
+            }
+        }
+        if (!best) return '';
+        const starGl = '★'.repeat((best.p.requirement || {}).min_stars || 0);
+        if (best.need > 0) {
+            return `${esc(best.p.genre)} — ${best.need === 1 ? `one more ${starGl} song` : `${best.need} more ${starGl} songs`}`;
+        }
+        return `${esc(best.p.genre)} — one drill away`;
+    }
+
+    function renderProfileWall() {
+        const mount = document.getElementById('v3-profile-passports-mount');
+        if (!mount) return;
+        const totals = careerTotals();
+        if (!totals) { mount.innerHTML = ''; return; }
+        const shelves = totals.walls.map(({ inst, earned, opened }) => {
+            const covers = earned.map((p) =>
+                `<button class="pp-wall-cover pp-leather-${esc(inst)}" data-pp-wall-inst="${esc(inst)}" data-pp-wall-gkey="${esc(p.genre_key)}" title="${esc(p.genre)}">
+                    <span>${esc(p.genre.toUpperCase())}</span>
+                    <em>${p.badge === 'gold' ? 'GOLD' : 'BRONZE'}</em>
+                </button>`).join('');
+            const line = earned.length
+                ? covers
+                : `<span class="pp-wall-none">${opened} passport${opened === 1 ? '' : 's'} open — first stamp pending</span>`;
+            return `<div class="pp-wall-shelf"><span class="pp-wall-inst">${esc(ppLabel(inst))}</span>${line}</div>`;
+        }).join('');
+        const hours = fmtHours(totals.seconds);
+        mount.innerHTML = `<div class="bg-fb-card/80 backdrop-blur rounded-lg p-4 border border-fb-border/50 pp-wall">
+            <div class="pp-wall-head">
+                <span>Passport wall</span>
+                <span class="pp-wall-meta">${totals.badges} badge${totals.badges === 1 ? '' : 's'}${hours ? ` · ${hours} played` : ''}${totals.gigs ? ` · ${totals.gigs} gig${totals.gigs === 1 ? '' : 's'}` : ''}</span>
+            </div>
+            ${shelves}
+            <button class="pp-wall-link" data-pp-wall-career="1">Open career →</button>
+        </div>`;
+        if (!mount.dataset.ppWired) {
+            mount.dataset.ppWired = '1';
+            mount.addEventListener('click', onWallClick);
+        }
+    }
+
+    function onWallClick(e) {
+        const open = e.target.closest('[data-pp-wall-inst]');
+        if (open) {
+            // Two attributes, not a '/'-joined pair: a genre key may itself
+            // contain '/' ("drum/bass") and must round-trip intact.
+            const inst = open.dataset.ppWallInst;
+            const gkey = open.dataset.ppWallGkey;
+            lsSet(PP_INST_KEY, inst);
+            if (window.showScreen) window.showScreen('plugin-career');
+            showCareerTab('passports');
+            renderPassports();
+            openBook(inst, gkey);
+            return;
+        }
+        if (e.target.closest('[data-pp-wall-career]')) {
+            if (window.showScreen) window.showScreen('plugin-career');
+            showCareerTab('passports');
+        }
+    }
+
+    function renderDashCard() {
+        const slot = document.getElementById('v3-dash-career-slot');
+        if (!slot) return;
+        const totals = careerTotals();
+        if (!totals) return; // keep core's fallback stat card
+        const hours = fmtHours(totals.seconds);
+        const ask = closestAskHTML();
+        slot.innerHTML = `<button class="pp-dash-card" data-pp-wall-career="1">
+            <span class="pp-dash-shine" aria-hidden="true"></span>
+            <span class="pp-dash-head">Career</span>
+            <span class="pp-dash-badges">${'⚡'.repeat(Math.min(totals.badges, 5))}<b>${totals.badges}</b> badge${totals.badges === 1 ? '' : 's'}</span>
+            <span class="pp-dash-meta">${hours ? `${hours} played` : 'the stage is set'}${totals.gigs ? ` · ${totals.gigs} gig${totals.gigs === 1 ? '' : 's'}` : ''}</span>
+            ${ask ? `<span class="pp-dash-ask">closest: ${ask}</span>` : ''}
+        </button>`;
+        if (!slot.dataset.ppWired) {
+            slot.dataset.ppWired = '1';
+            slot.addEventListener('click', onWallClick);
+        }
+    }
+
     function openGenre(inst, genre) {
         fetch(`${API}/passports/open`, {
             method: 'POST',
@@ -870,6 +1084,11 @@
         if (e.target.closest('[data-pp-close]') ||
             (e.target.dataset && e.target.dataset.ppCloseBg)) {
             closeBook();
+            return;
+        }
+        const cardBtn = e.target.closest('[data-pp-card]');
+        if (cardBtn) {
+            exportPassportCard(cardBtn.dataset.ppCard);
             return;
         }
         const dlBtn = e.target.closest('[data-career-download]');
@@ -931,6 +1150,10 @@
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape' && _ppBook) closeBook();
         });
+        // Core re-renders profile/dashboard shells (innerHTML wipe) and
+        // announces the fresh mount points — same seam achievements uses.
+        document.addEventListener('v3:profile-rendered', renderProfileWall);
+        document.addEventListener('v3:dashboard-rendered', renderDashCard);
         refresh();
     }
 
@@ -938,7 +1161,8 @@
     // the badge-diff logic; nothing here touches the DOM.
     window.__careerPassportTest = {
         ppKey, ppJitter, ppLabel, detectNewBadges, seenBadges, markBadgeSeen,
-        fmtHours, ppFillFraction,
+        fmtHours, ppFillFraction, careerTotals, closestAskHTML,
+        setView(v) { _pp = v; },
     };
 
     if (document.readyState === 'loading') {

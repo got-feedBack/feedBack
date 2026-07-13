@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Career on the Profile and Home pages** — the Profile gains a passport
+  wall (earned-badge covers per instrument, hours, gig count; absent until a
+  passport exists), injected through the same mount-point + rendered-event
+  seam the achievements plugin uses (now documented in docs/plugin-v3-ui.md).
+  The home page's plugin-count stat tile becomes a career trading card
+  (badges, hours, the closest stamp ask, foil shine) with the old stat as the
+  built-in fallback when career has no state. Earned passports gain **Save
+  card / Copy card** — a natively-drawn PNG passport card, downloadable or
+  copied straight to the clipboard for pasting outside the app (shared
+  `blob-io` helpers replace the download idiom previously duplicated in
+  settings-io and diagnostics-export).
+
 ### Changed
 - **The full mix is a stem** (#933) — core no longer depends on `original_audio:`, a
   top-level manifest key this repo invented (#583) that the feedpak spec never had.

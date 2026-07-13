@@ -189,3 +189,21 @@ out of the capability graph.
 - [ ] `#player` overlays keep `z-index` ≤ the chrome layers (transport/HUD 20,
       rail 30, popovers 40).
 - [ ] Verify at `/` — it and `/v3` serve the same (and only) v3 shell.
+
+## Injecting into core shells (profile, dashboard)
+
+Core screens that accept plugin sections render **empty mount points** and
+announce each (re)build with a DOM event, because their `innerHTML` swap wipes
+anything previously injected. A plugin listens for the event and fills the
+mount by id — the same seam every time:
+
+| Shell | Event | Mounts |
+| --- | --- | --- |
+| Profile | `v3:profile-rendered` | `#v3-profile-passports-mount` (career wall), `#v3-profile-feats-slot`, `#v3-profile-achievements-mount` |
+| Dashboard | `v3:dashboard-rendered` | `#v3-dash-career-slot` (career card; core's plugin-count stat is the fallback content a plugin may replace) |
+| Settings | `v3:settings-rendered` | per-plugin `settings.html` panels |
+
+Rules: inject on every event (the mount is fresh), keep the section
+**absent-not-empty** (no state → leave the mount alone / empty), and guard
+re-wired listeners with a `dataset` flag when your own refresh path can run
+against an unwiped mount.

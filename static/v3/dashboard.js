@@ -208,11 +208,16 @@
             '</div></div></div>' +
             continueCard +
             '</div>' +
-            // Stats row
+            // Stats row. The third slot belongs to the career plugin (it
+            // replaces the slot's content on v3:dashboard-rendered); the
+            // plugin-count stat is the built-in fallback when career is
+            // absent or has no state yet.
             '<div class="grid md:grid-cols-3 gap-6 mt-6">' +
             audioRoutingCard() +
             statCard(String(songCount), 'songs', 'text-fb-gold') +
+            '<div id="v3-dash-career-slot" class="grid">' +
             statCard(String(pluginCount), 'active', 'text-fb-good') +
+            '</div>' +
             '</div>' +
             recentSection +
             '</div>';

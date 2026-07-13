@@ -150,3 +150,26 @@ test('ppFillFraction: song progress toward the bar, in-progress only', () => {
     assert.equal(ppFillFraction(p('in_progress', 3, 0)), 0);   // no bar → no fill
     assert.equal(ppFillFraction(null), 0);
 });
+
+test('careerTotals / wall + dash card stay absent without commitment', () => {
+    const w = load();
+    const t = w.__careerPassportTest;
+    // No _pp at all → null; committed-less view → null (absent-not-empty).
+    assert.equal(t.careerTotals(), null);
+    t.setView({ config: { instruments: ['guitar'] },
+        instruments: { guitar: { committed_at: null, passports: [] } } });
+    assert.equal(t.careerTotals(), null);
+    // Committed with an earned badge + hours → totals aggregate.
+    t.setView({ config: { instruments: ['guitar', 'bass'] },
+        instruments: {
+            guitar: { committed_at: 'x', passports: [
+                { badge: 'earned', seconds_total: 3600, genre: 'Blues', genre_key: 'blues' },
+                { badge: 'in_progress', seconds_total: 120, genre: 'Funk', genre_key: 'funk',
+                  qualifying_count: 4, requirement: { songs: 5, min_stars: 2 } }] },
+            bass: { committed_at: null, passports: [] },
+        } });
+    const totals = t.careerTotals();
+    assert.equal(totals.badges, 1);
+    assert.equal(totals.seconds, 3720);
+    assert.equal(totals.walls.length, 1);
+});

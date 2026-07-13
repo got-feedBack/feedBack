@@ -1,6 +1,6 @@
 // Settings backup — the export / import bundle.
 //
-// Carved verbatim out of static/app.js (R3a). A LEAF module: imports nothing.
+// Carved verbatim out of static/app.js (R3a). Imports only the blob-io leaf.
 //
 // Two entry points, both inline handlers on the Settings screen, so app.js keeps
 // re-exposing them on window. The import is two-phase (server first, atomic; then
@@ -28,6 +28,8 @@
 // In short: the server side is atomic in phase 1 and surface-partial in
 // phase 2; the localStorage side is best-effort merge after server
 // success. Failures are reported, never silenced.
+
+import { downloadBlob } from './blob-io.js';
 
 export async function exportSettings() {
     const status = document.getElementById('backup-status');
@@ -66,14 +68,7 @@ export async function exportSettings() {
             if (match) filename = match[1];
         }
         const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+        downloadBlob(blob, filename);
         status.textContent = `Exported ${filename}`;
     } catch (e) {
         status.textContent = `Export failed: ${e.message}`;

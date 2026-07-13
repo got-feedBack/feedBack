@@ -21,6 +21,8 @@
 //      redact toggles.
 //   3. Stream the returned zip to disk.
 
+import { downloadBlob } from './blob-io.js';
+
 function _diagIncludeFromUI() {
     const v = (id) => document.getElementById(id)?.checked !== false;
     return {
@@ -265,14 +267,7 @@ export async function exportDiagnostics() {
     }
     try {
         const blob = await resp.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+        downloadBlob(blob, filename);
         status.textContent = `Exported ${filename}`;
     } catch (e) {
         status.textContent = `Export failed during download: ${e.message}`;
