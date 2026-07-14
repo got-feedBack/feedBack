@@ -426,11 +426,19 @@ def _passports_view():
                 badge = "shown_not_judged"
             elif qualifying >= req["songs"] and len(cleared) == len(required):
                 # Bronze is earned; GOLD upgrades it when a verified improv
-                # artifact exists for this genre's jam style (exact genre key
-                # or its family — jam styleIds are the family keys). Bronze
-                # remains a standalone win; gold never becomes an obligation.
-                style = gkey if gkey in gold_improv else _genre_family(gkey)
-                badge = "gold" if style and style in gold_improv else "earned"
+                # artifact exists for this genre's jam style. Virtuoso mints
+                # under raw STYLE_PALETTES ids ('punk', 'djent', 'disco', ...),
+                # which are mostly NOT family keys — so match in family space:
+                # the same keyword bucketing genres get ('punk' and 'punk
+                # rock' both bucket to 'rock'), with the exact key as a direct
+                # hit. Bronze remains a standalone win; gold never becomes an
+                # obligation.
+                fam = _genre_family(gkey)
+                gold = any(
+                    s == gkey or (fam is not None and _genre_family(s) == fam)
+                    for s in gold_improv
+                )
+                badge = "gold" if gold else "earned"
             else:
                 badge = "in_progress"
             # Practice invitation: the non-qualifying songs closest to the
@@ -703,8 +711,18 @@ def setup(app, context):
         # drops junk entries, which must not become a size-guard bypass.
         if len(json.dumps(body["byNode"])) > DRILL_SNAPSHOT_MAX_BYTES:
             raise HTTPException(413, "Snapshot too large.")
-        gold_in = body.get("goldImprov")
-        gold_in = gold_in if isinstance(gold_in, dict) else {}
+        gold_in = body.get("goldImprov", {})
+        if not isinstance(gold_in, dict):
+            # A relay bug must be LOUD, not a silent 200 that drops gold.
+            raise HTTPException(400, "goldImprov must be an object keyed by style id.")
+        # Keep only plausible artifacts: a dict that names its verifier —
+        # an empty {} must not mint an evidence-free gold.
+        gold_in = {k: v for k, v in gold_in.items()
+                   if isinstance(v, dict) and v.get("verifier")}
+        # Same pre-merge bound byNode gets: the gained-only merge dropping
+        # junk must not become a size-guard bypass (nor lock-held CPU burn).
+        if len(json.dumps(gold_in)) > DRILL_SNAPSHOT_MAX_BYTES:
+            raise HTTPException(413, "Snapshot too large.")
         with _lock:
             _, existing, existing_gold = _drill_by_node()
             snapshot = {"mode": body.get("mode"), "xp": body.get("xp"),

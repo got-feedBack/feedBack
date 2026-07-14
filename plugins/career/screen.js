@@ -611,7 +611,7 @@
         const data = (_pp.instruments || {})[inst] || { passports: [] };
         host.innerHTML = ((_pp.config || {}).instruments || []).map((i) => {
             const d = (_pp.instruments || {})[i] || {};
-            const earned = (d.passports || []).filter((p) => p.badge === 'earned').length;
+            const earned = (d.passports || []).filter((p) => p.badge === 'earned' || p.badge === 'gold').length;
             const committed = !!d.committed_at;
             return `<button class="pp-inst${i === inst ? ' active' : ''}${committed ? '' : ' uncommitted'}" data-pp-inst="${esc(i)}">
                 ${esc(ppLabel(i))}${earned ? ` <span class="pp-inst-badges">⚡${earned}</span>` : ''}${committed ? '' : ' <span class="pp-inst-plus">+</span>'}

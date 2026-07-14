@@ -393,7 +393,7 @@ def test_gold_without_bronze_stays_in_progress(client, meta_db):
     meta_db.add("one.feedpak", 0, 0.9, genre="Soul", arrangements=LEAD)
     _open(client, "guitar", "Soul")
     client.post("/api/plugins/career/drill-state", json={
-        "byNode": {}, "goldImprov": {"soul": {"at": 1}}})
+        "byNode": {}, "goldImprov": {"soul": {"at": 1, "verifier": "comb"}}})
     assert _passport(client, "guitar", "soul")["badge"] == "in_progress"
 
 
@@ -407,8 +407,41 @@ def test_gold_merge_is_gained_only(client, meta_db):
     # A stale relay without the artifact never un-mints.
     client.post("/api/plugins/career/drill-state", json={"byNode": {}})
     assert _passport(client, "guitar", "soul")["badge"] == "gold"
-    # And a different artifact for the same style never overwrites the first.
+    # And a different artifact for the same style never overwrites the first —
+    # asserted against the PERSISTED snapshot (the view doesn't expose
+    # artifact contents), so a last-write-wins regression can't stay green.
     client.post("/api/plugins/career/drill-state", json={
         "byNode": {}, "goldImprov": {"soul": {"at": 999, "verifier": "yin"}}})
-    view = client.get("/api/plugins/career/passports").json()
-    # (first-artifact-wins is asserted through the intake merge)
+    _, _, gold = career_routes._drill_by_node()
+    assert gold["soul"] == {"at": 1, "verifier": "comb"}
+
+
+def test_gold_matches_raw_style_id_through_family(client, meta_db):
+    # Virtuoso mints under raw STYLE_PALETTES ids ('punk', not 'rock'): a
+    # 'punk rock' passport (family rock) must go gold from a 'punk' artifact.
+    for i in range(5):
+        meta_db.add(f"pk{i}.feedpak", 0, 0.9, genre="Punk Rock", arrangements=LEAD)
+    career_routes._state["passports_content"]["genres"]["rock"] = {}  # no drill gate
+    _open(client, "guitar", "Punk Rock")
+    client.post("/api/plugins/career/drill-state", json={
+        "byNode": {}, "goldImprov": {"punk": {"at": 1, "verifier": "comb"}}})
+    assert _passport(client, "guitar", "punk rock")["badge"] == "gold"
+
+
+def test_gold_intake_rejects_junk(client, meta_db):
+    # A non-dict goldImprov is a relay bug: loud 400, never a silent drop.
+    res = client.post("/api/plugins/career/drill-state",
+                      json={"byNode": {}, "goldImprov": ["metal"]})
+    assert res.status_code == 400
+    # Evidence-free artifacts (no verifier) never mint.
+    for i in range(5):
+        meta_db.add(f"j{i}.feedpak", 0, 0.9, genre="Soul", arrangements=LEAD)
+    _open(client, "guitar", "Soul")
+    client.post("/api/plugins/career/drill-state", json={
+        "byNode": {}, "goldImprov": {"soul": {}}})
+    assert _passport(client, "guitar", "soul")["badge"] == "earned"
+    # An oversized goldImprov is bounded BEFORE the merge, like byNode.
+    blob = {f"s{i}": {"verifier": "comb", "pad": "x" * 4096} for i in range(200)}
+    res = client.post("/api/plugins/career/drill-state",
+                      json={"byNode": {}, "goldImprov": blob})
+    assert res.status_code == 413
