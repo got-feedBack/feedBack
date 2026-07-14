@@ -80,6 +80,20 @@ def find_full_mix(stems: list[dict]) -> dict | None:
     )
 
 
+def stem_default_on(raw) -> bool:
+    """Whether a manifest stem entry plays by default.
+
+    Absent means on. A string is honoured so a hand-written manifest can say
+    `default: off`. Extracted so the WS `ready` payload and the REST song-info
+    payload cannot drift: the stems plugin now preloads from REST and then has
+    to agree with what the WS says a moment later, or it would rebuild the whole
+    graph for nothing.
+    """
+    if isinstance(raw, str):
+        return raw.lower() not in ("off", "false", "0", "no")
+    return bool(raw)
+
+
 def partition_stems(stems: list[dict]) -> tuple[dict | None, list[dict]]:
     """Split stem descriptors into (mixdown, instrument_stems) for PLAYBACK.
 
@@ -1100,12 +1114,11 @@ def load_song(
         sfile = str(s.get("file", ""))
         if not sid or not sfile:
             continue
-        default_val = s.get("default", True)
-        if isinstance(default_val, str):
-            default_on = default_val.lower() not in ("off", "false", "0", "no")
-        else:
-            default_on = bool(default_val)
-        stems.append({"id": sid, "file": sfile, "default": default_on})
+        stems.append({
+            "id": sid,
+            "file": sfile,
+            "default": stem_default_on(s.get("default", True)),
+        })
 
     # The complete mixdown is a stem (spec §5.3), but it is not a *layer*: lift
     # it out so that no consumer of `stems` — the mixer, the library's stem
@@ -1265,7 +1278,15 @@ def extract_meta(path: Path) -> dict:
             isinstance(sid, str) and sid
             and isinstance(sfile, str) and sfile
         ):
-            valid_stems.append({"id": sid, "file": sfile})
+            # `file` and `default` ride along so the REST song-info payload can
+            # publish the same playable-stem list the WS `ready` message does —
+            # the stems plugin needs it BEFORE the highway connects (see
+            # get_song_info). Same helper as load_song, so they cannot disagree.
+            valid_stems.append({
+                "id": sid,
+                "file": sfile,
+                "default": stem_default_on(s.get("default", True)),
+            })
     # Partition exactly as load_song() does, for the same reason the library
     # filter must not lie: `full` is the mixdown, not an instrument (spec §5.3).
     # A separated pack that retains it would otherwise offer the user a "full"
@@ -1292,4 +1313,11 @@ def extract_meta(path: Path) -> dict:
         "stem_count": stem_count,
         # feedBack#129: per-stem filter needs the id list, not just count.
         "stem_ids": stem_ids,
+        # The PLAYABLE stems (id/file/default), partitioned exactly as load_song
+        # does — the mixdown lifted out, never a layer. get_song_info turns these
+        # into URLs so the stems plugin can start fetching and decoding on
+        # `song:loading`, instead of waiting for the highway's WS `ready`.
+        "stems": instrument_stems,
+        # The mixdown, when the pack carries one (spec §5.3). Same reason.
+        "full_mix_file": (_full or {}).get("file") or None,
     }

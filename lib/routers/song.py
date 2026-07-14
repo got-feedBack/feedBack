@@ -829,9 +829,56 @@ def post_song_gap_fill(filename: str, data: dict):
     return {"ok": True, "written": additions, "skipped": skipped}
 
 
+def _playable_stems_payload(song_path, filename: str) -> dict:
+    """The playable stems (id/url/default) + full-mix URL for a sloppak.
+
+    Byte-for-byte the same shape the highway's WS `ready` builds — same
+    partition (the mixdown lifted out), same default resolution, same URL form —
+    because the stems plugin now preloads from THIS and then has to agree with
+    what the WS says a moment later, or it rebuilds the graph for nothing.
+
+    Why it exists: the stems plugin could only learn its stem list from the WS
+    `ready`, which arrives once the highway is up. So it decoded, and then copied
+    the whole song's PCM to its worklet, with the player already on screen — half
+    a gigabyte of memcpy in one frame, ~700 ms, freezing the venue video (#…).
+    Given the list at `song:loading` it can do all of that BEFORE the highway
+    appears, behind the loading overlay where a stall costs nothing.
+
+    Opt-in (`?stems=1`) so the library's own metadata calls — the hot path — pay
+    nothing for it.
+    """
+    from urllib.parse import quote
+
+    try:
+        meta = sloppak_mod.extract_meta(song_path)
+    except Exception:
+        return {"stems": [], "full_mix_url": None}
+
+    q_fn = quote(filename, safe="")
+    stems = [
+        {
+            "id": s["id"],
+            "url": f"/api/sloppak/{q_fn}/file/{quote(s['file'])}",
+            "default": bool(s.get("default", True)),
+        }
+        for s in (meta.get("stems") or [])
+        if s.get("id") and s.get("file")
+    ]
+    full_file = meta.get("full_mix_file")
+    return {
+        "stems": stems,
+        "full_mix_url": f"/api/sloppak/{q_fn}/file/{quote(full_file)}" if full_file else None,
+    }
+
+
 @router.get("/api/song/{filename:path}")
-async def get_song_info(filename: str):
-    """Return song metadata, from cache or by extracting it from the song source."""
+async def get_song_info(filename: str, stems: int = 0):
+    """Return song metadata, from cache or by extracting it from the song source.
+
+    `?stems=1` additionally returns the playable stem list with URLs, so the
+    stems plugin can start fetching/decoding on `song:loading` instead of waiting
+    for the highway's WS `ready` (see _playable_stems_payload).
+    """
     import asyncio
     dlc = _get_dlc_dir()
     if not dlc:
@@ -854,8 +901,21 @@ async def get_song_info(filename: str):
 
     mtime, size = appstate.stat_for_cache(song_path)
     cached = appstate.meta_db.get(cache_key, mtime, size)
+    loop = asyncio.get_event_loop()
+
+    # The stem list is NOT stored in the metadata cache: that is a fixed-column
+    # table, and widening it would mean a migration plus a stale row for every
+    # song already scanned. It is cheap to read on demand (the pack is unpacked
+    # by then, so this is a plain manifest read), and only the opt-in caller pays.
+    async def _with_stems(meta: dict) -> dict:
+        if not stems:
+            return meta
+        extra = await loop.run_in_executor(
+            None, _playable_stems_payload, song_path, filename)
+        return {**meta, **extra}
+
     if cached:
-        return cached
+        return await _with_stems(cached)
 
     # Extract in thread pool
     def _extract():
@@ -863,5 +923,5 @@ async def get_song_info(filename: str):
         appstate.meta_db.put(cache_key, mtime, size, meta)
         return meta
 
-    meta = await asyncio.get_event_loop().run_in_executor(None, _extract)
-    return meta
+    meta = await loop.run_in_executor(None, _extract)
+    return await _with_stems(meta)
