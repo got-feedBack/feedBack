@@ -208,7 +208,7 @@ test('index.html loads venue deps before venue-scene-3d', () => {
     assert.ok(vizIdx < moodIdx && moodIdx < sceneIdx);
 });
 
-test('syncViz activates only for venue visualization id', () => {
+test('syncViz activates only for venue visualization id, and only on the player', () => {
     global.h3dVenueSceneSetActive = (on) => { global._h3dActive = on; };
     global.h3dVenueSceneSetMood = (s) => { global._h3dMood = s; };
     global.h3dVenueSceneSetInstrumentPov = () => {};
@@ -216,7 +216,14 @@ test('syncViz activates only for venue visualization id', () => {
     global.v3VenueViz = venueViz;
     global.v3VenueInstrumentPov = pov;
     global.feedBack = { on() {} };
+    // The venue is scoped to the song player: selecting Venue is a preference
+    // for THAT screen, not a licence to paint the venue over anything else that
+    // borrows the highway_3d renderer (Virtuoso's practice charts did exactly
+    // that). syncViz therefore needs to know which screen is showing.
+    const onScreen = (id) => { global.document = { querySelector: (s) => (s === '.screen.active' && id ? { id } : null) }; };
+    const prevDoc = global.document;
     try {
+        onScreen('player');
         venueScene.deactivate();
         venueScene.syncViz('highway_3d');
         assert.equal(global._h3dActive, false);
@@ -224,7 +231,16 @@ test('syncViz activates only for venue visualization id', () => {
         assert.equal(global._h3dActive, true);
         assert.equal(venueScene.getState().active, true);
         assert.equal(venueScene.getState().themeId, 'small-club');
+
+        // ...and the same call OFF the player must not activate it.
+        venueScene.deactivate();
+        onScreen('virtuoso');
+        venueScene.syncViz('venue');
+        assert.equal(global._h3dActive, false,
+            'Venue selected must NOT paint the venue onto the Virtuoso highway');
+        assert.equal(venueScene.getState().active, false);
     } finally {
+        global.document = prevDoc;
         venueScene.deactivate();
         delete global.h3dVenueSceneSetActive;
         delete global.h3dVenueSceneSetMood;

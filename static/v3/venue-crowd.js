@@ -133,6 +133,11 @@
     let _lastStingerAt = -Infinity;
     let _prevStreak = 0;
     let _lastAccuracyPct = null; // from perf events; stats:recorded carries none
+    // Filename of the song song:loaded last reported. An arrangement switch
+    // re-emits song:loaded for the SAME file (changeArrangement reloads through
+    // the normal load path), and that must not be mistaken for arriving at the
+    // venue with a new song — see onSongLoaded.
+    let _lastSongFile = '';
     let _bound = false;
 
     function now() { return Date.now(); }
@@ -478,10 +483,40 @@
         }
     }
 
-    function onSongLoaded() {
+    // song:loaded for the SAME file is an arrangement switch, not an arrival at
+    // the venue. changeArrangement() reloads through the normal load path, so
+    // the event is indistinguishable from a fresh load except by filename.
+    function isArrangementSwitch(prevFile, nextFile) {
+        return !!nextFile && nextFile === prevFile;
+    }
+
+    function onSongLoaded(song) {
+        const file = String((song && song.filename) || '');
+        const sameSong = isArrangementSwitch(_lastSongFile, file);
+        _lastSongFile = file;
+
         machine.reset();
         _prevStreak = 0;
         _lastAccuracyPct = null;
+
+        // Switching arrangement is NOT arriving at the venue.
+        //
+        // changeArrangement() reloads the song through the same path as a fresh
+        // load, so highway.js emits song:loaded again — same filename, new
+        // arrangement. Treated as a new song, that replayed the arrival flyover:
+        // the camera flew in from the back of the room again mid-set, every time
+        // the player switched from lead to rhythm. The player is already on
+        // stage; the room should just carry on.
+        //
+        // So keep the video pipeline running and only re-sync the mood: the
+        // performance restarts, so the loop must follow the reset machine (a
+        // quiet crossfade), never the intro.
+        if (sameSong) {
+            if (_venueActive && _manifest && !_introActive) showLoop(machine.current, FADE_MS);
+            return;
+        }
+
+        // A genuinely different song — full teardown.
         // Abort any stinger/pending state from the previous song: its ended
         // handler must not fade back into the old song's layers.
         cancelFade();
@@ -651,6 +686,7 @@
         bindRuntime,
         getState,
         celebrate,
+        isArrangementSwitch,
     };
 
     if (root) root.v3VenueCrowd = api;
