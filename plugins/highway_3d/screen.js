@@ -15398,15 +15398,29 @@
             // highway throttled the whole room. Pausing the song dropped the
             // venue, the crowd and the stage to 10 fps.
             //
-            // Only claim continuous frames while a crowd video is actually
-            // rolling: with no venue pack (the common case) the paused scene IS
-            // static and the throttle should still save the GPU.
+            // Two independent sources of motion, and BOTH must keep their frames:
+            //
+            //  • a crowd video rolling on its own clock (career venue pack), and
+            //  • the venue scene's own fake-depth motion — the backdrop breathes,
+            //    the haze drifts, warmth pulses, the shimmer moves. That is
+            //    Math.sin(t) in the draw loop (see _venueApplyFakeDepthMotion),
+            //    so it only moves while we are actually given frames, and it runs
+            //    with NO pack at all.
+            //
+            // The throttle fires whenever the CHART CLOCK is stalled — which is
+            // not just a pause. A count-in and the credits/author overlay stall it
+            // exactly the same way, so the venue was stuttering there too.
+            //
+            // With no venue at all (plain 3D highway) the paused scene really is a
+            // still picture: motion mode reads 'off', we claim nothing, and the
+            // throttle still saves the GPU as #654 intended.
             needsContinuousFrames() {
                 if (!_isReady || _ctxLost) return false;
                 for (const v of _venueCrowdVideos) {
                     if (v && !v.paused && !v.ended && v.readyState >= 2) return true;
                 }
-                return false;
+                // 'off' also covers prefers-reduced-motion and "no venue scene".
+                try { return _venueEffectiveMotionMode() !== 'off'; } catch (_) { return false; }
             },
 
             draw(bundle) {

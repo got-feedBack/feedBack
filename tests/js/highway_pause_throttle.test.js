@@ -114,13 +114,52 @@ test('the capability probe fails closed (absent / non-function / throwing)', () 
         'only an explicit true opts out — a truthy accident must not disable the throttle');
 });
 
-test('3D highway claims continuous frames only while a crowd video is rolling', () => {
+test('3D highway claims continuous frames for BOTH sources of venue motion', () => {
     const h3d = fs.readFileSync(
         path.join(__dirname, '..', '..', 'plugins', 'highway_3d', 'screen.js'), 'utf8');
     const fn = extractBlock(h3d, 'needsContinuousFrames()');
+    // (1) a crowd video rolling on its own clock (career venue pack)
     assert.match(fn, /_venueCrowdVideos/, 'must key off the actual crowd video elements');
-    assert.match(fn, /\.paused/, 'a paused video is a still frame — throttle should still apply');
-    // With no venue pack (the common case) the paused scene really is static and
-    // the GPU saving must survive: the method has to be able to return false.
-    assert.match(fn, /return false;/, 'must fall through to false with no live video');
+    assert.match(fn, /\.paused/, 'a paused video is a still frame');
+    // (2) the venue scene's OWN fake-depth motion — backdrop breathe, haze drift,
+    // warmth pulse, shimmer. Math.sin(t) in the draw loop, so it only moves while
+    // we get frames, and it runs with NO pack at all. Missing this meant the venue
+    // still stuttered on pause / count-in / credits whenever no video was rolling.
+    assert.match(fn, /_venueEffectiveMotionMode\s*\(\s*\)\s*!==\s*'off'/,
+        'the venue scene animates without any video — it must claim frames too');
+    // ...and with no venue at all the paused scene IS static: the #654 GPU saving
+    // must survive, so the method has to be able to return false.
+    assert.match(fn, /return false;/, 'must fall through to false on a plain 3D highway');
+});
+
+// ── a SUPERSEDED init is not a FAILED init ──────────────────────────────────
+//
+// Starting a gig dropped the player onto the fallback 2D highway with no venue.
+//
+// setViz('venue') installs the 3D renderer, whose init is async; the gig then
+// immediately starts its play queue, and playSong() re-initialises that same
+// renderer a tick later. A renderer mints a fresh readyPromise per init() and
+// rejects the previous one with "superseded" — but highway.js only checked that
+// the RENDERER object was unchanged, which it is. So it treated a healthy
+// re-initialising renderer as a failed one, tore it down, and reverted to 2D:
+//
+//     renderer async init failure: Error: superseded
+//     viz picker: reverted to default renderer (async-init-failure)
+//
+// Reproduced and fixed against the real build (venue stays selected, scene
+// active, no viz:reverted).
+
+test('a superseded readyPromise must not revert the viz to 2D', () => {
+    const src = highwaySources();
+    const fn = extractBlock(src, 'function _handleAsyncInitFailure(e)');
+    assert.match(fn, /readyPromise\s*!==\s*rp[\s\S]{0,40}return/,
+        'a rejection from a STALE readyPromise (the renderer has since re-init\'d) must be ' +
+        'ignored — otherwise a re-initialising renderer is torn down as if it had failed');
+    // The renderer-identity check must survive too: a rejection belonging to a
+    // renderer that has since been REPLACED is also not our problem.
+    assert.match(fn, /hwState\._renderer\s*!==\s*_installedRenderer[\s\S]{0,20}return/,
+        'the renderer-identity guard must remain');
+    // ...and a genuine failure of the CURRENT init cycle must still revert.
+    assert.match(fn, /_emitVizReverted\s*\(\s*'async-init-failure'\s*\)/,
+        'a real async-init failure must still fall back to the default renderer');
 });
