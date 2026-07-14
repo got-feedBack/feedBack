@@ -442,12 +442,19 @@ def _err_body(resp) -> str:
     text = (getattr(resp, "text", "") or "").strip()
     if len(text) <= _MAX_ERR_BODY:
         return text
-    # The marker has to fit INSIDE the cap, not be appended past it — otherwise _MAX_ERR_BODY is
-    # a suggestion rather than a bound, and the one caller who trusts it (a log line, a job record
-    # persisted to disk) is the one who gets surprised.
-    marker = f"\n… [truncated, {len(text)} chars total]"
-    keep = max(0, _MAX_ERR_BODY - len(marker))
-    return text[:keep].rstrip() + marker
+
+    # Keep the HEAD **and the TAIL**. Head-only truncation throws away the exception line — and
+    # on a traceback the exception line is the answer. This docstring said as much while the code
+    # did the opposite: it cut off precisely the part it exists to preserve, which is the same
+    # mistake, one level up, as the 300-char cap it replaced.
+    #
+    # The marker sits inside the bound, not past it: otherwise _MAX_ERR_BODY is a suggestion, and
+    # the callers who trust it (a log line, a job record persisted to disk) are the ones surprised.
+    marker = f"\n… [truncated, {len(text)} chars total] …\n"
+    budget = max(0, _MAX_ERR_BODY - len(marker))
+    head = budget * 2 // 3          # context: what was being attempted
+    tail = budget - head            # verdict: what actually went wrong
+    return text[:head].rstrip() + marker + text[len(text) - tail:].lstrip()
 
 
 def transcribe_vocals_remote(

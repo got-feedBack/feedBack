@@ -119,6 +119,29 @@ def test_a_server_error_surfaces_the_whole_body(vocals):
     assert "CUDA out of memory" in str(exc.value)
 
 
+def test_truncation_keeps_the_exception_line_not_just_the_header():
+    """A traceback's ANSWER is its last line. Head-only truncation throws it away.
+
+    This is the same mistake as the 300-char cap, one level up: cutting off precisely the part
+    the function exists to preserve. A 4000-char window that contains "Traceback (most recent
+    call last)" and none of the exception is a window onto nothing."""
+    from lyrics_transcribe import _MAX_ERR_BODY, _err_body
+
+    frames = "".join(f'  File "/app/server.py", line {i}, in run\n    step()\n'
+                     for i in range(2000))          # far over the cap on its own
+    tb = "Traceback (most recent call last):\n" + frames + \
+         "RuntimeError: CUDA out of memory. Tried to allocate 2.20 GiB"
+
+    body = _err_body(_Resp(text=tb))
+    assert len(body) <= _MAX_ERR_BODY
+    assert "CUDA out of memory" in body, (
+        "the exception line is the diagnosis — a truncation that drops it keeps the part that "
+        "says work was happening and discards the part that says what went wrong"
+    )
+    assert "Traceback (most recent call last)" in body, "the head is context worth keeping too"
+    assert "truncated" in body
+
+
 def test_the_cap_is_a_bound_not_a_suggestion():
     """The truncation marker must fit INSIDE _MAX_ERR_BODY, not be appended past it.
 
