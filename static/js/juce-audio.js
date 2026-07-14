@@ -535,7 +535,13 @@ import { S } from './player-state.js';
     // One tap per captured graph. `active` gates the push (the worklet keeps
     // running when inactive — it's silent bookkeeping, not audio).
     function _makeTap(ctx) {
-        const state = { node: null, active: false, batch: [], batchFrames: 0 };
+        // state.push is the producer sink: the legacy renderer-bus push by
+        // default; the stems engage repoints it at that session's bespoke
+        // mixer channel (ownership plan §5.1 tier 3). Settable per engage
+        // because the tap object is cached per context (_stemsTaps) while
+        // channel ids change per request.
+        const state = { node: null, active: false, batch: [], batchFrames: 0,
+                        push: (buf, rate) => api.pushRendererAudio(buf, rate) };
         state.attach = async (sourceNode) => {
             if (!_tapModuleLoaded.has(ctx)) {
                 await ctx.audioWorklet.addModule(_tapModuleUrl);
@@ -552,7 +558,7 @@ import { S } from './player-state.js';
                         const merged = new Float32Array(state.batchFrames * 2);
                         let o = 0;
                         for (const c of state.batch) { merged.set(c, o); o += c.length; }
-                        api.pushRendererAudio(merged, ctx.sampleRate);
+                        state.push(merged, ctx.sampleRate);
                         state.batch = []; state.batchFrames = 0;
                     }
                 };
@@ -713,10 +719,26 @@ import { S } from './player-state.js';
         }
     }
 
+    // Bespoke mixer channel for the stems session (ownership plan §5.1 tier 3,
+    // §8 — the direct tester payoff: stem audio stops riding the aggregate
+    // channel #0, so a renderer stall can't starve it behind everything else
+    // and per-channel underflow counters name it in field logs). Falls back to
+    // the legacy renderer-bus path on an old desktop main without audio.mixer.
+    let _stemsChannelId = null;
+
+    async function _releaseStemsChannel() {
+        if (_stemsChannelId == null) return;
+        const id = _stemsChannelId;
+        _stemsChannelId = null;
+        try { await api.mixer.releaseChannel(id); } catch (_) { /* engine gone */ }
+    }
+
     async function _disengage() {
         if (_mode === 'off') return;
         const prev = _mode;
         _mode = 'off';
+        // Stems on a bespoke channel never enabled the renderer bus; the
+        // other modes did. Disable is harmless either way (fail-soft).
         try { await api.setRendererBus(false, 0); } catch (_) { /* engine gone */ }
         if (prev === 'loopback') {
             await _teardownLoopback();
@@ -725,6 +747,7 @@ import { S } from './player-state.js';
             await _setSink(_elCtx, false).catch(() => {});
         } else if (prev === 'stems' && _stemsGraph) {
             if (_stemsTap) _stemsTap.detach(_stemsGraph.masterNode);
+            await _releaseStemsChannel();
             await _setSink(_stemsGraph.context, false).catch(() => {});
             _stemsGraph = null; _stemsTap = null;
         }
@@ -732,15 +755,35 @@ import { S } from './player-state.js';
     }
 
     async function _engageStems(graph) {
+        // Sink goes to 'none' FIRST — the graph is off the renderer master
+        // before any push, so the §5 double-audio guard holds by construction.
         await _setSink(graph.context, true);
         let tap = _stemsTaps.get(graph.context);
         if (!tap) { tap = _makeTap(graph.context); _stemsTaps.set(graph.context, tap); }
         await tap.attach(graph.masterNode);
-        await api.setRendererBus(true, 1.0);
+
+        let viaChannel = false;
+        if (typeof api.mixer?.requestChannel === 'function') {
+            try {
+                const res = await api.mixer.requestChannel('stems', 'stems');
+                if (res && typeof res.channelId === 'number' && res.channelId > 0) {
+                    _stemsChannelId = res.channelId;
+                    const id = res.channelId;
+                    tap.push = (buf, rate) => api.mixer.push(id, buf, rate);
+                    viaChannel = true;
+                }
+            } catch (_) { /* fall through to legacy */ }
+        }
+        if (!viaChannel) {
+            // Legacy path (old desktop main, or channel refused: no-capacity).
+            tap.push = (buf, rate) => api.pushRendererAudio(buf, rate);
+            await api.setRendererBus(true, 1.0);
+        }
         tap.active = true;
         _stemsGraph = graph; _stemsTap = tap;
         _mode = 'stems';
-        console.log('[renderer-bus] engaged: stems graph → engine bus');
+        console.log('[renderer-bus] engaged: stems graph → '
+            + (viaChannel ? ('mixer channel #' + _stemsChannelId) : 'engine bus (legacy)'));
     }
 
     async function _engageElement() {

@@ -135,6 +135,7 @@
     // post-noise-gate frames from the engine instead — same device the player
     // and note_detect read from. getUserMedia stays as the web fallback.
     let bridgePoll       = null;   // setTimeout handle for the engine poll loop
+    let holdsCaptureDemand = false; // engine `capture` demand held (plan §6.1)
     let usingBridge      = false;
     let bridgeGotFrame   = false;  // first non-empty frame seen (vs downlevel addon)
     let bridgeSampleRate = 48000;  // queried once from the engine
@@ -268,6 +269,10 @@
       stopped = true;
       if (bridgePoll) { try { clearTimeout(bridgePoll); } catch (e) {} bridgePoll = null; }
       usingBridge = false;
+      if (holdsCaptureDemand) {
+        holdsCaptureDemand = false;
+        try { window.feedBackDesktop?.audio?.leases?.releaseDemand('capture', 'minigames'); } catch (e) {}
+      }
       try { if (processor) processor.disconnect(); } catch (e) {}
       try { if (source) source.disconnect(); } catch (e) {}
       try { if (mediaStream) mediaStream.getTracks().forEach(t => t.stop()); } catch (e) {}
@@ -285,8 +290,14 @@
     // is downlevel (getRawAudioFrame resolves an empty array).
     async function startBridge(audio) {
       try {
-        // The minigame needs live input; make sure the engine is capturing.
-        if (typeof audio.isAudioRunning === 'function') {
+        // The minigame needs live input. Prefer the refcounted capture
+        // demand (ownership plan §6.1): the engine runs while any holder
+        // needs it, and a dead renderer releases automatically — no
+        // start-then-remember-to-undo. Legacy raw start on old mains.
+        if (typeof audio.leases?.acquireDemand === 'function') {
+          await audio.leases.acquireDemand('capture', 'minigames');
+          holdsCaptureDemand = true;
+        } else if (typeof audio.isAudioRunning === 'function') {
           const running = await audio.isAudioRunning();
           if (!running && typeof audio.startAudio === 'function') await audio.startAudio();
         }

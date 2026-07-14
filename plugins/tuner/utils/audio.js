@@ -28,6 +28,14 @@
     // if it changes mid-flight, so a re-entrant start()/restart() can't orphan
     // a worker + interval created by a superseded call.
     let _startGen = 0;
+    // Whether we hold the engine `capture` demand (ownership plan §6.1).
+    let _holdsCaptureDemand = false;
+
+    function _releaseCaptureDemand(desktop) {
+        if (!_holdsCaptureDemand) return;
+        _holdsCaptureDemand = false;
+        try { desktop?.audio?.leases?.releaseDemand('capture', 'tuner'); } catch (_) {}
+    }
     // Timestamp of the last frame posted to the worker (watchdog, see above).
     let _frameSentAt = 0;
 
@@ -104,20 +112,31 @@
 
         var started = false;
         try {
-            var running = typeof desktop.audio.isAudioRunning === 'function'
-                ? await desktop.audio.isAudioRunning() : false;
-            if (!running && typeof desktop.audio.startAudio === 'function') {
-                await desktop.audio.startAudio();
-                started = true;
+            if (typeof desktop.audio.leases?.acquireDemand === 'function') {
+                // Ownership plan §6.1: express "the engine must capture" as a
+                // refcounted demand instead of the start-then-remember-to-undo
+                // hack — the engine keeps running while ANY holder needs it,
+                // and a dead renderer releases automatically.
+                await desktop.audio.leases.acquireDemand('capture', 'tuner');
+                _holdsCaptureDemand = true;
+            } else {
+                // Legacy desktop main without the lease registry.
+                var running = typeof desktop.audio.isAudioRunning === 'function'
+                    ? await desktop.audio.isAudioRunning() : false;
+                if (!running && typeof desktop.audio.startAudio === 'function') {
+                    await desktop.audio.startAudio();
+                    started = true;
+                }
             }
         } catch (e) {
-            // A failed startAudio means frames will never arrive — surface it
+            // A failed start/demand means frames will never arrive — surface it
             // rather than silently claiming a dead bridge.
-            console.warn('[tuner] bridge startAudio failed:', e && e.message ? e.message : e);
+            console.warn('[tuner] bridge capture request failed:', e && e.message ? e.message : e);
         }
         if (myGen !== _startGen) {
-            // Superseded by a newer start/stop while awaiting — undo any engine
-            // start we triggered and bail without claiming the bridge.
+            // Superseded by a newer start/stop while awaiting — undo whatever
+            // we acquired and bail without claiming the bridge.
+            _releaseCaptureDemand(desktop);
             if (started && typeof desktop.audio.stopAudio === 'function') {
                 try { desktop.audio.stopAudio(); } catch (_) {}
             }
@@ -249,6 +268,7 @@
         // Invalidate any start still suspended on an await so it aborts instead
         // of installing a worker/interval after we've torn down.
         _startGen++;
+        _releaseCaptureDemand((typeof window !== 'undefined') ? window.feedBackDesktop : null);
         if (_bridgeInterval) { clearInterval(_bridgeInterval); _bridgeInterval = null; }
         _usingDesktopBridge = false;
         if (_detectInterval) { clearInterval(_detectInterval); _detectInterval = null; }
