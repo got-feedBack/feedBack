@@ -23,9 +23,18 @@ Engine selection
 Two transcription paths share a common output:
 
 * `transcribe_vocals_remote(path, server_url, ...)` — POST the vocal
-  stem to the `/align` endpoint on a feedBack-demucs-server (got-feedBack's
-  reference server already hosts WhisperX alongside Demucs at the same
-  URL).
+  stem to the `/transcribe` endpoint on a feedBack-demucs-server
+  (got-feedBack's reference server already hosts WhisperX alongside
+  Demucs at the same URL).
+
+  It used to POST to `/align`, which is *forced alignment* — "here are
+  the lyrics, tell me when each word is sung". Its `text` field is
+  required and we have no lyrics (transcribing them is the point), so
+  the server answered 422 from FastAPI's validation layer before its
+  handler ran, and remote transcription never worked for anyone
+  (feedBack-plugin-stem-splitter#17). `/transcribe` takes only audio.
+  Requires feedBack-demucs-server ≥ the revision adding that endpoint;
+  an older server answers 404 and the error says so.
 
 * `transcribe_vocals_local(path, ...)` — load WhisperX in-process. Heavy
   (~3 GB of model weights for `large-v2` + the wav2vec2 aligner) and
@@ -416,6 +425,24 @@ def transcribe_vocals_local(
 
 # ── Remote transcription ────────────────────────────────────────────────────
 
+_MAX_ERR_BODY = 4000
+
+
+def _err_body(resp) -> str:
+    """The server's error body, whole if it plausibly is one, and marked when it isn't.
+
+    This was capped at 300 chars, which is enough for "Internal Server Error" and not much else.
+    The bodies carrying the most diagnosis are the long ones — a FastAPI validation body naming
+    the field it rejected, a 500 whose traceback answers on its LAST line — and those are exactly
+    the ones a 300-char cap decapitates. The cap survives so a server answering with a 2 MB HTML
+    error page can't dump a novel into a log line.
+    """
+    text = getattr(resp, "text", "") or ""
+    if len(text) <= _MAX_ERR_BODY:
+        return text.strip()
+    return text[:_MAX_ERR_BODY].strip() + f"\n… [truncated, {len(text)} chars total]"
+
+
 def transcribe_vocals_remote(
     vocals_path: Path,
     server_url: str,
@@ -454,21 +481,34 @@ def transcribe_vocals_remote(
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
-    params: dict[str, str] = {}
+    # POST to /transcribe, not /align.
+    #
+    # /align is FORCED ALIGNMENT: "here are the lyrics, tell me when each word is sung". Its
+    # `text` field is required, and we have no lyrics — transcription is the whole point. So the
+    # server rejected every request with a 422 in FastAPI's validation layer, before its handler
+    # ever ran, and remote transcription has never worked for anyone. /transcribe answers the
+    # question we are actually asking and takes only the audio.
+    # (feedBack-plugin-stem-splitter#17; endpoint added in feedBack-demucs-server#14.)
+    #
+    # `language` goes in the FORM BODY, not the query string: the server reads it with
+    # Form(""), and a query param would be silently ignored — so an explicit language hint would
+    # do nothing and Whisper's auto-detection would quietly decide instead, which is exactly the
+    # kind of "it works but it's wrong" that hides for months.
+    form: dict[str, str] = {}
     if language:
-        params["language"] = language
+        form["language"] = language
 
     with open(vocals_path, "rb") as f:
         resp = requests.post(
-            f"{server_url}/align",
+            f"{server_url}/transcribe",
             files={"file": (vocals_path.name, f, "audio/ogg")},
-            params=params,
+            data=form or None,
             headers=headers or None,
             timeout=timeout,
         )
 
     if resp.status_code != 200:
-        raise RuntimeError(f"WhisperX server error ({resp.status_code}): {resp.text[:300]}")
+        raise RuntimeError(f"WhisperX server error ({resp.status_code}): {_err_body(resp)}")
 
     data = resp.json()
 
