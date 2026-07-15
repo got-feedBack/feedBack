@@ -104,10 +104,20 @@ def _library_dirs(all_songs, dlc: Path) -> set[str]:
     listed songs — no extra filesystem walk. The builtin carve-outs
     (tutorials-builtin / minigames-builtin) are absent because the caller
     already excluded them from `all_songs`, so a minigame writing a drill there
-    never invalidates the fast path."""
+    never invalidates the fast path.
+
+    Directory-form songs (loose-song folders, directory sloppak bundles) also
+    record their OWN directory: a file added/removed/replaced INSIDE the folder
+    bumps that folder's mtime but not its parent's, so tracking only the parent
+    would miss an in-place change to such a song. File-form sloppaks (a single
+    .feedpak zip) aren't dirs, so they add nothing here — the flat file library
+    stays at a handful of dir stats."""
     rels = {"."}
     for f in all_songs:
-        parent = Path(_relpath(f, dlc)).parent
+        rel = Path(_relpath(f, dlc))
+        if f.is_dir():
+            rels.add(rel.as_posix())
+        parent = rel.parent
         rels.add(parent.as_posix())
         for anc in parent.parents:
             rels.add(anc.as_posix())

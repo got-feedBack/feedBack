@@ -193,6 +193,25 @@ def test_dir_signature_fast_path_skips_unchanged_tree(tmp_path, scan_server):
         assert forced_listed, "force=True must run the full listing pass"
 
 
+def test_dir_signature_tracks_directory_form_song_own_dir(tmp_path):
+    """A directory-form song (loose folder / directory bundle) records its OWN
+    directory in the signature, so an in-place file change inside it — which
+    bumps that folder's mtime but not its parent's — invalidates the fast path.
+    A file-form sloppak (a plain .feedpak zip) is not a dir and adds nothing."""
+    scan = importlib.import_module("scan")
+    dlc = tmp_path / "dlc"
+    (dlc / "packs").mkdir(parents=True)
+    loose = dlc / "packs" / "my_loose_song"   # directory-form song
+    loose.mkdir()
+    zipped = dlc / "packs" / "zipped.feedpak"  # file-form song
+    zipped.write_bytes(b"")
+
+    rels = scan._library_dirs([loose, zipped], dlc)
+    assert "packs/my_loose_song" in rels, "directory-form song must track its own dir"
+    assert "packs" in rels and "." in rels
+    assert "packs/zipped.feedpak" not in rels, "a file-form sloppak is not a tracked dir"
+
+
 # ── 3. POST /api/songs/upload gate (endpoint) ────────────────────────────────
 
 @pytest.fixture()
