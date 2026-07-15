@@ -445,3 +445,30 @@ def test_gold_intake_rejects_junk(client, meta_db):
     res = client.post("/api/plugins/career/drill-state",
                       json={"byNode": {}, "goldImprov": blob})
     assert res.status_code == 413
+
+
+def test_gig_includes_songs_played_on_another_instrument(client, meta_db):
+    # feedBack#… (tester): "Metalcore says 137 songs, only shows 1 in the gig list".
+    # A song played on a DIFFERENT instrument's arrangement has a stats row, so it
+    # was excluded from the unplayed filler — and its played bucket is that other
+    # instrument's, not this passport's — so it fell into a gap and could never be
+    # gigged. A guitar passport with a library of bass-played metalcore got a 404.
+    for i in range(137):
+        meta_db.add(f"mc{i}.feedpak", 0, 0.80, genre="Metalcore", arrangements=BASS)
+    res = client.post("/api/plugins/career/gigs/propose",
+                      json={"instrument": "guitar", "genre": "Metalcore", "size": 4})
+    assert res.status_code == 200, "a full library of the genre must never 404"
+    assert len(res.json()["songs"]) == 4, "the gig must fill from the library, not the gap"
+
+
+def test_gig_reroll_changes_the_set(client, meta_db):
+    # feedBack#… (tester): "Passport re-roll does not change songs". A set drawn
+    # from the filler used to be the library's first N in table order, every time.
+    for i in range(40):
+        meta_db.add_song_only(f"un{i}.feedpak", genre="Metalcore")
+    sets = set()
+    for _ in range(5):
+        r = client.post("/api/plugins/career/gigs/propose",
+                        json={"instrument": "guitar", "genre": "Metalcore", "size": 4})
+        sets.add(tuple(sorted(s["filename"] for s in r.json()["songs"])))
+    assert len(sets) > 1, "re-roll must be able to produce a different set"
