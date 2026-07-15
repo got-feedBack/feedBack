@@ -638,9 +638,18 @@ export let artAbortController = null;
 export async function playSong(filename, arrangement, options) {
     console.log('playSong called:', filename);
     // A manual (non-queue) play abandons any active play-queue, so a stale queue
-    // can't hijack the next song's end. The queue passes fromQueue to keep itself.
-    if ((!options || !options.fromQueue) && window.feedBack && window.feedBack.playQueue) {
-        window.feedBack.playQueue.clear();
+    // can't hijack the next song's end. The queue signals a play it is DRIVING
+    // two ways: options.fromQueue (in-band) and _consumeInternalPlay() (out-of-
+    // band). The out-of-band one exists because plugin playSong wrappers forward
+    // only (filename, arrangement) and drop the options object — with just the
+    // in-band flag, the queue cleared itself the instant its first song played
+    // and a gig never advanced. Consume the flag whether or not we go on to clear,
+    // so it can't leak into a later manual play.
+    const _pq = window.feedBack && window.feedBack.playQueue;
+    const _queueDriven = (options && options.fromQueue)
+        || (_pq && typeof _pq._consumeInternalPlay === 'function' && _pq._consumeInternalPlay());
+    if (!_queueDriven && _pq) {
+        _pq.clear();
     }
     if (!options || options.bridge !== false) {
         _recordPlaybackBridge('playback.window-play-song', 'window.playSong', 'legacy playSong entry point used');
