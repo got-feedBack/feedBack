@@ -137,6 +137,62 @@ def test_background_scan_discovers_both_suffixes(tmp_path, scan_server):
     assert "ignore.zip" not in seen
 
 
+# ── 2b. directory-signature fast path (skip the full re-stat) ────────────────
+
+def test_dir_signature_fast_path_skips_unchanged_tree(tmp_path, scan_server):
+    """After a full scan records the library-dir signature, a second scan with
+    an unchanged tree takes the fast path and does NOT re-glob/extract — but a
+    forced scan (manual Refresh) always does the full pass, and a new song
+    (which bumps the dir mtime) reverts to a full pass on its own."""
+    import unittest.mock as mock
+
+    dlc = tmp_path / "dlc"
+    dlc.mkdir()
+    (dlc / "a.feedpak").write_bytes(b"")
+    (tmp_path / "config.json").write_text('{"dlc_dir": "%s"}' % dlc)
+
+    scan = importlib.import_module("scan")
+    seen: list[str] = []
+
+    def mock_extract(f, dlc_dir):
+        seen.append(f.name)
+        return {"title": f.name, "artist": "", "album": ""}
+
+    with mock.patch("scan_worker._extract_meta_for_file", new=mock_extract):
+        # 1) first pass: full scan, extracts a.feedpak (+ seeded builtins),
+        #    records the signature
+        scan.background_scan()
+        assert "a.feedpak" in seen
+        assert scan._dir_signature_file().exists()
+
+        # 2) unchanged tree: fast path — no glob, no extraction at all
+        seen.clear()
+        scan.background_scan()
+        assert seen == []
+        assert scan.status()["stage"] == "complete"
+
+        # 3) a new song bumps the dlc mtime → signature mismatch → full pass
+        #    picks it up on its own (no manual Refresh needed for adds)
+        (dlc / "b.feedpak").write_bytes(b"")
+        seen.clear()
+        scan.background_scan()
+        assert "b.feedpak" in seen
+
+        # 4) force=True (Refresh) bypasses the fast path even on a settled tree:
+        #    with the signature now current, a plain scan skips, a forced one lists
+        seen.clear()
+        scan.background_scan()          # fast path
+        assert seen == []
+        forced_listed = []
+        real_delete_missing = scan.appstate.meta_db.delete_missing
+        def _spy(files):
+            forced_listed.append(set(files))
+            return real_delete_missing(files)
+        with mock.patch.object(scan.appstate.meta_db, "delete_missing", new=_spy):
+            scan.background_scan(force=True)
+        assert forced_listed, "force=True must run the full listing pass"
+
+
 # ── 3. POST /api/songs/upload gate (endpoint) ────────────────────────────────
 
 @pytest.fixture()
