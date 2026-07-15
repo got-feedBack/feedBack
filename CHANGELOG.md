@@ -212,6 +212,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine (`app.js`, `highway.js`, `playSong`, `showScreen`, the capability registry).
 
 ### Fixed
+- **Highway jitter during playback (chart-clock interpolator)** — the note
+  highway shimmered while a song played, and the chart clock could run
+  *backward* on roughly 10% of frames (measured at -52 ms on a 200 Hz display).
+  The interpolator that exists to smooth the clock was the source of the
+  jitter: it derived playback rate from a single quantised sample gap —
+  `audio.currentTime` steps ~23 ms while `setTime()` re-anchors on a 60 Hz
+  poll, so consecutive anchors sit 16.7 ms or 33.3 ms apart and the estimate
+  alternated between ~1.38x and ~0.69x — and then snapped its output onto each
+  stale anchor. The render clock is now phase-locked: it free-runs at a
+  smoothed rate and is pulled gently toward the anchored estimate instead of
+  snapping, hard-resyncing only on a genuine seek. Output is monotone and
+  frame-rate independent (verified 30-360 fps), and plugins and the renderer
+  now read one clock. Not a draw-cost problem — it reproduced with the highway
+  drawing in 0.8 ms and the adaptive scaler fully disengaged. In JUCE mode the
+  renderer now samples `jucePlayer.currentTime` (already continuous in
+  `performance.now()`) directly at frame time via a new `setClockSource()`,
+  bypassing the interpolator entirely. Separately, the default 2D renderer had
+  never used the interpolated clock at all — it positioned notes from the raw
+  60 Hz staircase.
 - **Career passports review polish** — the passport tabs and book overlay carry
   proper ARIA semantics (`aria-selected`/`aria-controls`/`tabpanel`;
   `role="dialog"` + `aria-modal` with focus moved to the close button on open
