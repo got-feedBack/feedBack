@@ -522,27 +522,39 @@ def _current_venue():
     return best
 
 
-def _unplayed_genre_songs(gkey, exclude, limit):
-    """Library songs of a genre with no stats yet — a young passport's gig
-    still gets a full set (playing them is how stubs start).
-    ponytail: full stat-less scan + python-side genre match (a few ms at 7k
-    songs, single-user); push the match into SQL if propose ever feels slow."""
+def _fill_genre_songs(gkey, exclude, limit):
+    """Library songs of a genre to round out a gig — ANY song of the genre the
+    set hasn't already picked.
+
+    Was `_unplayed_genre_songs`, restricted to `filename NOT IN song_stats`.
+    That restriction created a hole: a song you'd played on a DIFFERENT
+    instrument's arrangement has a stats row, so it was excluded here — and it
+    lives in the played bucket for THAT instrument, not this passport's, so it
+    was excluded there too. It could never be gigged. A player with 137 metalcore
+    songs, all played on another instrument, got a 404 (reproduced). The player's
+    library is the pool; whether a song has stats on some other instrument has no
+    bearing on whether it can be in THIS gig.
+
+    Shuffled, so re-roll actually changes the set. The old version returned the
+    library's first N in table order every time, so re-roll was a no-op for any
+    set drawn from the filler (reproduced).
+
+    ponytail: full genre scan + python-side match + shuffle (a few ms at 7k
+    songs, single-user); push into SQL if propose ever feels slow.
+    """
     db = _state["meta_db"]
     if db is None:
         return []
     rows = db.conn.execute(
-        f"SELECT filename, title, artist, {_genre_expr(db)} AS g FROM songs "
-        "WHERE filename NOT IN (SELECT filename FROM song_stats)"
+        f"SELECT filename, title, artist, {_genre_expr(db)} AS g FROM songs"
     ).fetchall()
-    out = []
-    for filename, title, artist, genre in rows:
-        if _genre_key(genre) != gkey or filename in exclude:
-            continue
-        out.append({"filename": filename, "title": title or filename,
-                    "artist": artist or ""})
-        if len(out) >= limit:
-            break
-    return out
+    pool = [
+        {"filename": filename, "title": title or filename, "artist": artist or ""}
+        for filename, title, artist, genre in rows
+        if _genre_key(genre) == gkey and filename not in exclude
+    ]
+    random.shuffle(pool)   # re-roll must vary; free per call
+    return pool[:limit]
 
 
 def _validate_pack_dir(pack_dir: Path):
@@ -836,7 +848,7 @@ def setup(app, context):
             picks.append(s)
         if len(picks) < size:
             exclude = {s["filename"] for s in picks}
-            picks.extend(_unplayed_genre_songs(gkey, exclude, size - len(picks)))
+            picks.extend(_fill_genre_songs(gkey, exclude, size - len(picks)))
         if not picks:
             raise HTTPException(404, "No songs of this genre in the library.")
         venue = _current_venue()
