@@ -538,7 +538,7 @@
 
         // Build hover overlay with all arrangement accuracies
         var hoverOverlay = '';
-        if (song && song.arrangements && song.arrangements.length > 1) {
+        if (song && song.arrangements && song.arrangements.length > 0) {
             var items = '';
             for (var ai = 0; ai < song.arrangements.length; ai++) {
                 var a = song.arrangements[ai];
@@ -553,7 +553,7 @@
                 var icon = _roleIcon(aName);
                 items += '<div class="flex items-center gap-1 px-2 py-0.5"><span class="text-xs">' + icon + '</span><span class="text-xs text-fb-textDim flex-1">' + esc(aName) + '</span><span class="text-xs font-bold ' + aColor + '">' + aLabel + '</span></div>';
             }
-            hoverOverlay = '<div class="absolute bottom-0 right-0 left-0 bg-black/85 rounded-b-lg opacity-0 group-hover:opacity-100 transition pointer-events-none z-20">' + items + '</div>';
+            hoverOverlay = '<div class="absolute bottom-0 right-0 left-0 bg-black/75 rounded-b-lg opacity-0 group-hover:opacity-100 transition pointer-events-none z-20">' + items + '</div>';
         }
 
         var badgeColor = acc >= MASTERY_ACCURACY ? 'bg-fb-good' : (acc >= 0.5 ? 'bg-fb-mid' : 'bg-fb-low');
