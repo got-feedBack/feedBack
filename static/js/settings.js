@@ -212,6 +212,9 @@ export function setupWindowOptions() {
 export const APP_UPDATE_CHANNELS = ['stable', 'rc', 'beta', 'alpha', 'nightly'];
 
 export let _appUpdatesWired = false;
+// Poll handle for the active-download watcher (module-scoped so re-running
+// setupAppUpdates on a panel re-render never stacks a second poll).
+let _appUpdatePollTimer = null;
 
 export function setupAppUpdates() {
     const block = document.getElementById('app-updates-block');
@@ -264,56 +267,84 @@ export function setupAppUpdates() {
         } catch (_) { return 'never'; }
     }
 
+    // Render one status object. Always keeps the current version + channel
+    // visible and appends what's happening, so the download progress never
+    // obscures which build you're on.
+    function renderFrom(s, extra) {
+        if (!s) { statusEl.textContent = extra || 'Updater status unavailable.'; return; }
+        if (s.status === 'unsupported' || s.platform === 'linux') {
+            showLinuxFallback('Auto-update requires the AppImage build on the Nightly channel.');
+            return;
+        }
+        // Healthy for the current channel — clear any "unsupported" UI left
+        // over from a prior channel selection.
+        if (linuxNote) linuxNote.classList.add('hidden');
+        checkBtn.disabled = false;
+        const base = `Version ${s.currentVersion || '?'} · ${s.channel || channelSelect.value}`;
+        let action;
+        switch (s.status) {
+            case 'checking':
+                action = 'checking for updates…';
+                break;
+            case 'downloading': {
+                const pct = typeof s.percent === 'number' ? s.percent : null;
+                action = pct === null ? 'update available — downloading…' : `downloading update… ${pct}%`;
+                break;
+            }
+            case 'downloaded':
+                action = 'update ready — restart to apply';
+                break;
+            case 'error':
+                action = s.message ? `update error: ${s.message}` : 'update check failed';
+                break;
+            case 'idle':
+            default:
+                action = `up to date · last checked ${fmtTimestamp(s.lastChecked)}`;
+                break;
+        }
+        const line = `${base} · ${action}`;
+        statusEl.textContent = extra ? `${extra} · ${line}` : line;
+        // A download runs in the background (the check returns immediately), so
+        // poll for the terminal state rather than relying solely on a one-shot
+        // "downloaded" event that could be missed or arrive out of order.
+        if (s.status === 'downloading' || s.status === 'checking') pollWhileBusy();
+    }
+
     function renderStatus(extra) {
         try {
             // Wrap in Promise.resolve so a future getStatus() that returns
             // synchronously won't blow up on .then().
-            void Promise.resolve(updateApi.getStatus()).then((s) => {
-                if (!s) { statusEl.textContent = extra || 'Updater status unavailable.'; return; }
-                if (s.status === 'unsupported' || s.platform === 'linux') {
-                    showLinuxFallback('Auto-update requires the AppImage build on the Nightly channel.');
-                    return;
-                }
-                // Status is healthy for the current channel — clear any
-                // "unsupported" UI left over from a prior channel selection.
-                if (linuxNote) linuxNote.classList.add('hidden');
-                checkBtn.disabled = false;
-                if (s.status === 'error') {
-                    const errMsg = s.message ? `Update error: ${s.message}` : 'Update check failed.';
-                    statusEl.textContent = extra ? `${extra} · ${errMsg}` : errMsg;
-                    return;
-                }
-                // Surface the live activity states explicitly so the panel says
-                // what it's doing — including when it (re)loads mid-download,
-                // where only getStatus (not the one-shot event listeners) can
-                // tell us we're downloading.
-                if (s.status === 'checking') {
-                    statusEl.textContent = 'Checking for updates…';
-                    return;
-                }
-                if (s.status === 'downloading') {
-                    const pct = typeof s.percent === 'number' ? s.percent : null;
-                    statusEl.textContent = pct === null ? 'Update available — downloading…' : `Downloading update… ${pct}%`;
-                    return;
-                }
-                if (s.status === 'downloaded') {
-                    statusEl.textContent = 'Update ready — restart to apply.';
-                    return;
-                }
-                const parts = [
-                    `Version ${s.currentVersion || '?'}`,
-                    `channel ${s.channel || channelSelect.value}`,
-                    `last checked ${fmtTimestamp(s.lastChecked)}`,
-                ];
-                statusEl.textContent = extra ? `${extra} · ${parts.join(' · ')}` : parts.join(' · ');
-            }).catch((e) => {
-                console.warn('[updater] getStatus failed:', e);
-                statusEl.textContent = extra || 'Failed to read updater status.';
-            });
+            void Promise.resolve(updateApi.getStatus())
+                .then((s) => renderFrom(s, extra))
+                .catch((e) => {
+                    console.warn('[updater] getStatus failed:', e);
+                    statusEl.textContent = extra || 'Failed to read updater status.';
+                });
         } catch (e) {
             console.warn('[updater] getStatus threw:', e);
             statusEl.textContent = extra || 'Failed to read updater status.';
         }
+    }
+
+    // While a download (or check) is active, re-read the authoritative status
+    // every ~1.5s and stop once it settles (downloaded / idle / error). This is
+    // what guarantees the panel leaves "downloading… 100%" and lands on "update
+    // ready" (or surfaces a swap error) even if the completion event is lost.
+    function pollWhileBusy() {
+        if (_appUpdatePollTimer) return;
+        _appUpdatePollTimer = setInterval(() => {
+            void Promise.resolve(updateApi.getStatus()).then((s) => {
+                renderFrom(s);
+                const st = s && s.status;
+                if (st !== 'downloading' && st !== 'checking') {
+                    clearInterval(_appUpdatePollTimer);
+                    _appUpdatePollTimer = null;
+                }
+            }).catch(() => {
+                clearInterval(_appUpdatePollTimer);
+                _appUpdatePollTimer = null;
+            });
+        }, 1500);
     }
 
     // Inform main of the persisted channel on each load. setChannel() on
@@ -351,58 +382,20 @@ export function setupAppUpdates() {
         checkBtn.addEventListener('click', async () => {
             checkBtn.disabled = true;
             statusEl.textContent = 'Checking for updates…';
-            let reEnableBtn = true;
             try {
-                const result = await updateApi.checkNow();
-                const status = result?.status || 'unknown';
-                let msg;
-                switch (status) {
-                    case 'idle':
-                        msg = "You're on the newest version in this channel.";
-                        break;
-                    case 'downloading':
-                        msg = 'Update available — downloading…';
-                        break;
-                    case 'downloaded':
-                        msg = 'Update downloaded — restart to apply.';
-                        break;
-                    case 'unsupported':
-                        reEnableBtn = false;
-                        showLinuxFallback('Auto-update requires the AppImage build on the Nightly channel.');
-                        return;
-                    case 'error':
-                        msg = `Update check failed${result?.message ? `: ${result.message}` : '.'}`;
-                        break;
-                    default:
-                        msg = `Update check returned: ${status}`;
-                }
-                renderStatus(msg);
+                // The Linux check returns immediately (any download runs in the
+                // background); we don't act on the returned status directly —
+                // renderStatus() below reads the authoritative state and starts
+                // the progress poll if a download is now under way.
+                await updateApi.checkNow();
             } catch (e) {
                 console.warn('[updater] checkNow failed:', e);
                 statusEl.textContent = `Update check failed: ${e?.message || e}`;
-            } finally {
-                if (reEnableBtn) checkBtn.disabled = false;
+                checkBtn.disabled = false;
+                return;
             }
+            renderStatus();
         });
-
-        // Download feedback. The Linux AppImage self-update pulls a full
-        // ~1.5GB image in the main process, so without these the status would
-        // sit at "Checking for updates…" for minutes with no sign of life.
-        // onAvailable fires when the download starts; onProgress ticks the
-        // percentage. Guarded individually — an older desktop bridge may not
-        // expose them.
-        if (typeof updateApi.onAvailable === 'function') {
-            updateApi.onAvailable(() => { statusEl.textContent = 'Downloading update…'; });
-        }
-        if (typeof updateApi.onProgress === 'function') {
-            updateApi.onProgress((p) => {
-                const pct = typeof p?.percent === 'number' ? p.percent : null;
-                statusEl.textContent = pct === null ? 'Downloading update…' : `Downloading update… ${pct}%`;
-            });
-        }
-        if (typeof updateApi.onDownloaded === 'function') {
-            updateApi.onDownloaded(() => { statusEl.textContent = 'Update ready — restart to apply.'; });
-        }
 
         _appUpdatesWired = true;
     }
