@@ -1115,10 +1115,7 @@ async def startup_status_stream(request: Request):
 @app.post("/api/rescan")
 def trigger_rescan():
     """Manually trigger a library rescan."""
-    # force=True: a manual Refresh must skip the directory-signature fast path —
-    # it is the escape hatch for the one change dir mtimes can't see (a pack
-    # rewritten in place under the same name).
-    if not scan.kick_scan(force=True):
+    if not scan.kick_scan():
         return {"message": "Scan already in progress"}
     return {"message": "Rescan started"}
 
@@ -1136,7 +1133,7 @@ def trigger_full_rescan():
         # delete_missing() prunes anything genuinely gone at the end.
         meta_db.conn.execute("UPDATE songs SET mtime = -1")
         meta_db.conn.commit()
-    if not scan.kick_scan(force=True):
+    if not scan.kick_scan():
         return {"message": "Scan already in progress"}
     return {"message": "Full rescan started"}
 
