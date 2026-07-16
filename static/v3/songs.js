@@ -542,6 +542,7 @@
         // Build hover overlay with all arrangement accuracies
         var hoverOverlay = '';
         if (song && song.arrangements && song.arrangements.length > 0) {
+            var songTuning = song.tuning_name || '';
             var items = '';
             for (var ai = 0; ai < song.arrangements.length; ai++) {
                 var a = song.arrangements[ai];
@@ -552,9 +553,7 @@
                 var aColor = aAcc != null
                     ? (aAcc >= MASTERY_ACCURACY ? 'text-fb-good' : aAcc >= 0.5 ? 'text-fb-mid' : 'text-fb-low')
                     : 'text-gray-600';
-                // Icon: instrument icon abbreviation for the role
-                var icon = _roleIcon(aName);
-                items += '<div class="flex items-center gap-1 px-2 py-0.5"><span class="text-xs">' + icon + '</span><span class="text-xs text-fb-textDim flex-1">' + esc(aName) + '</span><span class="text-xs font-bold ' + aColor + '">' + aLabel + '</span></div>';
+                items += '<div class="flex items-center gap-1 px-2 py-0.5"><span class="text-xs text-fb-textDim flex-1">' + esc(aName) + ' &middot; ' + esc(songTuning) + '</span><span class="text-xs font-bold ' + aColor + '">' + aLabel + '</span></div>';
             }
             hoverOverlay = '<div class="opacity-0 group-hover:opacity-100 transition" style="position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,0.8);border-radius:0 0 0.5rem 0.5rem;z-index:20;pointer-events:none">' + items + '</div>';
         }
@@ -563,7 +562,7 @@
         var badgeText = acc != null && acc >= 0.5 && acc < MASTERY_ACCURACY ? 'text-black' : 'text-white';
         // Per-role icon: instrument icon + first letter of role for multi-role
         var iconHtml = _roleIcon(arrIdx != null && song ? (song.arrangements[arrIdx].smart_name || song.arrangements[arrIdx].name || '') : '');
-        return '<span class="fb-acc-badge absolute bottom-0 right-0 ' + badgeColor + '/90 ' + badgeText + ' px-2 py-0.5 rounded-tl-md text-xs font-bold flex items-center gap-1">' +
+        return '<span class="fb-acc-badge absolute bottom-0 right-0 ' + badgeColor + '/90 ' + badgeText + ' px-2 py-0.5 rounded-tl-md text-xs font-bold flex items-center gap-1 opacity-100 group-hover:opacity-0 transition">' +
             (pct != null ? pct : '—') + '%</span>' + hoverOverlay;
     }
 
@@ -841,7 +840,7 @@
         const l = fmtLabel(song);
         if (!l) return '';
         const c = l === 'FEEDPAK' ? 'bg-fb-primary text-white' : 'bg-black/70 text-fb-textDim';
-        return '<span class="absolute bottom-0 left-0 ' + c + ' text-[0.5625rem] font-bold px-1.5 py-0.5 rounded-tr-md tracking-wide">' + l + '</span>';
+        return '<span class="absolute bottom-0 left-0 ' + c + ' text-[0.5625rem] font-bold px-1.5 py-0.5 rounded-tr-md tracking-wide opacity-100 group-hover:opacity-0 transition">' + l + '</span>';
     }
 
     // Personal-layer badges (P2): a difficulty pip + a tag count, painted from the
@@ -958,10 +957,10 @@
                 ? ' data-tuning-chip data-tuning-offsets="' + esc(rawOffsets.join(',')) + '"'
                     + (chipIsBass ? ' data-tuning-bass="1"' : '') : '';
             if (targetNotes) {
-                tuning = '<span class="' + pos + ' bg-fb-mid text-black text-[0.5625rem] font-bold px-1.5 py-0.5 rounded-sm leading-tight max-w-[5.5rem] text-center"' + matchAttr + ' title="' + esc(badgeTitle) + '">'
+                tuning = '<span class="' + pos + ' bg-fb-mid text-black text-[0.5625rem] font-bold px-1.5 py-0.5 rounded-sm leading-tight max-w-[5.5rem] text-center opacity-100 group-hover:opacity-0 transition"' + matchAttr + ' title="' + esc(badgeTitle) + '">'
                     + esc('Custom Tuning') + '<br><span class="font-semibold tracking-wide">' + esc(targetNotes) + '</span></span>';
             } else {
-                tuning = '<span class="' + pos + ' bg-fb-mid text-black text-[0.625rem] font-bold px-1.5 py-0.5 rounded-sm"' + matchAttr + ' title="' + esc(badgeTitle) + '">' + esc(tuningLabel) + '</span>';
+                tuning = '<span class="' + pos + ' bg-fb-mid text-black text-[0.625rem] font-bold px-1.5 py-0.5 rounded-sm opacity-100 group-hover:opacity-0 transition"' + matchAttr + ' title="' + esc(badgeTitle) + '">' + esc(tuningLabel) + '</span>';
             }
         }
         // Display-only (pointer-events-none) so a click falls through to the
