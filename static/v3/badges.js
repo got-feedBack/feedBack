@@ -578,7 +578,6 @@
                 pill('strings', v, v + '', settings.string_count === v)).join('')) : '') +
             (isKeyboard ? instRow('Keys', (currentInst.key_counts || [25, 49, 61, 88]).map((v) =>
                 pill('key_count', v, v + '', (settings.key_count || currentInst.default_key_count || 88) === v)).join('')) : '') +
-                : '') +
             // Handedness only for stringed instruments where frets get mirrored.
             (isStringed ? instRow('Handedness', pill('hand', 'right', 'Right', !_leftyPref()) +
                 pill('hand', 'left', 'Left', _leftyPref())) : '') +
