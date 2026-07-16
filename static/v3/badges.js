@@ -587,10 +587,20 @@
             const newSc = isStr ? (instDef && instDef.default_string_count ? instDef.default_string_count : (counts[0] || 0)) : 0;
             const newKc = isKeys ? (instDef && instDef.default_key_count ? instDef.default_key_count : 88) : 0;
             const tunings = isStr ? _tuningsForInstrument(v, newSc) : [];
+            // Remember last tuning per instrument: read the target profile's saved
+            // tuning, falling back to the default for this string count.
+            var savedTuning = null;
+            if (isStr) {
+                var targetProfileId = profileIdForInstrument(v);
+                var targetProfile = settings.instrument_profiles && settings.instrument_profiles[targetProfileId];
+                if (targetProfile && targetProfile.tuning && targetProfile.string_count === newSc) {
+                    savedTuning = targetProfile.tuning;
+                }
+            }
             var patch = { instrument: v };
             if (isStr) {
                 patch.string_count = newSc;
-                patch.tuning = tunings.includes(settings.tuning) ? settings.tuning : (tunings[0] || settings.tuning);
+                patch.tuning = (savedTuning && tunings.includes(savedTuning)) ? savedTuning : (tunings[0] || settings.tuning);
             }
             if (isKeys) {
                 patch.key_count = newKc;
@@ -624,7 +634,10 @@
             renderInstrument(); keepOpen();   // reflect the active pill; keep the menu open
         }));
         var tuningSelect = menu.querySelector('[data-inst-tuning]');
-        if (tuningSelect) tuningSelect.addEventListener('change', (e) => saveSettings({ tuning: e.target.value }));
+        if (tuningSelect) tuningSelect.addEventListener('change', async (e) => {
+            await saveSettings({ tuning: e.target.value });
+            renderInstrument(); keepOpen();
+        });
         var refSlider = menu.querySelector('[data-inst-ref]');
         if (refSlider) {
             refSlider.addEventListener('input', (e) => { var label = menu.querySelector('[data-ref-val]'); if (label) label.textContent = e.target.value + ' Hz'; });
