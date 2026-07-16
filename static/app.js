@@ -1826,6 +1826,23 @@ setInterval(() => {
     if (!isCountingIn()) window.highway.setTime(ct);
 }, 1000 / 60);
 
+// Give the highway a clock it can sample inside its own rAF frame.
+//
+// The 60 Hz tick above PUSHES a clock sample; rAF is not synchronised with it,
+// so the renderer draws with a sample that is stale by a varying 0..16.7 ms.
+// That beat is the highway's jitter, and it worsens as frame rate rises (at
+// 200 fps it can run the chart clock backward on ~3% of frames). setTime() is
+// still needed — it anchors the interpolator and drives pause detection — but
+// the renderer should PULL the clock at frame time rather than draw with a
+// stale push.
+//
+// Only in JUCE mode: jucePlayer.currentTime interpolates between its 100 ms IPC
+// polls, so it is continuous in performance.now() and safe to sample per frame.
+// A bare HTMLAudioElement.currentTime is quantised to ~23 ms, so pulling it
+// per-frame would just swap the beat for a staircase — return NaN there and let
+// highway's interpolator do the smoothing instead.
+window.highway.setClockSource(() => (window._juceMode ? _audioTime() : NaN));
+
 _installSectionPracticeDrawHook();
 
 // ── Centralized Keyboard Shortcut Registry ───────────────────────────────
