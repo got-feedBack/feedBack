@@ -558,11 +558,11 @@
             hoverOverlay = '<div class="opacity-0 group-hover:opacity-100 transition" style="position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,0.8);border-radius:0 0 0.5rem 0.5rem;z-index:20;pointer-events:none">' + items + '</div>';
         }
 
-        var badgeColor = acc != null ? (acc >= MASTERY_ACCURACY ? 'bg-fb-good' : (acc >= 0.5 ? 'bg-fb-mid' : 'bg-fb-low')) : 'bg-gray-600';
+        // Color is now inline (not Tailwind) so we can also set border-color.
+        var badgeColor = acc != null ? (acc >= MASTERY_ACCURACY ? 'rgba(34,197,94,0.9)' : (acc >= 0.5 ? 'rgba(234,179,8,0.9)' : 'rgba(239,68,68,0.9)')) : 'rgba(75,85,99,0.9)';
         var badgeText = acc != null && acc >= 0.5 && acc < MASTERY_ACCURACY ? 'text-black' : 'text-white';
-        // Per-role icon: instrument icon + first letter of role for multi-role
-        var iconHtml = _roleIcon(arrIdx != null && song ? (song.arrangements[arrIdx].smart_name || song.arrangements[arrIdx].name || '') : '');
-        return '<span class="fb-acc-badge absolute bottom-0 right-0 ' + badgeColor + '/90 ' + badgeText + ' px-2 py-0.5 rounded-tl-md text-xs font-bold flex items-center gap-1 opacity-100 group-hover:opacity-0 transition">' +
+        var borderColor = acc != null ? (acc >= MASTERY_ACCURACY ? '#22c55e' : (acc >= 0.5 ? '#eab308' : '#ef4444')) : '#4b5563';
+        return '<span class="fb-acc-badge absolute bottom-0 right-0 px-2 py-0.5 rounded-tl-md text-xs font-bold flex items-center gap-1 opacity-100 group-hover:opacity-0 transition border-l-2 border-t-2 ' + badgeText + '" style="background:' + badgeColor + ';border-color:' + borderColor + '">' +
             (pct != null ? pct : '—') + '%</span>' + hoverOverlay;
     }
 
@@ -944,7 +944,7 @@
             const badgeTitle = targetNotes
                 ? ('Custom Tuning: ' + targetNotes)
                 : tuningLabel;
-            const pos = 'absolute top-2 ' + (state.selectMode ? 'left-9' : 'left-2');
+            const pos = 'absolute top-0 left-0 rounded-br-md';
             // Tag the chip with its offsets so decorateTuningChips() can colour it
             // green (matches your current tuning) / amber (needs a retune) after paint.
             // Also flag a bass-only song (every arrangement is a bass part) so coverage
