@@ -241,6 +241,13 @@ def api_stats_best():
     return appstate.meta_db.best_accuracy_map()
 
 
+@router.get("/api/stats/best-by-arrangement")
+def api_stats_best_by_arrangement():
+    """{filename: {arrangement_index: best_accuracy}} per-arrangement accuracy,
+    for per-role badging and hover overlays on the library grid."""
+    return appstate.meta_db.arrangement_accuracy_map()
+
+
 @router.get("/api/stats/top")
 def api_top_stats(limit: int = 5):
     """Top scored songs (best first), joined to song metadata, for the profile

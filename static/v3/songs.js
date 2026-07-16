@@ -77,7 +77,7 @@
         grouping: true,     // one card per song (multi-chart grouping); persisted
 
         filters: { arr_has: [], arr_lacks: [], stem_has: [], stem_lacks: [], lyrics: '', tunings: [], mastery: [], match: [], genre: [] },
-        page: 0, total: 0, loading: false, built: false, accuracy: {}, tuningNames: [], genres: [],
+        page: 0, total: 0, loading: false, built: false, accuracy: {}, arrangementAccuracy: {}, tuningNames: [], genres: [],
         artistCatalog: [], renderedHash: '',
         scrollBound: false,
         songsById: {}, selectMode: false, selected: new Set(),
@@ -493,19 +493,106 @@
     // default) or 'tree' (inline percentage in the list row). Both carry the
     // .fb-acc-badge class so a post-play refresh (repaintAccuracy) can find and
     // replace them in place without re-rendering the whole list.
-    function accuracyBadge(filename, variant) {
-        const acc = state.accuracy[filename];
+    // ── Per-role accuracy helpers ────────────────────────────────────────
+    function _matchingArrangementIndex(song) {
+        if (!song || !song.arrangements || !song.arrangements.length) return null;
+        // Find the arrangement whose name matches the current auto-filter role.
+        // This is the arrangement the card would open for the current instrument.
+        var want = state.filters.arr_has;
+        if (!want.length) return null;
+        for (var i = 0; i < song.arrangements.length; i++) {
+            var a = song.arrangements[i];
+            var sn = a.smart_name || a.name || '';
+            for (var j = 0; j < want.length; j++) {
+                if (sn === want[j]) return a.index != null ? a.index : i;
+            }
+        }
+        return null;
+    }
+
+    function _perArrangementAccuracy(filename, arrIndex) {
+        var map = state.arrangementAccuracy[filename];
+        if (!map) return null;
+        return typeof map[arrIndex] === 'number' ? map[arrIndex] : null;
+    }
+
+    function accuracyBadge(filename, variant, song) {
+        // Auto-resolve song from grid cache when not passed (e.g. repaint path).
+        if (!song && state.songsById) song = state.songsById[filename];
+        // Per-role accuracy: find the arrangement matching the current instrument
+        // role filter, and use ITS accuracy rather than the song-wide max.
+        var acc = null;
+        var arrIdx = song ? _matchingArrangementIndex(song) : null;
+        if (arrIdx != null) {
+            acc = _perArrangementAccuracy(filename, arrIdx);
+        }
+        // Fall back to song-wide max when no per-role match.
+        if (acc == null) acc = state.accuracy[filename];
         if (acc == null) return '';
-        // Floor, never round: 100% must mean every note hit.
-        const pct = Math.floor(acc * 100);
+
+        var pct = Math.floor(acc * 100);
         if (variant === 'tree') {
-            const color = acc >= MASTERY_ACCURACY ? 'text-fb-good' : acc >= 0.5 ? 'text-fb-mid' : 'text-fb-low';
+            var color = acc >= MASTERY_ACCURACY ? 'text-fb-good' : acc >= 0.5 ? 'text-fb-mid' : 'text-fb-low';
             return '<span class="fb-acc-badge text-xs font-bold ' + color + '">' + pct + '%</span>';
         }
-        const color = acc >= MASTERY_ACCURACY ? 'bg-fb-good' : (acc >= 0.5 ? 'bg-fb-mid' : 'bg-fb-low');
-        const text = acc >= 0.5 && acc < MASTERY_ACCURACY ? 'text-black' : 'text-white';
-        return '<span class="fb-acc-badge absolute bottom-0 right-0 ' + color + '/90 ' + text + ' px-2 py-0.5 rounded-tl-md text-xs font-bold flex items-center gap-1">' +
-            '<svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/></svg>' + pct + '%</span>';
+
+        // Build hover overlay with all arrangement accuracies
+        var hoverOverlay = '';
+        if (song && song.arrangements && song.arrangements.length > 1) {
+            var items = '';
+            for (var ai = 0; ai < song.arrangements.length; ai++) {
+                var a = song.arrangements[ai];
+                var aiIdx = a.index != null ? a.index : ai;
+                var aAcc = _perArrangementAccuracy(filename, aiIdx);
+                var aName = a.smart_name || a.name || ('#' + aiIdx);
+                var aLabel = aAcc != null ? Math.floor(aAcc * 100) + '%' : '—';
+                var aColor = aAcc != null
+                    ? (aAcc >= MASTERY_ACCURACY ? 'text-fb-good' : aAcc >= 0.5 ? 'text-fb-mid' : 'text-fb-low')
+                    : 'text-gray-600';
+                // Icon: instrument icon abbreviation for the role
+                var icon = _roleIcon(aName);
+                items += '<div class="flex items-center gap-1 px-2 py-0.5"><span class="text-xs">' + icon + '</span><span class="text-xs text-fb-textDim flex-1">' + esc(aName) + '</span><span class="text-xs font-bold ' + aColor + '">' + aLabel + '</span></div>';
+            }
+            hoverOverlay = '<div class="absolute bottom-0 right-0 left-0 bg-black/85 rounded-b-lg opacity-0 group-hover:opacity-100 transition pointer-events-none z-20">' + items + '</div>';
+        }
+
+        var badgeColor = acc >= MASTERY_ACCURACY ? 'bg-fb-good' : (acc >= 0.5 ? 'bg-fb-mid' : 'bg-fb-low');
+        var badgeText = acc >= 0.5 && acc < MASTERY_ACCURACY ? 'text-black' : 'text-white';
+        // Per-role icon: instrument icon + first letter of role for multi-role
+        var iconHtml = _roleIcon(arrIdx != null && song ? (song.arrangements[arrIdx].smart_name || song.arrangements[arrIdx].name || '') : '');
+        return '<span class="fb-acc-badge absolute bottom-0 right-0 ' + badgeColor + '/90 ' + badgeText + ' px-2 py-0.5 rounded-tl-md text-xs font-bold flex items-center gap-1">' +
+            '<span class="leading-none">' + iconHtml + '</span>' + pct + '%</span>' + hoverOverlay;
+    }
+
+    function _roleIcon(arrName) {
+        var insts = window.feedBack && window.feedBack._instruments;
+        if (!Array.isArray(insts)) return '●';
+        var name = (arrName || '').toLowerCase();
+        for (var i = 0; i < insts.length; i++) {
+            var inst = insts[i];
+            var roles = inst.roles || [];
+            for (var j = 0; j < roles.length; j++) {
+                var r = roles[j];
+                if (name === r.label.toLowerCase()) {
+                    // Multi-role: show instrument id first letter + role first letter
+                    if (inst.roles.length > 1) {
+                        return (inst.id[0] || '?').toUpperCase() + '<span class="text-[0.5rem]">' + (r.label[0] || '?').toUpperCase() + '</span>';
+                    }
+                    return (inst.id[0] || (r.label[0] || '?')).toUpperCase();
+                }
+                // Check arrangement_names too
+                var names = r.arrangement_names || [];
+                for (var k = 0; k < names.length; k++) {
+                    if (name === names[k]) {
+                        if (inst.roles.length > 1) {
+                            return (inst.id[0] || '?').toUpperCase() + '<span class="text-[0.5rem]">' + (r.label[0] || '?').toUpperCase() + '</span>';
+                        }
+                        return (inst.id[0] || (r.label[0] || '?')).toUpperCase();
+                    }
+                }
+            }
+        }
+        return '●';
     }
 
     // ── Metadata-refresh per-tile state (the "Refresh Metadata" batch) ─────────
@@ -590,10 +677,10 @@
     async function applyScoreRefresh() {
         if (!_dirtyScores.size) return;
         const fresh = await jget('/api/stats/best');
-        // Fetch failed — keep the entries dirty so the next trigger (or screen
-        // enter) retries rather than silently dropping the badge update.
+        const freshArr = await jget('/api/stats/best-by-arrangement');
         if (!fresh) return;
         state.accuracy = fresh;
+        if (freshArr) state.arrangementAccuracy = freshArr;
         const keys = Array.from(_dirtyScores);
         _dirtyScores.clear();
         keys.forEach(repaintAccuracy);
@@ -906,7 +993,7 @@
         return '<div class="group relative" data-fn="' + esc(key) + '" data-letter="' + esc(songBucket(song)) + '" data-library-song="' + esc(songId(song)) + '" data-library-provider="' + esc(state.provider) + '">' +
             '<div class="relative aspect-square rounded-lg overflow-hidden bg-fb-card cursor-pointer' + selRing + '" data-v3-play>' +
             '<img src="' + esc(artUrl(shown)) + '" alt="" loading="lazy" decoding="async" class="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105" onerror="this.style.visibility=\'hidden\'">' +
-            tuning + checkbox + accuracyBadge(key) + fmtBadge(shown) + personalBadges(song) + enrichBadge(key, song.unmatched) + overlay +
+            tuning + checkbox + accuracyBadge(key, '', song) + fmtBadge(shown) + personalBadges(song) + enrichBadge(key, song.unmatched) + overlay +
             '<div class="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition">' +
             inlineBtns +
             '<button data-fav data-fav-idle="text-white" title="Favorite" aria-label="Favorite" aria-pressed="' + (fav ? 'true' : 'false') + '" class="w-7 h-7 rounded-full bg-black/50 hover:bg-black/70 flex items-center justify-center text-sm ' + (fav ? 'text-fb-accent' : 'text-white') + '">' + (fav ? '♥' : '♡') + '</button>' +
@@ -3508,6 +3595,7 @@
         const providers = await loadProviders();
         const [, tn] = await Promise.all([
             (async () => { state.accuracy = (await jget('/api/stats/best')) || {}; })(),
+            (async () => { state.arrangementAccuracy = (await jget('/api/stats/best-by-arrangement')) || {}; })(),
             jget('/api/library/tuning-names?provider=' + enc(state.provider)),
             loadArtistCatalog(),
             // Artist-page gates (PR-B) ride the initial fetch batch so the

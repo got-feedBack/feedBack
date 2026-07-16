@@ -2229,6 +2229,23 @@ class MetadataDB:
         ).fetchall()
         return {r[0]: r[1] for r in rows if r[2] and r[2] > 0}
 
+    def arrangement_accuracy_map(self) -> dict:
+        """{filename: {arrangement_index: best_accuracy}} for per-arrangement
+        badging on the library grid. Only includes arrangements that have been
+        played (plays > 0); unplayed arrangements are absent from the map
+        rather than zeroed so the UI can distinguish 'not played' from 0%."""
+        rows = self.conn.execute(
+            "SELECT filename, arrangement, best_accuracy FROM song_stats "
+            "WHERE plays > 0 AND " + self._existing_song_filter()
+        ).fetchall()
+        result: dict = {}
+        for fn, arr, acc in rows:
+            d = result.get(fn)
+            if d is None:
+                d = result[fn] = {}
+            d[int(arr)] = acc
+        return result
+
     def top_stats(self, limit: int = 5) -> list[dict]:
         """Top scored songs (best score first) for the profile 'Your best
         scores' panel. Aggregated per-song across arrangements (best score,
