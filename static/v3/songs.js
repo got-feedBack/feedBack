@@ -564,7 +564,7 @@
         // Per-role icon: instrument icon + first letter of role for multi-role
         var iconHtml = _roleIcon(arrIdx != null && song ? (song.arrangements[arrIdx].smart_name || song.arrangements[arrIdx].name || '') : '');
         return '<span class="fb-acc-badge absolute bottom-0 right-0 ' + badgeColor + '/90 ' + badgeText + ' px-2 py-0.5 rounded-tl-md text-xs font-bold flex items-center gap-1">' +
-            '<span class="leading-none">' + iconHtml + '</span>' + (pct != null ? pct : '—') + '%</span>' + hoverOverlay;
+            (pct != null ? pct : '—') + '%</span>' + hoverOverlay;
     }
 
     function _roleIcon(arrName) {
