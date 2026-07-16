@@ -528,12 +528,15 @@
         }
         // Fall back to song-wide max when no per-role match.
         if (acc == null) acc = state.accuracy[filename];
-        if (acc == null) return '';
+        var hasArr = song && song.arrangements && song.arrangements.length > 0;
+        // Show badge when we have accuracy OR the song has arrangements
+        // (so the hover overlay works even for unplayed songs).
+        if (acc == null && !hasArr) return '';
 
-        var pct = Math.floor(acc * 100);
+        var pct = acc != null ? Math.floor(acc * 100) : null;
         if (variant === 'tree') {
-            var color = acc >= MASTERY_ACCURACY ? 'text-fb-good' : acc >= 0.5 ? 'text-fb-mid' : 'text-fb-low';
-            return '<span class="fb-acc-badge text-xs font-bold ' + color + '">' + pct + '%</span>';
+            var color = acc != null && acc >= MASTERY_ACCURACY ? 'text-fb-good' : acc != null && acc >= 0.5 ? 'text-fb-mid' : 'text-fb-low';
+            return '<span class="fb-acc-badge text-xs font-bold ' + color + '">' + (pct != null ? pct : '—') + '%</span>';
         }
 
         // Build hover overlay with all arrangement accuracies
@@ -553,15 +556,15 @@
                 var icon = _roleIcon(aName);
                 items += '<div class="flex items-center gap-1 px-2 py-0.5"><span class="text-xs">' + icon + '</span><span class="text-xs text-fb-textDim flex-1">' + esc(aName) + '</span><span class="text-xs font-bold ' + aColor + '">' + aLabel + '</span></div>';
             }
-            hoverOverlay = '<div class="absolute bottom-0 right-0 left-0 bg-black/75 rounded-b-lg opacity-0 group-hover:opacity-100 transition pointer-events-none z-20">' + items + '</div>';
+            hoverOverlay = '<div class="opacity-0 group-hover:opacity-100 transition" style="position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,0.8);border-radius:0 0 0.5rem 0.5rem;z-index:20;pointer-events:none">' + items + '</div>';
         }
 
-        var badgeColor = acc >= MASTERY_ACCURACY ? 'bg-fb-good' : (acc >= 0.5 ? 'bg-fb-mid' : 'bg-fb-low');
-        var badgeText = acc >= 0.5 && acc < MASTERY_ACCURACY ? 'text-black' : 'text-white';
+        var badgeColor = acc != null ? (acc >= MASTERY_ACCURACY ? 'bg-fb-good' : (acc >= 0.5 ? 'bg-fb-mid' : 'bg-fb-low')) : 'bg-gray-600';
+        var badgeText = acc != null && acc >= 0.5 && acc < MASTERY_ACCURACY ? 'text-black' : 'text-white';
         // Per-role icon: instrument icon + first letter of role for multi-role
         var iconHtml = _roleIcon(arrIdx != null && song ? (song.arrangements[arrIdx].smart_name || song.arrangements[arrIdx].name || '') : '');
         return '<span class="fb-acc-badge absolute bottom-0 right-0 ' + badgeColor + '/90 ' + badgeText + ' px-2 py-0.5 rounded-tl-md text-xs font-bold flex items-center gap-1">' +
-            '<span class="leading-none">' + iconHtml + '</span>' + pct + '%</span>' + hoverOverlay;
+            '<span class="leading-none">' + iconHtml + '</span>' + (pct != null ? pct : '—') + '%</span>' + hoverOverlay;
     }
 
     function _roleIcon(arrName) {
