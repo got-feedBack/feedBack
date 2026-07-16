@@ -541,7 +541,7 @@
 
         // Build hover overlay with all arrangement accuracies
         var hoverOverlay = '';
-        if (false && song && song.arrangements && song.arrangements.length > 0) {
+        if (song && song.arrangements && song.arrangements.length > 0) {
             var items = '';
             for (var ai = 0; ai < song.arrangements.length; ai++) {
                 var a = song.arrangements[ai];
