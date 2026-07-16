@@ -986,6 +986,22 @@ function createHighway() {
                 // inline arrow function.
                 function _handleAsyncInitFailure(e) {
                     if (hwState._renderer !== _installedRenderer) return;
+                    // ...and ignore a rejection from a SUPERSEDED init cycle.
+                    //
+                    // A renderer mints a fresh readyPromise on every init(), and
+                    // rejects the previous one ("superseded") when a newer init
+                    // starts. The renderer object is unchanged, so the identity
+                    // check above does not catch it — and we would tear down a
+                    // perfectly healthy renderer that is merely re-initialising.
+                    //
+                    // This is exactly what starting a gig did: setViz('venue')
+                    // installed the 3D renderer, then the queue's playSong()
+                    // re-initialised it a tick later; init #1's promise rejected,
+                    // and the gig dropped to the fallback 2D highway with the
+                    // venue gone. A superseded init is not a failed init — the
+                    // NEW cycle owns the outcome, and its own promise is what we
+                    // must judge.
+                    if (_installedRenderer.readyPromise !== rp) return;
                     console.error('renderer async init failure:', e);
                     _destroyCurrentIfInited();
                     hwState._renderer = _defaultRenderer;

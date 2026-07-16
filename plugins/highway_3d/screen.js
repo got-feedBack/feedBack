@@ -12726,8 +12726,19 @@
                         const tC = now + (dt0 + dt1) * 0.5 - BEHIND;
                         const b = laneBoundsFromAnchor(getChartAnchorAt(anchors, tC));
                         if (!b) continue;
-                        const z0 = dZ(dt0) + TS * BEHIND;
-                        const z1 = dZ(dt1) + TS * BEHIND;
+                        // The lane STOPS AT THE HIT LINE (z = 0) — issue #991. The
+                        // slice window starts BEHIND seconds in the past, so the
+                        // first slices map to positive z, i.e. past the hit line
+                        // toward the player. Nothing is ever drawn there: notes and
+                        // chord frames clamp to Math.min(0, dZ(dt)), so that strip
+                        // is lane with nothing on it. Clamp the NEAR edge only —
+                        // the far edge stays at dZ(AHEAD+BEHIND)+TS*BEHIND = -AHEAD*TS,
+                        // aligned with the note horizon, exactly as before.
+                        const z0 = Math.min(0, dZ(dt0) + TS * BEHIND);
+                        const z1 = Math.min(0, dZ(dt1) + TS * BEHIND);
+                        // Slice lies entirely past the hit line -> zero length, nothing
+                        // to draw. Skip before the arp probe so it costs nothing.
+                        if (z0 === z1) continue;
                         const arpSlice = (laneRailArpHsFlags && handShapesRails && handShapesRails.length)
                             ? arpeggioLaneOuterRailLaneSlice(
                                 dt0, dt1, now,
@@ -12876,9 +12887,13 @@
                     divMin = dMin;
                     divMax = dMax;
 
-                    // Same fix: extend to AHEAD+BEHIND so far edge = -AHEAD*TS.
-                    const laneLen = TS * (AHEAD + BEHIND);
-                    const zLane = -laneLen / 2 + TS * BEHIND;
+                    // Far edge at -AHEAD*TS (the note horizon), near edge at the
+                    // hit line (z = 0) — the lane does not run past it toward the
+                    // player, where nothing is ever drawn (#991). Spanning
+                    // AHEAD+BEHIND and shifting by +TS*BEHIND put the near edge at
+                    // +TS*BEHIND; spanning AHEAD alone keeps the same far edge.
+                    const laneLen = TS * AHEAD;
+                    const zLane = -laneLen / 2;
                     const laneOp = (HWY_LANE_STRIPE_OP_BASE + highwayIntensity * HWY_LANE_STRIPE_OP_INT)
                         * (_venueSceneOverride ? VENUE_LANE_OP_BOOST : 1);
                     mLaneOdd.opacity = laneOp;
@@ -12898,7 +12913,8 @@
                     }
 
                     if (highwayIntensity > 0.05) {
-                        const divLen = TS * (AHEAD + BEHIND);
+                        // Matches the lane above: ends at the hit line (#991).
+                        const divLen = TS * AHEAD;
                         const yPos = boardY + 0.03 * K;
                         const divOp2 = 0.02 + highwayIntensity * 0.1;
                         const divOpArp2 = Math.min(0.92, 0.16 + highwayIntensity * 0.42);
@@ -12911,7 +12927,7 @@
                         for (let f = fDivA; f <= fDivB; f++) {
                             if (hwyLaneArpOuterDividers && (f === fDivA || f === fDivB)) continue;
                             const div = pLaneDivider.get();
-                            div.position.set(xFret(f), yPos, dZ(0) - divLen * 0.5 + TS * BEHIND);
+                            div.position.set(xFret(f), yPos, -divLen * 0.5);
                             div.material = mLaneDivider;
                             div.scale.set(1, 1, divLen);
                             div.renderOrder = 2;
@@ -12930,8 +12946,10 @@
 
                 // ── Fret boundary extension lines ─────────────────────────
                 if (mLaneDividerExt && fretDividersVisible) {
-                    const extLaneLen = TS * (AHEAD + BEHIND);
-                    const extZMid = -extLaneLen / 2 + TS * BEHIND;
+                    // Same hit-line stop as the lane (#991) — otherwise these lines
+                    // would be the only floor geometry still running past it.
+                    const extLaneLen = TS * AHEAD;
+                    const extZMid = -extLaneLen / 2;
                     const extYPos = boardY + 0.03 * K;
                     mLaneDividerExt.opacity = Math.max(0.3, 0.3 + highwayIntensity * 0.15);
                     for (let f = 0; f <= NFRETS; f++) {
@@ -15568,15 +15586,29 @@
             // highway throttled the whole room. Pausing the song dropped the
             // venue, the crowd and the stage to 10 fps.
             //
-            // Only claim continuous frames while a crowd video is actually
-            // rolling: with no venue pack (the common case) the paused scene IS
-            // static and the throttle should still save the GPU.
+            // Two independent sources of motion, and BOTH must keep their frames:
+            //
+            //  • a crowd video rolling on its own clock (career venue pack), and
+            //  • the venue scene's own fake-depth motion — the backdrop breathes,
+            //    the haze drifts, warmth pulses, the shimmer moves. That is
+            //    Math.sin(t) in the draw loop (see _venueApplyFakeDepthMotion),
+            //    so it only moves while we are actually given frames, and it runs
+            //    with NO pack at all.
+            //
+            // The throttle fires whenever the CHART CLOCK is stalled — which is
+            // not just a pause. A count-in and the credits/author overlay stall it
+            // exactly the same way, so the venue was stuttering there too.
+            //
+            // With no venue at all (plain 3D highway) the paused scene really is a
+            // still picture: motion mode reads 'off', we claim nothing, and the
+            // throttle still saves the GPU as #654 intended.
             needsContinuousFrames() {
                 if (!_isReady || _ctxLost) return false;
                 for (const v of _venueCrowdVideos) {
                     if (v && !v.paused && !v.ended && v.readyState >= 2) return true;
                 }
-                return false;
+                // 'off' also covers prefers-reduced-motion and "no venue scene".
+                try { return _venueEffectiveMotionMode() !== 'off'; } catch (_) { return false; }
             },
 
             draw(bundle) {

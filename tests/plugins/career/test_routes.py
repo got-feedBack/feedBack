@@ -174,3 +174,176 @@ def test_double_download_409s(client, monkeypatch):
     career_routes._state["downloads"]["bar"] = {"status": "running"}
     assert client.post("/api/plugins/career/packs/bar/download").status_code == 409
     assert client.delete("/api/plugins/career/packs/bar").status_code == 409
+
+
+# ── gig pre-extraction (the wait between songs) ─────────────────────────────
+#
+# A feedpak is a zip: the first play of one pays for its extraction into
+# sloppak_cache. Inside a set that cost landed BETWEEN songs — the player
+# finished a number and then sat waiting for the next one to unpack, mid-gig.
+# The setlist is known up front, so extract it all while the poster is up.
+
+def _career_client_with_library(tmp_path, meta_db, dlc, cache):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    import routes as career_routes
+    app = FastAPI()
+    career_routes.setup(app, {
+        "config_dir": str(tmp_path),
+        "meta_db": meta_db,
+        "get_dlc_dir": lambda: dlc,
+        "get_sloppak_cache_dir": lambda: cache,
+    })
+    return TestClient(app)
+
+
+def _write_feedpak(dlc, name, title="T"):
+    """A minimal but REAL feedpak zip, so resolve_source_dir genuinely unpacks."""
+    import json as _json
+    import zipfile as _zip
+    p = dlc / name
+    with _zip.ZipFile(p, "w") as z:
+        z.writestr("manifest.json", _json.dumps({"title": title, "artist": "A", "arrangements": []}))
+    return p
+
+
+def test_gig_prepare_extracts_every_song_up_front(tmp_path, meta_db):
+    dlc = tmp_path / "dlc"
+    dlc.mkdir()
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    for n in ("one.feedpak", "two.feedpak", "three.feedpak"):
+        _write_feedpak(dlc, n)
+
+    client = _career_client_with_library(tmp_path, meta_db, dlc, cache)
+    before = list(cache.iterdir())
+    assert before == [], "nothing unpacked yet"
+
+    res = client.post("/api/plugins/career/gigs/prepare",
+                      json={"songs": ["one.feedpak", "two.feedpak", "three.feedpak"]})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is True
+    assert body["prepared"] == 3, body
+    assert body["failed"] == []
+    # The point of the whole exercise: the set is on disk BEFORE the first note.
+    assert len(list(cache.iterdir())) == 3, "every song of the set must be unpacked"
+
+
+def test_gig_prepare_is_idempotent_on_a_warm_cache(tmp_path, meta_db):
+    dlc = tmp_path / "dlc"
+    dlc.mkdir()
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    _write_feedpak(dlc, "one.feedpak")
+    client = _career_client_with_library(tmp_path, meta_db, dlc, cache)
+
+    first = client.post("/api/plugins/career/gigs/prepare", json={"songs": ["one.feedpak"]}).json()
+    second = client.post("/api/plugins/career/gigs/prepare", json={"songs": ["one.feedpak"]}).json()
+    assert first["prepared"] == second["prepared"] == 1
+    assert len(list(cache.iterdir())) == 1, "a re-prepare must not duplicate the unpack"
+
+
+def test_one_bad_feedpak_does_not_stop_the_set(tmp_path, meta_db):
+    # A corrupt pak in the setlist must not block the gig: the play itself will
+    # surface the error exactly as it does outside a gig. Slow beats blocked.
+    dlc = tmp_path / "dlc"
+    dlc.mkdir()
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    _write_feedpak(dlc, "good.feedpak")
+    (dlc / "bad.feedpak").write_bytes(b"not a zip at all")
+
+    client = _career_client_with_library(tmp_path, meta_db, dlc, cache)
+    body = client.post("/api/plugins/career/gigs/prepare",
+                       json={"songs": ["good.feedpak", "bad.feedpak"]}).json()
+    assert body["ok"] is True, "a bad pak must not fail the whole prepare"
+    assert body["prepared"] == 1
+    assert body["failed"] == ["bad.feedpak"]
+
+
+def test_gig_prepare_degrades_without_a_library(tmp_path, meta_db, client):
+    # The stock fixture's context has no dlc/cache resolvers. That must be a
+    # graceful no-op, not a 500 — pre-extraction is an optimisation and can
+    # never be the reason a gig won't start.
+    res = client.post("/api/plugins/career/gigs/prepare", json={"songs": ["x.feedpak"]})
+    assert res.status_code == 200
+    assert res.json()["prepared"] == 0
+
+
+def test_gig_prepare_empty_setlist(tmp_path, meta_db, client):
+    res = client.post("/api/plugins/career/gigs/prepare", json={"songs": []})
+    assert res.status_code == 200
+    assert res.json() == {"ok": True, "prepared": 0, "failed": []}
+
+
+def test_prepare_rejects_a_non_list_songs_value(tmp_path, meta_db, client):
+    # A str is iterable: without the list check, "abc" would prepare three
+    # one-character "songs".
+    for bad in ("abc", 42, {"a": 1}, None):
+        res = client.post("/api/plugins/career/gigs/prepare", json={"songs": bad})
+        assert res.status_code == 200
+        assert res.json()["prepared"] == 0
+
+
+def test_prepare_ignores_non_string_and_blank_entries(tmp_path, meta_db):
+    dlc = tmp_path / "dlc"
+    dlc.mkdir()
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    _write_feedpak(dlc, "good.feedpak")
+    client = _career_client_with_library(tmp_path, meta_db, dlc, cache)
+    body = client.post("/api/plugins/career/gigs/prepare",
+                       json={"songs": ["good.feedpak", "", "   ", 7, None, {"x": 1}]}).json()
+    assert body["prepared"] == 1
+    assert body["failed"] == []
+
+
+def test_prepare_caps_the_setlist(tmp_path, meta_db):
+    # This endpoint unpacks zips — an arbitrary caller must not be able to ask for
+    # unbounded work.
+    #
+    # The first version of this test asserted `prepared == 0` against a fixture
+    # with NO library: the endpoint exits before extraction there, so it passed
+    # whether or not the cap existed. Give it a real library, ask for far more than
+    # the cap, and assert the endpoint only ever considered MAX_GIG_SONGS of them.
+    import routes as career_routes
+    assert career_routes.MAX_GIG_SONGS <= 64
+
+    dlc = tmp_path / "dlc"
+    dlc.mkdir()
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    client = _career_client_with_library(tmp_path, meta_db, dlc, cache)
+
+    n = career_routes.MAX_GIG_SONGS + 50
+    # None of these exist, so every song the endpoint LOOKS AT lands in `failed`.
+    # That makes `failed` an exact count of how many it considered.
+    body = client.post("/api/plugins/career/gigs/prepare",
+                       json={"songs": [f"missing{i}.feedpak" for i in range(n)]}).json()
+    assert body["prepared"] == 0
+    assert len(body["failed"]) == career_routes.MAX_GIG_SONGS, (
+        f"the endpoint must consider at most MAX_GIG_SONGS "
+        f"({career_routes.MAX_GIG_SONGS}), not all {n}"
+    )
+
+
+def test_prepare_refuses_to_escape_the_library(tmp_path, meta_db):
+    # resolve_source_dir() does a bare `dlc_root / filename` with no containment
+    # guard, so a crafted path would walk straight out of the library. Every
+    # filename must go through _resolve_dlc_path first.
+    dlc = tmp_path / "dlc"
+    dlc.mkdir()
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (tmp_path / "outside.feedpak").write_bytes(b"secret")
+    client = _career_client_with_library(tmp_path, meta_db, dlc, cache)
+
+    for evil in ("../outside.feedpak", "..\\outside.feedpak",
+                 "a/../../outside.feedpak", "/etc/passwd", "C:/Windows/x.feedpak"):
+        body = client.post("/api/plugins/career/gigs/prepare",
+                           json={"songs": [evil]}).json()
+        assert body["prepared"] == 0, f"{evil!r} must never be prepared"
+        assert body["failed"] == [evil]
+    # Nothing outside the library may have been unpacked.
+    assert list(cache.iterdir()) == []

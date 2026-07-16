@@ -53,6 +53,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changes.
 
 ### Changed
+- **`GET /api/song/{f}?stems=1`** (new, opt-in) — returns the pack's playable stem
+  list (`[{id, url, default}]` + `full_mix_url`), the same list the highway's WS
+  `ready` sends. The stems plugin could only learn it from that WS message, which
+  arrives once the highway is already on screen — so it decoded and then copied the
+  whole song's PCM to its audio worklet with the player visible: over half a gigabyte
+  of memcpy in one frame for a 6-stem pack, a measured 698 ms freeze right as the
+  song-credits card appeared. With the list available at `song:loading` the plugin
+  does all of it before the highway is drawn. Built by calling `load_song` itself, so
+  it cannot drift from what the WS sends. Opt-in, so the library's metadata calls pay
+  nothing.
 - **Folder library renders only the songs on screen** (#965) — a song list used to
   render *every* song it held. On a flat 50,944-song library that was one `<div>`
   with 50,938 children and ~1.3 **million** DOM nodes (~4.2 GB of renderer memory),
@@ -212,6 +222,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine (`app.js`, `highway.js`, `playSong`, `showScreen`, the capability registry).
 
 ### Fixed
+- **3D Highway: the lane stops at the hit line** (#991) — the highway lane, its
+  dividers, and the fret boundary extension lines ran `BEHIND` seconds *past* the
+  hit line toward the player. Nothing is ever drawn in that strip (notes and chord
+  frames clamp to `Math.min(0, dZ(dt))`), so it read as lane with no notes on it.
+  The floor geometry now ends at the hit line; its far edge is unchanged, still
+  `-AHEAD*TS` at the note horizon.
 - **Career passports review polish** — the passport tabs and book overlay carry
   proper ARIA semantics (`aria-selected`/`aria-controls`/`tabpanel`;
   `role="dialog"` + `aria-modal` with focus moved to the close button on open

@@ -1334,12 +1334,25 @@ if (window.feedBack) window.feedBack.closeCurrentSong = closeCurrentSong;
 // leaving the player still leaves — and abandons the queue.
 window.feedBack.playQueue = (function () {
     let list = [], idx = -1, source = '', arrangements = null;
+    // Set true by _play() right before it drives playSong, consumed once by
+    // playSong's clear-guard. The primary "don't clear the queue I'm driving"
+    // signal is options.fromQueue, but a chain of plugin playSong wrappers
+    // (nam_tone, midi_amp, fretboard, invert_highway, tabview, ...) forward only
+    // (filename, arrangement) and silently drop the options object — so the flag
+    // never arrived and the queue cleared itself the instant its first song
+    // started (a gig/album/playlist never advanced). This flag rides beside the
+    // wrapper chain, not through it.
+    let _internalPlay = false;
     const active = () => idx >= 0 && idx < list.length;
     const hasNext = () => active() && idx < list.length - 1;
     function clear() { list = []; idx = -1; source = ''; arrangements = null; }
     function _play(i) {
         const fn = list[i];
-        // fromQueue keeps the queue from clearing itself; playSong decodeURIs.
+        // fromQueue is the in-band signal; _internalPlay is the out-of-band one
+        // that survives wrapper chains dropping the options arg. Both set; either
+        // suffices. playSong runs its clear-guard synchronously at entry, and the
+        // wrapper chain reaches it synchronously, so the flag is still set then.
+        _internalPlay = true;
         window.playSong(encodeURIComponent(fn), arrangements ? arrangements[i] : undefined, { fromQueue: true });
     }
     function start(files, opts) {
@@ -1371,6 +1384,15 @@ window.feedBack.playQueue = (function () {
     }
     return {
         start: start, advance: advance, hasNext: hasNext, active: active, clear: clear,
+        // True when the current song is a queue ADVANCE (song 2..N of a set),
+        // false for its first song or a standalone play. The venue uses this to
+        // fly in once on arrival at the set, then continue the room between
+        // songs instead of replaying the arrival flyover every track.
+        isContinuation: function () { return active() && idx > 0; },
+        // One-shot: true iff _play just kicked off this playSong. Consumed on
+        // read so a later MANUAL play still clears the queue. playSong calls this
+        // instead of trusting options.fromQueue to survive the wrapper chain.
+        _consumeInternalPlay: function () { const v = _internalPlay; _internalPlay = false; return v; },
         source: function () { return source; },
         remaining: function () { return active() ? list.length - idx - 1 : 0; },
         // What's coming, for consumers that RENDER the queue (a results
@@ -2297,11 +2319,14 @@ configureHost({
     currentFilename: () => currentFilename,
 });
 
+// `esc` is here for out-of-tree plugins only: their screen.js loads as a classic
+// script and called esc() back when app.js was one too and it was an implicit
+// global. Nothing in core reads window.esc — import it from ./js/dom.js instead.
 Object.assign(window, {
     _confirmDialog, _getArrangementNamingMode, _libraryLocalFilename, _librarySongArtUrl,
     _librarySongId, _onHeaderClick, _onNamingModeChange, _trapFocusInModal,
     changeArrangement, checkPluginUpdates, clearLibFilters, clearLoop,
-    deleteSelectedLoop, exportDiagnostics, exportSettings, filterFavorites,
+    deleteSelectedLoop, esc, exportDiagnostics, exportSettings, filterFavorites,
     filterLibrary, fullRescanLibrary, goFavPage, handleSliderInput,
     hideScanBanner, importSettings, loadPlugins, loadSavedLoop,
     loadSettings, onSectionPracticeModeChange, openEditModal, persistSetting,

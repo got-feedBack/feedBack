@@ -46,6 +46,8 @@ from pathlib import Path
 from fastapi import Body, HTTPException
 from fastapi.responses import FileResponse
 
+import sloppak
+from dlc_paths import _resolve_dlc_path
 from progression import instrument_for_arrangement
 
 PLUGIN_ID = "career"
@@ -53,6 +55,9 @@ VENUE_ID_RE = re.compile(r"^[a-z0-9_-]{1,40}$")
 PACK_FILENAME_RE = re.compile(r"^[a-z0-9_-]{1,64}\.(mp4|webm|mp3|json)$")
 REQUIRED_LOOPS = ("bored", "neutral", "engaged", "ecstatic")
 DOWNLOAD_CHUNK = 1024 * 256
+# A setlist is a handful of songs; this endpoint unpacks zips, so cap the work an
+# arbitrary caller can ask for.
+MAX_GIG_SONGS = 32
 
 _lock = threading.Lock()
 _state = {
@@ -517,27 +522,39 @@ def _current_venue():
     return best
 
 
-def _unplayed_genre_songs(gkey, exclude, limit):
-    """Library songs of a genre with no stats yet — a young passport's gig
-    still gets a full set (playing them is how stubs start).
-    ponytail: full stat-less scan + python-side genre match (a few ms at 7k
-    songs, single-user); push the match into SQL if propose ever feels slow."""
+def _fill_genre_songs(gkey, exclude, limit):
+    """Library songs of a genre to round out a gig — ANY song of the genre the
+    set hasn't already picked.
+
+    Was `_unplayed_genre_songs`, restricted to `filename NOT IN song_stats`.
+    That restriction created a hole: a song you'd played on a DIFFERENT
+    instrument's arrangement has a stats row, so it was excluded here — and it
+    lives in the played bucket for THAT instrument, not this passport's, so it
+    was excluded there too. It could never be gigged. A player with 137 metalcore
+    songs, all played on another instrument, got a 404 (reproduced). The player's
+    library is the pool; whether a song has stats on some other instrument has no
+    bearing on whether it can be in THIS gig.
+
+    Shuffled, so re-roll actually changes the set. The old version returned the
+    library's first N in table order every time, so re-roll was a no-op for any
+    set drawn from the filler (reproduced).
+
+    ponytail: full genre scan + python-side match + shuffle (a few ms at 7k
+    songs, single-user); push into SQL if propose ever feels slow.
+    """
     db = _state["meta_db"]
     if db is None:
         return []
     rows = db.conn.execute(
-        f"SELECT filename, title, artist, {_genre_expr(db)} AS g FROM songs "
-        "WHERE filename NOT IN (SELECT filename FROM song_stats)"
+        f"SELECT filename, title, artist, {_genre_expr(db)} AS g FROM songs"
     ).fetchall()
-    out = []
-    for filename, title, artist, genre in rows:
-        if _genre_key(genre) != gkey or filename in exclude:
-            continue
-        out.append({"filename": filename, "title": title or filename,
-                    "artist": artist or ""})
-        if len(out) >= limit:
-            break
-    return out
+    pool = [
+        {"filename": filename, "title": title or filename, "artist": artist or ""}
+        for filename, title, artist, genre in rows
+        if _genre_key(genre) == gkey and filename not in exclude
+    ]
+    random.shuffle(pool)   # re-roll must vary; free per call
+    return pool[:limit]
 
 
 def _validate_pack_dir(pack_dir: Path):
@@ -734,6 +751,62 @@ def setup(app, context):
                                        "snapshot": snapshot})
         return {"ok": True}
 
+    @app.post(f"/api/plugins/{PLUGIN_ID}/gigs/prepare")
+    def prepare_gig(body: dict = Body(...)):
+        """Unpack every song of the set BEFORE the gig starts.
+
+        A feedpak is a zip: the first play of one pays for its extraction into
+        sloppak_cache. Inside a set that cost landed BETWEEN songs — the player
+        finished a number and then sat waiting for the next one to unpack, mid-
+        gig. A set is a known list up front, so extract it all while the player
+        is still looking at the poster.
+
+        Idempotent and cheap on a warm cache: resolve_source_dir() returns the
+        already-unpacked dir without rewriting it. Best-effort per song — one
+        bad feedpak must not block the set from starting (the play itself will
+        surface the error, exactly as it does outside a gig).
+        """
+        raw = (body or {}).get("songs")
+        # A str is iterable: without the list check, "abc" would prepare three
+        # one-character "songs". Cap the count too — this endpoint unpacks zips,
+        # so an oversized list is real work, and a setlist is a handful of songs.
+        if not isinstance(raw, list):
+            return {"ok": True, "prepared": 0, "failed": []}
+        files = [f for f in raw if isinstance(f, str) and f.strip()][:MAX_GIG_SONGS]
+        if not files:
+            return {"ok": True, "prepared": 0, "failed": []}
+
+        # .get, not []: a host that doesn't hand us the resolvers (or has no
+        # library configured) must degrade to "extract lazily, as before" — this
+        # is an optimisation, and it is never allowed to be the thing that stops
+        # a gig from starting.
+        get_dlc = context.get("get_dlc_dir")
+        get_cache = context.get("get_sloppak_cache_dir")
+        dlc_root = get_dlc() if callable(get_dlc) else None
+        cache_root = get_cache() if callable(get_cache) else None
+        if dlc_root is None or cache_root is None:
+            return {"ok": False, "prepared": 0, "failed": files, "error": "no library"}
+
+        root = Path(dlc_root)
+        prepared, failed = 0, []
+        for fn in files:
+            # CONTAINMENT FIRST. resolve_source_dir() does a bare
+            # `dlc_root / filename` with no guard, so a crafted `../..` would
+            # walk straight out of the library. Every other filename-bound
+            # handler validates through _resolve_dlc_path; so does this one.
+            safe = _resolve_dlc_path(root, fn)
+            if safe is None:
+                _state["log"].warning("career: gig pre-extract rejected unsafe path %r", fn)
+                failed.append(fn)
+                continue
+            try:
+                sloppak.resolve_source_dir(fn, root, Path(cache_root))
+                prepared += 1
+            except Exception as exc:   # noqa: BLE001 — one bad pak can't sink the set
+                _state["log"].warning("career: gig pre-extract failed for %s: %s", fn, exc)
+                failed.append(fn)
+        return {"ok": True, "prepared": prepared, "failed": failed}
+
     @app.post(f"/api/plugins/{PLUGIN_ID}/gigs/propose")
     def propose_gig(body: dict = Body(...)):
         inst = str((body or {}).get("instrument") or "")
@@ -775,7 +848,7 @@ def setup(app, context):
             picks.append(s)
         if len(picks) < size:
             exclude = {s["filename"] for s in picks}
-            picks.extend(_unplayed_genre_songs(gkey, exclude, size - len(picks)))
+            picks.extend(_fill_genre_songs(gkey, exclude, size - len(picks)))
         if not picks:
             raise HTTPException(404, "No songs of this genre in the library.")
         venue = _current_venue()

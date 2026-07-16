@@ -12,6 +12,10 @@
     'use strict';
 
     const API = '/api/plugins/career';
+    // Unpacking a setlist is real work (zips, possibly on a slow/network drive),
+    // so this is generous — but it is a CEILING, not a wait. Past it we start the
+    // gig and let the first play extract lazily, as it always did.
+    const PREPARE_TIMEOUT_MS = 60000;
     const VENUE_OVERRIDE_KEY = 'feedBack-career-venue';
     const NO_VENUE = '__none__';
     const PREV_VIZ_KEY = 'feedBack-career-prev-viz';
@@ -1123,10 +1127,52 @@
         sfx('page');
     }
 
-    function startGig() {
+    // Unpack the whole set before the first note.
+    //
+    // A feedpak is a zip, and the first play of one pays for its extraction. In
+    // a set that cost landed BETWEEN songs: the player finished a number and
+    // then sat there waiting for the next one to unpack, mid-gig. The setlist is
+    // known up front, so warm it all while the poster is still on screen.
+    //
+    // Best-effort by design: a library that won't pre-extract must not stop the
+    // gig from starting — the play itself surfaces the error the same way it
+    // does outside a gig. Slow is better than blocked.
+    async function prepareGigSongs(prop, btn) {
+        const label = btn && btn.textContent;
+        if (btn) { btn.disabled = true; btn.textContent = 'Preparing set…'; }
+        // A bare `await fetch(...)` only rejects on a network ERROR — a server
+        // that accepts the connection and then never answers hangs forever, and
+        // the gig would never start. That would make this optimisation the very
+        // thing it promises never to be: the reason you cannot play. Give up
+        // waiting and let the first play extract lazily, exactly as before.
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), PREPARE_TIMEOUT_MS);
+        try {
+            await fetch(`${API}/gigs/prepare`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ songs: prop.songs.map((s) => s.filename) }),
+                signal: ctrl.signal,
+            });
+        } catch (_) {
+            // abort, offline, non-2xx — all the same: start the gig anyway.
+        } finally {
+            clearTimeout(timer);
+            if (btn) { btn.disabled = false; if (label) btn.textContent = label; }
+        }
+    }
+
+    async function startGig(btn) {
         const prop = _ppGigProposal;
         const q = window.feedBack && window.feedBack.playQueue;
         if (!prop || !q || typeof q.start !== 'function' || typeof window.playSong !== 'function') return;
+
+        // Extract the setlist BEFORE the stage is borrowed and the queue starts,
+        // so a failure here leaves nothing half-applied to unwind.
+        await prepareGigSongs(prop, btn);
+        // The poster's Play could have been cancelled while we were unpacking.
+        if (_ppGigProposal !== prop) return;
+
         // The gig BORROWS the stage: stash whatever venue/viz the user had so
         // the set ending gives it back (unlike "Play here", which is an
         // explicit persistent choice on the venue card).
@@ -1146,7 +1192,21 @@
                 if (typeof window.setViz === 'function') window.setViz('venue');
             } catch (_) { /* viz optional — restore stays intact */ }
         }
+        // Push the gig's venue pack to the crowd layer NOW.
+        //
+        // crowd.setManifest(venue) is reached only through pushCrowdManifest,
+        // and pushCrowdManifest is called only from refresh() — the career
+        // tab's own reload. A gig navigates AWAY from the career tab to the
+        // player, so refresh() never runs during it, and setting the override
+        // above does nothing on its own. The result the testers saw: the venue
+        // visualization turns on (3D highway) but its crowd/stage pack never
+        // loads, so the song plays over the bare highway backdrop ("standard
+        // particles"), or over whatever venue a previous refresh() happened to
+        // leave applied. We just changed the override to this gig's venue, so
+        // re-push for it. _state is the career state the booking screen already
+        // fetched; guard for the rare null.
         _appliedManifestVenue = null;
+        if (_state) pushCrowdManifest(_state);
         _ppGigRun = {
             songs: prop.songs,
             venue_id: prop.venue_id,
@@ -1424,7 +1484,7 @@
         }
         const gigBtn = e.target.closest('[data-pp-gig]');
         if (gigBtn) { bookGig(gigBtn.dataset.ppGig); return; }
-        if (e.target.closest('[data-pp-gig-play]')) { startGig(); return; }
+        if (e.target.closest('[data-pp-gig-play]')) { startGig(e.target.closest('[data-pp-gig-play]')); return; }
         if (e.target.closest('[data-pp-gig-reroll]')) {
             if (_ppGigProposal) bookGig(_ppGigProposal.genre_key);
             return;
