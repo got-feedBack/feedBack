@@ -2234,10 +2234,10 @@ class MetadataDB:
         badging on the library grid. Only includes arrangements that have been
         played (plays > 0); unplayed arrangements are absent from the map
         rather than zeroed so the UI can distinguish 'not played' from 0%."""
-        existing_filter = self._existing_song_filter().strip()
+        existing_filter = self._existing_song_filter()
         rows = self.conn.execute(
             "SELECT filename, arrangement, best_accuracy FROM song_stats "
-            "WHERE plays > 0" + existing_filter
+            "WHERE plays > 0 " + existing_filter
         ).fetchall()
         result: dict = {}
         for fn, arr, acc in rows:
