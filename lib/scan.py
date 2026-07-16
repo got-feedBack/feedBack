@@ -51,6 +51,97 @@ from scan_worker import _relpath, _scan_one
 
 log = logging.getLogger("feedBack.scan")
 
+import json
+
+
+# ── Directory-signature fast path ─────────────────────────────────────────────
+#
+# A startup scan globs the whole library twice (*.feedpak, *.wem) and stats every
+# file to detect what changed. On a 50k-song library that lives on a slow mount
+# (an NTFS-3G FUSE volume here) it is ~100k filesystem round trips every launch —
+# the "big drive churns on every startup" report.
+#
+# But adds / removes / renames of songs all bump the mtime of the DIRECTORY that
+# holds them (verified on the target NTFS-3G mount), and so does the addition of
+# a subdirectory (a new entry in its parent). So after a scan we record every
+# library directory and its mtime; on the next scan we re-stat ONLY those
+# directories (a handful, vs 100k file ops). If none changed, the file set is
+# unchanged and the whole listing/stat pass is skipped.
+#
+# The one thing this cannot see is a file edited IN PLACE under the same name —
+# that bumps the file's mtime but not its directory's. That is rare for a song
+# library (you add and remove packs, you don't rewrite them under the same name),
+# and the manual Refresh forces a full scan (force=True) for exactly that case.
+def _dir_signature_file() -> Path:
+    return appstate.config_dir / "scan_dir_signature.json"
+
+
+def _load_dir_signature() -> dict | None:
+    try:
+        data = json.loads(_dir_signature_file().read_text(encoding="utf-8"))
+        if isinstance(data, dict) and isinstance(data.get("dirs"), dict):
+            return data
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def _save_dir_signature(dlc: Path, dirs: dict[str, int]) -> None:
+    # Keyed by the DLC path so switching libraries never matches a stale
+    # signature. Best-effort: a failed write just means the next scan is a full
+    # one, never a wrong one.
+    try:
+        _dir_signature_file().write_text(
+            json.dumps({"dlc": str(dlc), "dirs": dirs}), encoding="utf-8")
+    except OSError as e:
+        log.debug("scan: could not persist dir signature: %s", e)
+
+
+def _library_dirs(all_songs, dlc: Path) -> set[str]:
+    """Every directory whose mtime reflects an add/remove of a library song:
+    each song's containing directory and all of its ancestors up to the DLC
+    root (the root itself always included, as "."). Derived from the already-
+    listed songs — no extra filesystem walk. The builtin carve-outs
+    (tutorials-builtin / minigames-builtin) are absent because the caller
+    already excluded them from `all_songs`, so a minigame writing a drill there
+    never invalidates the fast path.
+
+    Directory-form songs (loose-song folders, directory sloppak bundles) also
+    record their OWN directory: a file added/removed/replaced INSIDE the folder
+    bumps that folder's mtime but not its parent's, so tracking only the parent
+    would miss an in-place change to such a song. File-form sloppaks (a single
+    .feedpak zip) aren't dirs, so they add nothing here — the flat file library
+    stays at a handful of dir stats."""
+    rels = {"."}
+    for f in all_songs:
+        rel = Path(_relpath(f, dlc))
+        if f.is_dir():
+            rels.add(rel.as_posix())
+        parent = rel.parent
+        rels.add(parent.as_posix())
+        for anc in parent.parents:
+            rels.add(anc.as_posix())
+    return rels
+
+
+def _record_dir_signature(all_songs, dlc: Path) -> None:
+    sig = _stat_dirs(dlc, _library_dirs(all_songs, dlc))
+    if sig is not None:   # a dir vanished mid-scan → skip; next scan is full
+        _save_dir_signature(dlc, sig)
+
+
+def _stat_dirs(dlc: Path, rels) -> dict[str, int] | None:
+    """{reldir: mtime_ns} for the given library dirs, or None if any is gone or
+    unreadable — a vanished recorded dir means the tree changed, so fail to a
+    full scan rather than a false match."""
+    out: dict[str, int] = {}
+    for rel in rels:
+        try:
+            out[rel] = (dlc if rel == "." else dlc / rel).stat().st_mtime_ns
+        except OSError:
+            return None
+    return out
+
 
 _SCAN_STATUS_INIT = {"running": False, "stage": "idle", "total": 0, "done": 0, "current": "", "error": None, "is_first_scan": False, "added": 0, "removed": 0}
 
@@ -99,8 +190,11 @@ def _make_scan_executor():
     )
 
 
-def background_scan():
+def background_scan(force: bool = False):
     """Scan the library and cache song metadata on startup. Uses a process pool to bypass the GIL for CPU-bound metadata parsing.
+
+    `force` skips the directory-signature fast path and always does the full
+    listing/stat pass — the manual Refresh sets it (see _dir_signature_file).
 
     Never sets `_scan_status["running"] = False` — ownership of that flag
     lives in `_scan_runner` so a `kick_scan()` racing this function's
@@ -120,6 +214,22 @@ def background_scan():
 
     builtin_content.seed_builtin_diagnostic_sloppaks(appstate.server_root, dlc)
     builtin_content.seed_builtin_starter_content(appstate.server_root, dlc)
+
+    # Fast path: if every library directory recorded by the last scan still has
+    # the same mtime, nothing was added, removed, or renamed, so the whole
+    # glob-and-stat pass below can be skipped (see the signature comment above).
+    # `force` (manual Refresh) always does the full pass. Seeding above is
+    # idempotent — it only writes when a builtin is missing — so it does not
+    # perturb the mtimes on a settled library.
+    if not force:
+        stored = _load_dir_signature()
+        if stored is not None and stored.get("dlc") == str(dlc):
+            current = _stat_dirs(dlc, stored["dirs"].keys())
+            if current is not None and current == stored["dirs"]:
+                _scan_status = {**_SCAN_STATUS_INIT, "running": True, "stage": "complete"}
+                log.info("Scan: library tree unchanged (%d dirs) — skipped the full listing/stat pass",
+                         len(current))
+                return
 
     # Listing can fail on macOS without Full Disk Access, or on Docker if the
     # path isn't shared. Report the failure explicitly rather than silently
@@ -223,6 +333,9 @@ def background_scan():
             to_scan.append((f, mtime, size, dlc))
 
     if not to_scan:
+        # Full pass completed with the DB already up to date — record the tree
+        # signature so the next startup can take the fast path.
+        _record_dir_signature(all_songs, dlc)
         _scan_status = {**_SCAN_STATUS_INIT, "running": True, "stage": "complete", "added": added, "removed": removed}
         log.info("Scan: nothing new to scan (%d songs, all cached)", len(all_songs))
         return
@@ -247,6 +360,9 @@ def background_scan():
             _scan_status["done"] += 1
             _scan_status["current"] = fname
 
+    # Record the tree signature after a completed full pass so the next startup
+    # can skip it when nothing has changed.
+    _record_dir_signature(all_songs, dlc)
     log.info("Scan complete: %d songs cached", len(to_scan))
     _scan_status = {**_SCAN_STATUS_INIT, "running": True, "stage": "complete", "added": added, "removed": removed}
 
@@ -255,6 +371,9 @@ _scan_kick_lock = threading.Lock()
 
 
 _scan_rescan_pending = False
+# Set by kick_scan(force=True); consumed by _scan_runner for the next pass so a
+# manual Refresh bypasses the directory-signature fast path.
+_scan_force_next = False
 
 
 # Handles to the running scan / enrichment worker threads. Both use the shared
@@ -265,8 +384,14 @@ _scan_rescan_pending = False
 _scan_thread: threading.Thread | None = None
 
 
-def kick_scan() -> bool:
+def kick_scan(force: bool = False) -> bool:
     """Request a library rescan, single-flight + coalescing.
+
+    `force` skips the directory-signature fast path for the resulting pass (the
+    manual Refresh uses it so an in-place same-name edit — the one thing the
+    fast path can't see — is always picked up). A forced request that coalesces
+    onto a running or queued scan keeps the force intent: the pass is forced if
+    ANY pending request asked for it.
 
     Returns True if a new scan thread was started, False if one was already
     running. In the latter case a follow-up pass is queued and runs as soon
@@ -275,8 +400,10 @@ def kick_scan() -> bool:
     until the next periodic pass. Multiple late-arriving requests coalesce
     into a single follow-up.
     """
-    global _scan_rescan_pending, _scan_thread
+    global _scan_rescan_pending, _scan_thread, _scan_force_next
     with _scan_kick_lock:
+        if force:
+            _scan_force_next = True
         if _scan_status["running"]:
             _scan_rescan_pending = True
             return False
@@ -290,10 +417,15 @@ def kick_scan() -> bool:
 
 def _scan_runner():
     """Run _background_scan, then re-run if requests arrived mid-scan."""
-    global _scan_rescan_pending
+    global _scan_rescan_pending, _scan_force_next
     while True:
+        # Consume the force flag for THIS pass; a forced request queued mid-scan
+        # sets it again for the follow-up.
+        with _scan_kick_lock:
+            forced = _scan_force_next
+            _scan_force_next = False
         try:
-            background_scan()
+            background_scan(force=forced)
         except Exception:
             log.exception("background scan failed unexpectedly")
 
