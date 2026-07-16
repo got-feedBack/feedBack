@@ -404,7 +404,7 @@
             '<div class="shrink-0 flex flex-col gap-[3px] items-center justify-center">' + meter + '</div>' +
             '<div class="min-w-0 text-white text-center leading-none">' +
             '<div data-tuner-note class="text-2xl font-black italic tracking-tighter leading-none">' + esc(initNote) + '</div>' +
-            '<div data-tuner-tuning class="text-[0.5rem] text-gray-400 mt-0.5 tracking-wider truncate leading-tight">' + esc(tuningName) + '</div>' +
+            '<div data-tuner-tuning class="text-[0.4375rem] text-gray-400 mt-0.5 tracking-wider leading-tight">' + esc(tuningName) + '</div>' +
             '<div data-tuner-hz class="text-[0.5625rem] text-gray-500 tracking-wider truncate">' + hz + 'hz</div>' +
             '</div></button>' +
             '</div>';
@@ -550,9 +550,9 @@
             '<button type="button" data-inst-toggle title="' + esc(toggleTitle) + '" ' +
             'class="bg-fb-card border border-fb-border/50 rounded-2xl h-[92px] w-16 flex flex-col items-center justify-center gap-1 hover:ring-1 hover:ring-fb-primary/40 transition">' +
             iconForInstrument(currentInst) +
-            (wt ? '<span class="text-[0.5625rem] leading-none font-semibold max-w-full truncate px-0.5 ' +
-                (wt.isHome ? 'text-fb-textDim' : 'text-amber-400') + '">' + esc(wt.short) + '</span>'
-                : (roleLabel ? '<span class="text-[0.5625rem] leading-none font-semibold max-w-full truncate px-0.5 text-fb-textDim">' + esc(roleLabel) + '</span>' : '')) +
+            (roleLabel ? '<span class="text-[0.5625rem] leading-none font-semibold max-w-full truncate px-0.5 text-fb-textDim">' + esc(roleLabel) + '</span>'
+                : (wt ? '<span class="text-[0.5625rem] leading-none font-semibold max-w-full truncate px-0.5 ' +
+                    (wt.isHome ? 'text-fb-textDim' : 'text-amber-400') + '">' + esc(wt.short) + '</span>' : '')) +
             '<svg class="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5"/></svg>' +
             '</button>' +
             '<div data-inst-menu class="hidden absolute right-0 mt-2 w-60 bg-fb-card border border-fb-border/50 rounded-xl shadow-xl p-3 z-50 space-y-3">' +
@@ -564,10 +564,6 @@
                   '</div>'
                 : '') +
             instRow('Instrument', instPills) +
-            (isStringed ? instRow('Strings', stringCountsFor(settings.instrument).map((v) =>
-                pill('strings', v, v + '', settings.string_count === v)).join('')) : '') +
-            (isKeyboard ? instRow('Keys', (currentInst.key_counts || [25, 49, 61, 88]).map((v) =>
-                pill('key_count', v, v + '', (settings.key_count || currentInst.default_key_count || 88) === v)).join('')) : '') +
             // Role selector — shown when the instrument has 2+ roles.
             // Clicking a role switches the active profile so arrangement routing
             // and mastery tracking know which part to target.
@@ -577,6 +573,11 @@
                     var isActive = settings.active_instrument_profile === profileId;
                     return pill('role', profileId, r.label, isActive);
                 }).join(''))
+                : '') +
+            (isStringed ? instRow('Strings', stringCountsFor(settings.instrument).map((v) =>
+                pill('strings', v, v + '', settings.string_count === v)).join('')) : '') +
+            (isKeyboard ? instRow('Keys', (currentInst.key_counts || [25, 49, 61, 88]).map((v) =>
+                pill('key_count', v, v + '', (settings.key_count || currentInst.default_key_count || 88) === v)).join('')) : '') +
                 : '') +
             // Handedness only for stringed instruments where frets get mirrored.
             (isStringed ? instRow('Handedness', pill('hand', 'right', 'Right', !_leftyPref()) +
