@@ -407,7 +407,21 @@ export function setupAppUpdates() {
     // that needs to tell main about a channel switch.
     if (!_appUpdatesWired) {
         try {
-            void Promise.resolve(updateApi.setChannel(stored)).catch((e) => {
+            // Render from THIS call's own result (same reasoning as the check
+            // button and the 'change' handler below), not just catch its
+            // errors. The unconditional renderStatus() at the bottom of this
+            // function fires a SEPARATE getStatus() round-trip immediately
+            // after — if that resolves before main has processed this
+            // setChannel() (e.g. main is still on its 'stable' boot default),
+            // the UI would render 'unsupported' and — since this call's own
+            // eventual success was never rendered — get stuck there
+            // permanently, even once main correctly switches channel a moment
+            // later. Rendering here too means whichever of the two calls
+            // resolves LAST wins and shows the true state, regardless of
+            // which order they land in.
+            void Promise.resolve(updateApi.setChannel(stored)).then((result) => {
+                renderFrom(result);
+            }).catch((e) => {
                 console.warn('[updater] setChannel(initial) failed:', e);
             });
         } catch (e) {
