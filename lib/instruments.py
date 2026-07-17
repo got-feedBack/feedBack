@@ -20,6 +20,7 @@ _PROFILE_PATHWAYS = ("songs", "practice", "learn", "studio")
 
 
 def _validate_str(value, field_name, max_len=128):
+    """Validate a required non-empty string field, returning stripped value."""
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field_name} must be a non-empty string")
     if len(value) > max_len:
@@ -28,6 +29,7 @@ def _validate_str(value, field_name, max_len=128):
 
 
 def _validate_optional_str(value, field_name, max_len=256):
+    """Validate an optional string field; None passes through, non-empty string required otherwise."""
     if value is None:
         return None
     if not isinstance(value, str):
@@ -38,6 +40,7 @@ def _validate_optional_str(value, field_name, max_len=256):
 
 
 def _validate_float_range(value, field_name, lo, hi):
+    """Validate a numeric value falls within [lo, hi], rejecting bools."""
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         raise ValueError(f"{field_name} must be a number")
     v = float(value)
@@ -47,6 +50,7 @@ def _validate_float_range(value, field_name, lo, hi):
 
 
 def _validate_midi_list(lst, field_name, expected_len):
+    """Validate a list of MIDI note numbers (ints in 0-127) of the given length."""
     if not isinstance(lst, list):
         raise ValueError(f"{field_name} must be a list")
     if len(lst) != expected_len:
@@ -63,6 +67,7 @@ def _validate_midi_list(lst, field_name, expected_len):
 
 
 def _validate_offset_list(lst, field_name, expected_len):
+    """Validate a list of semitone offsets (ints in -12..12) of the given length."""
     if not isinstance(lst, list):
         raise ValueError(f"{field_name} must be a list of offsets")
     if len(lst) != expected_len:
@@ -242,17 +247,25 @@ class InstrumentRegistry:
         log.info("registered instrument %r (%s)", inst_id, label)
 
     def unregister(self, instrument_id: str):
+        """Remove an instrument definition from the registry."""
         if instrument_id in self._instruments:
             del self._instruments[instrument_id]
             log.info("unregistered instrument %r", instrument_id)
 
     def get(self, instrument_id: str) -> dict | None:
+        """Return the definition for a single instrument, or None."""
         return self._instruments.get(instrument_id)
 
     def get_all(self) -> list[dict]:
+        """Return all registered instrument definitions."""
         return list(self._instruments.values())
 
     def compute_tuning_midis(self, instrument_id: str, string_count: int, tuning_name: str) -> list[int] | None:
+        """Return absolute MIDI notes for a named tuning on a stringed instrument.
+
+        Computed by adding the tuning's semitone offsets to the instrument's
+        standard open-string MIDI notes for the given string count.
+        """
         inst = self._instruments.get(instrument_id)
         if not inst or inst["kind"] != "stringed":
             return None
@@ -264,18 +277,21 @@ class InstrumentRegistry:
         return [s + o for s, o in zip(std, offsets)]
 
     def get_tuning_names(self, instrument_id: str, string_count: int) -> list[str]:
+        """Return all tuning preset names for a stringed instrument + string count."""
         inst = self._instruments.get(instrument_id)
         if not inst or inst["kind"] != "stringed":
             return []
         return list((inst["tunings"].get(str(string_count)) or {}).keys())
 
     def get_standard_midis(self, instrument_id: str, string_count: int) -> list[int] | None:
+        """Return standard open-string MIDI notes for a stringed instrument + string count."""
         inst = self._instruments.get(instrument_id)
         if not inst or inst["kind"] != "stringed":
             return None
         return inst["standard_tunings"].get(str(string_count))
 
     def get_default_role(self, instrument_id: str) -> str | None:
+        """Return the id of the default role for an instrument, or None."""
         inst = self._instruments.get(instrument_id)
         if not inst:
             return None
@@ -287,6 +303,7 @@ class InstrumentRegistry:
         return None
 
     def find_role_by_arrangement(self, instrument_id: str, arr_name: str, arr_flags: dict = None) -> str | None:
+        """Find the role id matching an arrangement name or path flags for a specific instrument."""
         inst = self._instruments.get(instrument_id)
         if not inst:
             return None
@@ -301,6 +318,7 @@ class InstrumentRegistry:
         return None
 
     def instrument_id_for_arrangement(self, arr_name: str, arr_flags: dict = None) -> str | None:
+        """Return the instrument id whose roles match a given arrangement name or flags."""
         name_lower = (arr_name or "").strip().lower()
         for inst in self._instruments.values():
             for role in inst["roles"]:

@@ -243,8 +243,7 @@ def api_stats_best():
 
 @router.get("/api/stats/best-by-arrangement")
 def api_stats_best_by_arrangement():
-    """{filename: {arrangement_index: best_accuracy}} per-arrangement accuracy,
-    for per-role badging and hover overlays on the library grid."""
+    """Return {filename: {arrangement_index: best_accuracy}} for per-role badging."""
     return appstate.meta_db.arrangement_accuracy_map()
 
 

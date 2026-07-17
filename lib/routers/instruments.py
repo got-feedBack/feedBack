@@ -12,5 +12,6 @@ router = APIRouter()
 
 @router.get("/api/instruments")
 def get_instruments():
+    """Return all instrument definitions registered via instrument plugins."""
     reg = getattr(appstate, "instrument_registry", None)
     return reg.get_all() if reg else []

@@ -28,6 +28,7 @@ def set_instrument_registry(reg):
 
 
 def _build_standard_midis(registry=None):
+    """Build {instrument_key: [midis]} from the registry, falling back to hardcoded STANDARD_OPEN_MIDIS."""
     reg = registry or _instrument_registry
     result = {}
     if reg:
@@ -43,6 +44,7 @@ def _build_standard_midis(registry=None):
 
 
 def _build_preset_midis(registry=None):
+    """Build {instrument_key: {tuning_name: [midis]}} from the registry, falling back to TUNING_PRESET_MIDIS."""
     reg = registry or _instrument_registry
     result = {}
     if reg:
@@ -66,6 +68,7 @@ def _build_preset_midis(registry=None):
 
 
 def _build_profile_defaults(registry=None):
+    """Build {profile_id: profile_dict} from registered instruments, falling back to PROFILE_DEFAULTS."""
     reg = registry or _instrument_registry
     result = {}
     if reg:
@@ -97,11 +100,13 @@ def _build_profile_defaults(registry=None):
 
 
 def _build_profile_ids(registry=None):
+    """Return a tuple of valid instrument profile ids, derived from the registry."""
     profiles = _build_profile_defaults(registry)
     return tuple(profiles.keys())
 
 
 def _valid_instrument_ids(registry=None):
+    """Return the set of valid instrument IDs from the registry, or a guitar/bass fallback."""
     reg = registry or _instrument_registry
     if reg:
         ids = {inst["id"] for inst in reg.get_all()}
@@ -111,6 +116,7 @@ def _valid_instrument_ids(registry=None):
 
 
 def _default_profile_id_for_instrument(instrument_id, registry=None):
+    """Return the profile id for an instrument's default role, e.g. 'guitar-lead'."""
     profiles = _build_profile_defaults(registry)
     for pid, profile in profiles.items():
         if profile["instrument"] == instrument_id and profile.get("default_role"):
