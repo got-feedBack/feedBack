@@ -551,23 +551,29 @@
         // role filter, and use ITS accuracy rather than the song-wide max.
         var acc = null;
         var arrIdx = song ? _matchingArrangementIndex(song) : null;
-        if (arrIdx != null) {
+        var hasMatchingArrangement = arrIdx != null;
+        if (hasMatchingArrangement) {
             acc = _perArrangementAccuracy(filename, arrIdx);
         }
         // Fall back to song-wide max only when no auto-filter is active.
-        // When a specific role is selected but the song has no matching
-        // arrangement, show nothing instead of attributing a different
-        // role's score.
         if (acc == null && !state.filters.arr_has.length) acc = state.accuracy[filename];
         var hasArr = song && song.arrangements && song.arrangements.length > 0;
-        // Show badge when we have accuracy OR the song has arrangements
-        // (so the hover overlay works even for unplayed songs).
         if (acc == null && !hasArr) return '';
 
         var pct = acc != null ? Math.floor(acc * 100) : null;
+        // Display: "n/a" when the selected role has no arrangement in this song;
+        // "— %" when the arrangement exists but hasn't been played yet.
+        var displayLabel;
+        if (pct != null) {
+            displayLabel = pct + '%';
+        } else if (_arrAutoInstrument && !hasMatchingArrangement) {
+            displayLabel = 'n/a';
+        } else {
+            displayLabel = '— %';
+        }
         if (variant === 'tree') {
             var color = acc != null && acc >= MASTERY_ACCURACY ? 'text-fb-good' : acc != null && acc >= 0.5 ? 'text-fb-mid' : 'text-fb-low';
-            return '<span class="fb-acc-badge text-xs font-bold ' + color + '">' + (pct != null ? pct : '—') + '%</span>';
+            return '<span class="fb-acc-badge text-xs font-bold ' + color + '">' + displayLabel + '</span>';
         }
 
         // Build hover overlay with all arrangement accuracies
@@ -597,7 +603,7 @@
         var badgeText = acc != null && acc >= 0.5 && acc < MASTERY_ACCURACY ? 'text-black' : 'text-white';
         var borderColor = acc != null ? (acc >= MASTERY_ACCURACY ? '#22c55e' : (acc >= 0.5 ? '#eab308' : '#ef4444')) : '#4b5563';
         return '<span class="fb-acc-badge absolute bottom-0 right-0 px-2 py-0.5 rounded-tl-md text-xs font-bold flex items-center gap-1 opacity-100 group-hover:opacity-0 transition border-l-2 border-t-2 ' + badgeText + '" style="background:' + badgeColor + ';border-color:' + borderColor + '">' +
-            (pct != null ? pct : 'n/a') + '</span>' + hoverOverlay;
+            displayLabel + '</span>' + hoverOverlay;
     }
 
     function _roleIcon(arrName) {
