@@ -275,6 +275,12 @@ export function setupAppUpdates() {
     // visible and appends what's happening, so the download progress never
     // obscures which build you're on.
     function renderFrom(s, extra) {
+        // Diagnostic trace: log the raw status object on EVERY render
+        // (unconditionally, before any branching) — auto-captured by
+        // diagnostics.js's console wrap into the exportable ring buffer, so
+        // "Export Diagnostics" in this same Settings → System panel captures
+        // exactly what the app saw and decided, not just what the UI showed.
+        console.log('[update-diag] renderFrom', JSON.stringify(s), extra ? `extra=${extra}` : '');
         if (!s) { statusEl.textContent = extra || 'Updater status unavailable.'; return; }
         if (s.status === 'unsupported' || s.platform === 'linux') {
             showLinuxFallback('Auto-update requires the AppImage build on the Nightly channel.');
@@ -326,6 +332,27 @@ export function setupAppUpdates() {
         checkBtn.disabled = btnDisabled;
         const line = `${base} · ${action}`;
         statusEl.textContent = extra ? `${extra} · ${line}` : line;
+
+        // Live structured snapshot (overwrites, not a log) via the existing
+        // diagnostics contribute() API — 'audio_engine' is feedBack-desktop's
+        // own registered plugin id, so the server's diagnostics export won't
+        // filter it out. Always current, no scrolling through console history
+        // needed to answer "what does the app think is going on right now."
+        try {
+            window.feedBack?.diagnostics?.contribute('audio_engine', {
+                update: {
+                    channel: s.channel || channelSelect.value,
+                    status: s.status,
+                    currentVersion: s.currentVersion ?? null,
+                    lastChecked: s.lastChecked ?? null,
+                    percent: typeof s.percent === 'number' ? s.percent : null,
+                    message: s.message ?? null,
+                    rendered: line,
+                    ts: Date.now(),
+                },
+            });
+        } catch (_) { /* diagnostics.js not loaded — never let this break rendering */ }
+
         // A download runs in the background (the check returns immediately), so
         // poll for the terminal state rather than relying solely on a one-shot
         // "downloaded" event that could be missed or arrive out of order.
@@ -388,6 +415,7 @@ export function setupAppUpdates() {
         channelSelect.addEventListener('change', async () => {
             const val = channelSelect.value;
             if (!APP_UPDATE_CHANNELS.includes(val)) return;
+            console.log('[update-diag] user switched channel to', val);
             try { localStorage.setItem('feedBack-update-channel', val); localStorage.removeItem('slopsmith-update-channel'); } catch (_) {}
             try {
                 // Render from setChannel()'s own return value (same reasoning
@@ -406,6 +434,7 @@ export function setupAppUpdates() {
             // In restart mode (set by renderFrom once an update is staged) the
             // button applies the update instead of checking again.
             if (checkBtn.dataset.mode === 'restart') {
+                console.log('[update-diag] user clicked Restart now');
                 checkBtn.disabled = true;
                 checkBtn.textContent = 'Restarting…';
                 try {
@@ -423,6 +452,7 @@ export function setupAppUpdates() {
                 }
                 return;
             }
+            console.log('[update-diag] user clicked Check for updates');
             checkBtn.disabled = true;
             statusEl.textContent = 'Checking for updates…';
             let result;
@@ -446,6 +476,15 @@ export function setupAppUpdates() {
             // just succeeded.
             renderFrom(result);
         });
+
+        // Main-process events (checkNow/download decisions in update-manager.ts)
+        // are invisible to this page's console — forward them into it so a
+        // single "Export Diagnostics" click captures both sides of the story.
+        if (typeof updateApi.onDiag === 'function') {
+            updateApi.onDiag((payload) => {
+                console.log('[update-diag:main]', payload?.message, payload?.data ? JSON.stringify(payload.data) : '');
+            });
+        }
 
         _appUpdatesWired = true;
     }
