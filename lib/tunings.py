@@ -322,14 +322,17 @@ PROFILE_DEFAULTS: dict[str, dict] = {
 
 
 def instrument_key(instrument: str, string_count: int) -> str:
+    """Build the canonical instrument key, e.g. 'guitar-6'."""
     return f"{instrument}-{string_count}"
 
 
 def default_instrument_profiles(registry=None) -> dict[str, dict]:
+    """Return the default host instrument profiles dict."""
     return _build_profile_defaults(registry)
 
 
 def _valid_reference_pitch(value) -> float | None:
+    """Validate reference pitch is a float in [430, 450]; return None on failure."""
     if isinstance(value, bool):
         return None
     try:
@@ -342,6 +345,12 @@ def _valid_reference_pitch(value) -> float | None:
 
 
 def _valid_tuning_for_key(key: str, tuning, *, registry=None):
+    """Validate a tuning name or offset list against the registry for a given instrument key.
+    
+    Accepts built-in names for the key, maps legacy 'Standard' to the all-zero
+    tuning, rejects misapplied built-ins from other keys, and passes through
+    unknown names as provider/custom tunings.
+    """
     preset_midis = _build_preset_midis(registry)
     standard_midis = _build_standard_midis(registry)
     if isinstance(tuning, str):
@@ -349,12 +358,23 @@ def _valid_tuning_for_key(key: str, tuning, *, registry=None):
             return None
         if tuning in preset_midis.get(key, {}):
             return tuning
-        # Accept any named tuning not in our presets as a provider/custom
-        # tuning — the registry (and tuning providers) own validity now.
-        # Previously we rejected names that existed in a different key as
-        # misapplied built-ins, but with instruments-as-plugins the same
-        # name (e.g. "E Standard") can legitimately exist for different
-        # instrument keys (guitar-6 vs guitar-8).
+        # Legacy alias: "Standard" → all-zero-offset tuning for this key.
+        # Users who had "Standard" saved before the rename to "E Standard" /
+        # "B Standard" / "F# Standard" get auto-migrated.
+        if tuning == "Standard":
+            std_presets = preset_midis.get(key, {})
+            if std_presets:
+                # Find the tuning with all-zero offsets as the standard for this key.
+                target = next((n for n, m in std_presets.items()
+                               if m == standard_midis.get(key)), None)
+                if target:
+                    return target
+            return None
+        # Reject names that exist as built-ins for a DIFFERENT key — they're
+        # misapplied (e.g. "Drop D" on a 5-string bass). Names unknown to
+        # every built-in table are provider/custom tunings and are accepted.
+        if any(tuning in names for names in preset_midis.values()):
+            return None
         return tuning
     if isinstance(tuning, list):
         expected = len(standard_midis.get(key, []))
@@ -454,6 +474,7 @@ def normalize_instrument_profiles(raw_profiles=None, *, registry=None) -> tuple[
 
 
 def active_profile_id(raw, *, registry=None) -> str:
+    """Return the normalized active profile id, falling back to guitar-lead."""
     defaults = _build_profile_defaults(registry)
     return raw if raw in defaults else "guitar-lead"
 
@@ -481,7 +502,18 @@ def profile_from_legacy_settings(cfg: dict, *, registry=None) -> dict:
         if key not in standard_midis:
             sc = fallback_sc
             key = instrument_key(instrument, sc)
-        tuning = _valid_tuning_for_key(key, cfg.get("tuning", "E Standard"), registry=registry) or "E Standard"
+        # Use the instrument key's actual standard tuning as the default,
+        # not a hardcoded "E Standard" which doesn't work for 7/8-string.
+        preset_midis = _build_preset_midis(registry)
+        std_midis = _build_standard_midis(registry)
+        key_std = std_midis.get(key)
+        default_tuning = "E Standard"
+        if key_std:
+            for name, midis in preset_midis.get(key, {}).items():
+                if midis == key_std:
+                    default_tuning = name
+                    break
+        tuning = _valid_tuning_for_key(key, cfg.get("tuning", default_tuning), registry=registry) or default_tuning
     else:
         sc = 0
         tuning = ""
@@ -561,7 +593,19 @@ def apply_flat_instrument_patch_to_profiles(cfg: dict, updates: dict, *, registr
         if is_str:
             key = instrument_key(current["instrument"], current["string_count"])
             if _valid_tuning_for_key(key, current.get("tuning"), registry=reg) is None:
-                current["tuning"] = "E Standard"
+                # Use the key's actual standard tuning (E Standard, B Standard,
+                # F# Standard) rather than a hardcoded "E Standard".
+                preset_midis = _build_preset_midis(reg)
+                std_midis = _build_standard_midis(reg)
+                key_presets = preset_midis.get(key, {})
+                key_std = std_midis.get(key)
+                fallback = "E Standard"
+                if key_presets and key_std:
+                    for name, midis in key_presets.items():
+                        if midis == key_std:
+                            fallback = name
+                            break
+                current["tuning"] = fallback
 
     profile, error = normalize_instrument_profile(active, current, registry=reg)
     if error:
@@ -577,6 +621,7 @@ def apply_flat_instrument_patch_to_profiles(cfg: dict, updates: dict, *, registr
     return out
 
 def tuning_name(offsets: list[int]) -> str:
+    """Return a human-readable name for semitone offsets, e.g. 'E Standard' or 'Drop D'."""
     # All three pattern checks below are gated on `len(offsets) == 6`. The
     # naming conventions here are 6-string-specific — e.g. a 7-string all-zeros
     # tuning has a low B, not an E, so labeling it "E Standard" would be wrong.

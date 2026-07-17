@@ -17,12 +17,12 @@ from tunings import (
 
 
 def test_valid_tuning_for_key_builtin_and_provider_names():
-    # Built-in valid for the key is accepted; names that would have been
-    # misapplied built-ins under the old cross-key check are now accepted
-    # as provider/custom tunings (the registry owns validity per-instrument).
+    # Built-in valid for the key is accepted.
     assert _valid_tuning_for_key("bass-5", "Drop A") == "Drop A"
-    assert _valid_tuning_for_key("bass-5", "Drop D") == "Drop D"
-    assert _valid_tuning_for_key("guitar-6", "Standard") == "Standard"
+    # Misapplied built-in (Drop D on a 5-string bass — the 5-string drop is Drop A) is rejected.
+    assert _valid_tuning_for_key("bass-5", "Drop D") is None
+    # Legacy "Standard" is mapped to the all-zero tuning for the key.
+    assert _valid_tuning_for_key("guitar-6", "Standard") == "E Standard"
     # A name unknown to every built-in table is a provider/custom tuning (tuner
     # plugin, /api/tunings) the pure layer can't resolve — accept it so settings
     # round-trip rather than normalizing it away to Standard.
@@ -249,7 +249,9 @@ def test_flat_string_count_patch_resets_incompatible_named_tuning():
     settings = settings_with_instrument_profiles({"instrument": "guitar", "string_count": 6, "tuning": "DADGAD"})
     patched = apply_flat_instrument_patch_to_profiles(settings, {"string_count": 7})
     assert patched["string_count"] == 7
-    assert patched["tuning"] == "DADGAD"
+    # DADGAD is a 6-string tuning — patching to 7 strings resets to B Standard
+    # (the all-zero tuning for guitar-7) because the cross-key check rejects it.
+    assert patched["tuning"] == "B Standard"
 
 
 # ── freqs_to_midis (the /api/tunings tuningMidis inverse) ────────────────────

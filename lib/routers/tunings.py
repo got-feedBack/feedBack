@@ -17,6 +17,7 @@ router = APIRouter()
 
 @router.get("/api/tunings")
 def get_tunings():
+    """Return the merged tuning catalog (registry built-ins + provider contributions)."""
     cfg = _load_config(appstate.config_dir / "config.json") or {}
     ref = cfg.get("reference_pitch", DEFAULT_REFERENCE_PITCH)
     try:

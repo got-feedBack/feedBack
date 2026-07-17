@@ -178,6 +178,7 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
     _keepalive_active = True
 
     async def _send_keepalives():
+        """Send periodic WebSocket pings to keep the connection alive."""
         while _keepalive_active:
             try:
                 await asyncio.sleep(3)
@@ -458,6 +459,7 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
                     break
 
         def _evict_audio_cache():
+            """Evict old entries from the audio cache to bound disk usage."""
             # Keep appstate.audio_cache_dir bounded so a library full of loose
             # folders / many archives doesn't fill disk. LRU on st_atime
             # so songs the user keeps replaying stay warm. Best-effort:

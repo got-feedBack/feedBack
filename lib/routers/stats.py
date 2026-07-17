@@ -271,4 +271,5 @@ def api_top_stats(limit: int = 5):
 
 @router.get("/api/stats/{filename:path}")
 def api_song_stats(filename: str):
+    """Return per-arrangement stats for a single song."""
     return appstate.meta_db.get_song_stats(filename)

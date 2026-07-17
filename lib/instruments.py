@@ -93,6 +93,7 @@ class InstrumentRegistry:
     """
 
     def __init__(self):
+        """Initialise an empty registry."""
         self._instruments: dict[str, dict] = {}
 
     def register(self, definition: dict):

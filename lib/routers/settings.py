@@ -38,12 +38,14 @@ _settings_lock = threading.Lock()
 
 @router.get("/api/settings")
 def get_settings():
+    """Return the merged settings dict with instrument profiles virtualized from config.json."""
     cfg = _load_config(appstate.config_dir / "config.json")
     return settings_with_instrument_profiles(cfg if cfg is not None else appstate.default_settings())
 
 
 @router.post("/api/settings")
 def save_settings(data: dict):
+    """Validate and persist partial settings updates to config.json atomically."""
     # Partial-update: merge only keys present in the request body so
     # single-key POSTs (like the difficulty slider's oninput) don't
     # clobber unrelated settings on disk.
