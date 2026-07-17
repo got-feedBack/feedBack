@@ -1,4 +1,4 @@
-// Instruments settings tab — renders collapsible instrument cards from
+// Instruments settings tab ΓÇö renders collapsible instrument cards from
 // GET /api/instruments, with editable custom tunings and arrangement patterns.
 // User overrides are persisted to config.json via POST /api/settings under
 // the "instrument_overrides" key so they survive restarts.
@@ -74,7 +74,7 @@
 
             html += '<div id="' + id + '" class="' + (isOpen ? '' : 'hidden') + ' space-y-4 pl-4 border-l-2 border-fb-border/30">';
 
-            // ── Roles ──────────────────────────────────
+            // ΓöÇΓöÇ Roles ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
             if (inst.roles && inst.roles.length) {
                 html += '<div><div class="text-[0.625rem] uppercase tracking-wider text-fb-textDim mb-1.5">Roles</div>' +
                     '<div class="flex flex-wrap gap-1">';
@@ -87,23 +87,32 @@
                 html += '</div></div>';
             }
 
-            // ── Arrangement name patterns (editable) ────
+            // ΓöÇΓöÇ Arrangement name patterns (editable) ΓöÇΓöÇΓöÇΓöÇ
             html += _renderEditableNames(inst, over);
 
-            // ── String counts (stringed, editable) ─────
+            // ΓöÇΓöÇ String counts (stringed, editable) ΓöÇΓöÇΓöÇΓöÇΓöÇ
             if (isStringed) {
                 html += _renderEditableStringCounts(inst, over);
             }
 
-            // ── Custom tunings (stringed, editable) ────
+            // ΓöÇΓöÇ Custom tunings (stringed, editable) ΓöÇΓöÇΓöÇΓöÇ
             if (isStringed) {
                 html += _renderTunings(inst, over);
             }
 
-            // ── Preferred highway ───────────────────────
-            html += (_renderHighwaySelectSafe(inst, over));
+            // Preferred highway
+            if (_vizPlugins.length) {
+                var hwCurrent = over.preferred_highway || '';
+                html += '<div class="mb-2"><div class="text-[0.625rem] uppercase tracking-wider text-fb-textDim mb-1.5">Preferred highway</div>' +
+                    '<select data-highway="' + esc(inst.id) + '" class="bg-gray-800/50 border border-gray-700 rounded-md px-2 py-1 text-xs text-fb-text outline-none focus:border-fb-primary w-full">' +
+                    '<option value="">Auto (match arrangement)</option>';
+                for (var v = 0; v < _vizPlugins.length; v++) {
+                    var vp = _vizPlugins[v];
+                    html += '<option value="' + esc(vp.id) + '"' + (vp.id === hwCurrent ? ' selected' : '') + '>' + esc(vp.name) + '</option>';
+                }
+                html += '</select></div>';
+            }
 
-            // ── Info row ───────────────────────────────
             html += '<div class="text-[0.625rem] text-fb-textDim flex flex-wrap gap-3 pb-2">' +
                 '<span>Ref: ' + esc(String(inst.reference_pitch)) + ' Hz</span>' +
                 '<span>Detect: ' + esc(inst.detect_strategy) + '</span>' +
@@ -142,7 +151,7 @@
                     ? '<button type="button" data-remove-name="' + esc(item.name) + '" data-inst="' + esc(inst.id) + '" class="ml-1 text-red-400 hover:text-red-300 text-[0.625rem]" title="Remove">&times;</button>'
                     : '';
                 html += '<span class="text-xs bg-gray-800/50 border ' + (item.source === 'user' ? 'border-green-700/50' : 'border-gray-700') + ' rounded-md px-2 py-0.5">' +
-                    esc(item.name) + ' <span class="text-fb-textDim text-[0.625rem]">→ ' + esc(item.role) + '</span>' + removeBtn +
+                    esc(item.name) + ' <span class="text-fb-textDim text-[0.625rem]">ΓåÆ ' + esc(item.role) + '</span>' + removeBtn +
                     '</span>';
             }
             html += '</div>';
@@ -178,23 +187,6 @@
             '<button type="button" data-add-sc-btn="' + esc(inst.id) + '" class="bg-fb-primary/20 hover:bg-fb-primary/30 text-fb-primary text-xs px-2 py-1 rounded-md transition">Add</button>' +
             '</div></div>';
         return html;
-    }
-
-    function _renderHighwaySelectSafe(inst, over) {
-        try { return _renderHighwaySelect(inst, over); } catch (e) { console.error('highway select error', e); return ''; }
-    }
-
-    function _renderHighwaySelect(inst, over) {
-        if (!_vizPlugins.length) return '';
-        var current = over.preferred_highway || '';
-        var opts = '<option value="">Auto (match arrangement)</option>';
-        for (var v = 0; v < _vizPlugins.length; v++) {
-            var vp = _vizPlugins[v];
-            opts += '<option value="' + esc(vp.id) + '"' + (vp.id === current ? ' selected' : '') + '>' + esc(vp.name) + '</option>';
-        }
-        return '<div class="mb-2" data-section="highway" data-inst="' + esc(inst.id) + '">' +
-            '<div class="text-[0.625rem] uppercase tracking-wider text-fb-textDim mb-1.5">Preferred highway</div>' +
-            '<select data-highway="' + esc(inst.id) + '" class="bg-gray-800/50 border border-gray-700 rounded-md px-2 py-1 text-xs text-fb-text outline-none focus:border-fb-primary w-full">' + opts + '</select></div>';
     }
 
     function _renderTunings(inst, over) {
@@ -238,7 +230,6 @@
                     if (std && entry.offsets && std.length === entry.offsets.length) {
                         for (var oi = 0; oi < entry.offsets.length; oi++) {
                             midis.push(std[oi] + entry.offsets[oi]);
-                            }
                         }
                     }
                     var noteLabel = midis.length ? midis.map(function (m) { return midiToNote(m); }).join(' ') : '';
@@ -260,6 +251,7 @@
                 '<input type="text" data-add-tuning-offsets="' + esc(inst.id) + '" data-sc="' + esc(scKey) + '" placeholder="Offsets e.g. 0,0,0,0,0,0" class="bg-gray-800/50 border border-gray-700 rounded-md px-1.5 py-0.5 text-[0.625rem] text-fb-text outline-none w-44 focus:border-fb-primary font-mono">' +
                 '<button type="button" data-add-tuning-btn="' + esc(inst.id) + '" data-sc="' + esc(scKey) + '" class="bg-fb-primary/20 hover:bg-fb-primary/30 text-fb-primary text-[0.625rem] px-1.5 py-0.5 rounded-md transition">Add</button>' +
                 '</div></div>';
+        }
 
         html += '</div>';
         return html;
@@ -394,11 +386,8 @@
                 var instId = sel.getAttribute('data-highway');
                 var over = getOverrides(instId);
                 var val = sel.value;
-                if (val) {
-                    over.preferred_highway = val;
-                } else {
-                    delete over.preferred_highway;
-                }
+                if (val) { over.preferred_highway = val; }
+                else { delete over.preferred_highway; }
                 saveOverridesDebounced();
                 renderInstruments();
             });
@@ -406,29 +395,21 @@
     }
 
     async function load() {
-        console.log('instruments-settings: load() started');
         try {
             var r = await fetch('/api/instruments');
             if (r.ok) _instruments = await r.json();
-            console.log('instruments-settings: instruments loaded, count=' + _instruments.length);
-        } catch (e) { console.error('instruments-settings: instruments failed', e); }
+        } catch (_) {}
 
-        console.log('instruments-settings: loading plugins...');
         try {
             var pr = await fetch('/api/plugins');
             if (pr.ok) {
                 var plugins = await pr.json();
-                console.log('instruments-settings: plugins loaded, count=' + (Array.isArray(plugins) ? plugins.length : 'not array'));
                 if (Array.isArray(plugins)) {
                     _vizPlugins = plugins.filter(function (p) { return p.type === 'visualization'; });
-                    console.log('instruments-settings: viz plugins count=' + _vizPlugins.length);
                 }
-            } else {
-                console.error('instruments-settings: plugins fetch not ok ' + pr.status);
             }
-        } catch (e) { console.error('instruments-settings: plugins failed', e); }
+        } catch (_) {}
 
-        console.log('instruments-settings: loading settings...');
         try {
             var sr = await fetch('/api/settings');
             if (sr.ok) {
@@ -436,23 +417,11 @@
                 if (s[OVERRIDES_KEY] && typeof s[OVERRIDES_KEY] === 'object') {
                     _overrides = s[OVERRIDES_KEY];
                 }
-                console.log('instruments-settings: settings loaded');
             }
-        } catch (e) { console.error('instruments-settings: settings failed', e); }
+        } catch (_) {}
 
-        console.log('instruments-settings: calling renderInstruments()');
-        try {
-            renderInstruments();
-            console.log('instruments-settings: renderInstruments() done');
-        } catch (e) { console.error('instruments-settings: renderInstruments() crashed', e); }
+        renderInstruments();
     }
-
-    // Sync test: update the panel IMMEDIATELY at script load time so we can
-    // distinguish "script not loaded" from "async fetch failed".
-    (function () {
-        var panel = document.getElementById(PANEL_ID);
-        if (panel) panel.innerHTML = '<div class="text-fb-textDim text-sm px-1">Fetching data…</div>';
-    })();
 
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', load);
