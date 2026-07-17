@@ -2229,6 +2229,24 @@ class MetadataDB:
         ).fetchall()
         return {r[0]: r[1] for r in rows if r[2] and r[2] > 0}
 
+    def arrangement_accuracy_map(self) -> dict:
+        """{filename: {arrangement_index: best_accuracy}} for per-arrangement
+        badging on the library grid. Only includes arrangements that have been
+        played (plays > 0); unplayed arrangements are absent from the map
+        rather than zeroed so the UI can distinguish 'not played' from 0%."""
+        existing_filter = self._existing_song_filter()
+        rows = self.conn.execute(
+            "SELECT filename, arrangement, best_accuracy FROM song_stats "
+            "WHERE plays > 0 " + existing_filter
+        ).fetchall()
+        result: dict = {}
+        for fn, arr, acc in rows:
+            d = result.get(fn)
+            if d is None:
+                d = result[fn] = {}
+            d[int(arr)] = acc
+        return result
+
     def top_stats(self, limit: int = 5) -> list[dict]:
         """Top scored songs (best score first) for the profile 'Your best
         scores' panel. Aggregated per-song across arrangements (best score,
@@ -3291,6 +3309,21 @@ class MetadataDB:
     # parameters are bound, but capping the input space is still cheap
     # defense-in-depth (see feedBack#129).
     _ALLOWED_ARRANGEMENT_NAMES = {"Lead", "Rhythm", "Bass", "Combo"}
+
+    def _registry_arrangement_names(self) -> set:
+        """Arrangement names from registered instruments (Drums, Keys, etc.),
+        to supplement the hardcoded _ALLOWED_ARRANGEMENT_NAMES set."""
+        import appstate
+        reg = getattr(appstate, "instrument_registry", None)
+        if not reg:
+            return set()
+        names = set()
+        for inst in reg.get_all():
+            for role in inst.get("roles", []):
+                label = role.get("label")
+                if label:
+                    names.add(label)
+        return names
     # Per-smart-type list of (sql_op, sql_param) pairs appended to the SQL
     # name-fallback branch (key-absent smart_name). Covers legacy raw names
     # and load_song()'s synthesised display names that map to each smart type.
@@ -3464,15 +3497,17 @@ class MetadataDB:
             params.append(format_filter)
         # arrangements_has / arrangements_lacks: OR within axis (any-of).
         # Uses JSON1's json_each which yields one row per arrangement, then
-        # matches the relevant field. The whole subquery is wrapped in EXISTS
-        # so we don't multiply rows in the outer SELECT.
+        # matches the relevant field.
         #
-        # Smart mode: each requested type (Lead/Rhythm/Bass) matches against
-        # smart_name when present. "Lead" matches smart_name in
-        # ('Lead', 'Alt. Lead', 'Alt. Lead N', 'Bonus Lead', 'Bonus Lead N').
-        # Falls back to matching `name` for older rows without smart_name.
-        # Legacy mode: matches `name` directly (original behaviour).
-        arr_has = [a for a in (arrangements_has or []) if a in self._ALLOWED_ARRANGEMENT_NAMES]
+        # Smart mode: known types (Lead/Rhythm/Bass/Combo) match against
+        # smart_name with Alt./Bonus variants. Unknown types from the
+        # instrument registry (Keys, Drums) use simple name matching since
+        # they don't have smart-name variants.
+        # Also accept arrangement names from the instrument registry (Drums,
+        # Keys, etc.) so the auto-filter works for non-guitar/bass instruments.
+        arr_has = [a for a in (arrangements_has or [])
+                     if a in self._ALLOWED_ARRANGEMENT_NAMES
+                     or a in self._registry_arrangement_names()]
         if arr_has and naming_mode == "smart":
             # Smart mode subsumes "Combo" into "Lead" — normalize here so a
             # hand-rolled API client matches the client-side behaviour and
@@ -3480,20 +3515,15 @@ class MetadataDB:
             arr_has = list(dict.fromkeys("Lead" if a == "Combo" else a for a in arr_has))
         if arr_has:
             if naming_mode == "smart":
+                # Split into known smart types (Lead/Rhythm/Bass/Combo) which
+                # have Alt./Bonus variants, and other types (Keys, Drums, etc.)
+                # from the instrument registry which only exist as raw names.
+                smart_types = [a for a in arr_has if a in _SMART_TYPE_BASE or a == "Combo"]
+                plain_types = [a for a in arr_has if a not in _SMART_TYPE_BASE and a != "Combo"]
                 clauses = []
-                for arr_type in arr_has:
-                    # Extra raw-name fragments matched only in the key-absent
-                    # NULL-smart_name fallback branch — they cover the legacy
-                    # display names that map to this smart type:
-                    #   Lead: "Combo" (combined guitar) + Alt./Bonus Combo
-                    #   Bass: "Bass 2" (load_song synthesises for real_bass_22)
+                for arr_type in smart_types:
+                    # ... existing smart-type clause building ...
                     extra_null, extra_null_params = self._smart_null_extras(arr_type)
-                    # json_type() returns NULL when the key is absent and the
-                    # string 'null' when the key exists with explicit JSON null
-                    # (set by the scanner for ambiguous duplicate-name rows).
-                    # Name-fallback only applies to key-absent rows so an
-                    # explicit null suppresses the fallback and lets the
-                    # background rescan resolve the ambiguity authoritatively.
                     clauses.append(
                         "(json_extract(value, '$.smart_name') IS NOT NULL AND ("
                         f"json_extract(value, '$.smart_name') = ? OR "
@@ -3513,6 +3543,12 @@ class MetadataDB:
                         f"Alt. {arr_type}%",
                         f"Bonus {arr_type}%",
                     ] + extra_null_params
+                # Non-smart types (Keys, Drums): simple name matching.
+                for arr_type in plain_types:
+                    clauses.append(
+                        "json_extract(value, '$.name') = ?"
+                    )
+                    params.append(arr_type)
                 where += (
                     f" AND EXISTS (SELECT 1 FROM json_each({alias}.arrangements) WHERE "
                     + " OR ".join(f"({c})" for c in clauses)
@@ -3523,21 +3559,18 @@ class MetadataDB:
                 where += (f" AND EXISTS (SELECT 1 FROM json_each({alias}.arrangements) "
                           f"WHERE json_extract(value, '$.name') IN ({placeholders}))")
                 params += arr_has
-        arr_lacks = [a for a in (arrangements_lacks or []) if a in self._ALLOWED_ARRANGEMENT_NAMES]
+        arr_lacks = [a for a in (arrangements_lacks or [])
+                      if a in self._ALLOWED_ARRANGEMENT_NAMES
+                      or a in self._registry_arrangement_names()]
         if arr_lacks and naming_mode == "smart":
             arr_lacks = list(dict.fromkeys("Lead" if a == "Combo" else a for a in arr_lacks))
         if arr_lacks:
             if naming_mode == "smart":
+                smart_types = [a for a in arr_lacks if a in _SMART_TYPE_BASE or a == "Combo"]
+                plain_types = [a for a in arr_lacks if a not in _SMART_TYPE_BASE and a != "Combo"]
                 clauses = []
-                for arr_type in arr_lacks:
+                for arr_type in smart_types:
                     extra_null, extra_null_params = self._smart_null_extras(arr_type)
-                    # See "has" branch above for the json_type rationale.
-                    # Extra branch (vs `has`): an explicit smart_name=null
-                    # arrangement is ambiguous; we don't know whether it's
-                    # `arr_type` or not. Be conservative and treat it as
-                    # potentially matching, so `arrangements_lacks` excludes
-                    # the parent row instead of falsely claiming it lacks
-                    # `arr_type`. The background rescan resolves the ambiguity.
                     clauses.append(
                         "(json_extract(value, '$.smart_name') IS NOT NULL AND ("
                         f"json_extract(value, '$.smart_name') = ? OR "
@@ -3559,6 +3592,11 @@ class MetadataDB:
                         f"Alt. {arr_type}%",
                         f"Bonus {arr_type}%",
                     ] + extra_null_params
+                for arr_type in plain_types:
+                    clauses.append(
+                        "json_extract(value, '$.name') = ?"
+                    )
+                    params.append(arr_type)
                 where += (
                     f" AND NOT EXISTS (SELECT 1 FROM json_each({alias}.arrangements) WHERE "
                     + " OR ".join(f"({c})" for c in clauses)

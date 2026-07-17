@@ -1557,20 +1557,16 @@ if (window.feedBack) {
     // handler receives an Event, not the raw payload.
     window.feedBack.on('song:ready', (e) => {
         _applyMasteryAvailability(!!e.detail?.hasPhraseData);
-        // Auto mode: re-evaluate the active renderer against the
-        // newly-loaded song. The picker's current <option> value is the
-        // source of truth here — localStorage is a persistence mirror
-        // that can throw in private / sandboxed contexts, and the
-        // picker already reflects fresh-install / post-cleanup
-        // fallthroughs to 'auto' even when writes failed.
         const sel = document.getElementById('viz-picker');
         if (sel && sel.value === 'auto') {
             _autoMatchViz();
+        } else if (sel && sel.value !== 'default') {
+            // Non-auto explicit selection: ensure the renderer is installed.
+            // This covers the case where the preference was changed while on
+            // the library page (e.g. per-instrument preferred highway) where
+            // setViz couldn't install the renderer because no highway existed.
+            setViz(sel.value);
         } else if (sel) {
-            // Explicit selection: the renderer persists across songs, so a
-            // notation-only arrangement landing on a non-notation viz (e.g.
-            // the fresh-install highway_3d default) would render an empty
-            // board with no explanation. Surface the install hint.
             _maybeShowNotationViewHint(sel.value);
         }
     });

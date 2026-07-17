@@ -43,7 +43,24 @@
         ['difficulty', 'Difficulty (easiest first)'], ['difficulty-desc', 'Difficulty (hardest first)'],
     ];
     const FORMATS = [['', 'All formats'], ['sloppak', 'Feedpak'], ['loose', 'Folder']];
-    const ARRANGEMENTS = ['Lead', 'Rhythm', 'Bass', 'Combo', 'Vocals'];
+    function _arrangementOptions() {
+        // Derive filter pill labels from instrument registry role names.
+        // When new instrument plugins are added, their arrangement type labels
+        // appear in the library filter drawer automatically.
+        var insts = sm && sm._instruments;
+        if (Array.isArray(insts) && insts.length) {
+            var names = [];
+            for (var i = 0; i < insts.length; i++) {
+                var roles = insts[i].roles || [];
+                for (var j = 0; j < roles.length; j++) {
+                    var label = roles[j].label;
+                    if (label && names.indexOf(label) < 0) names.push(label);
+                }
+            }
+            if (names.length) return names;
+        }
+        return ['Lead', 'Rhythm', 'Bass', 'Combo', 'Vocals'];
+    }
     const STEMS = ['guitar', 'bass', 'drums', 'vocals', 'other'];
     const PAGE_SIZE = 24;
     // Extra rows rendered above/below the viewport so a fast scroll doesn't flash
@@ -63,7 +80,7 @@
         grouping: true,     // one card per song (multi-chart grouping); persisted
 
         filters: { arr_has: [], arr_lacks: [], stem_has: [], stem_lacks: [], lyrics: '', tunings: [], mastery: [], match: [], genre: [] },
-        page: 0, total: 0, loading: false, built: false, accuracy: {}, tuningNames: [], genres: [],
+        page: 0, total: 0, loading: false, built: false, accuracy: {}, arrangementAccuracy: {}, tuningNames: [], genres: [],
         artistCatalog: [], renderedHash: '',
         scrollBound: false,
         songsById: {}, selectMode: false, selected: new Set(),
@@ -479,19 +496,172 @@
     // default) or 'tree' (inline percentage in the list row). Both carry the
     // .fb-acc-badge class so a post-play refresh (repaintAccuracy) can find and
     // replace them in place without re-rendering the whole list.
-    function accuracyBadge(filename, variant) {
-        const acc = state.accuracy[filename];
-        if (acc == null) return '';
-        // Floor, never round: 100% must mean every note hit.
-        const pct = Math.floor(acc * 100);
-        if (variant === 'tree') {
-            const color = acc >= MASTERY_ACCURACY ? 'text-fb-good' : acc >= 0.5 ? 'text-fb-mid' : 'text-fb-low';
-            return '<span class="fb-acc-badge text-xs font-bold ' + color + '">' + pct + '%</span>';
+    // ── Per-role accuracy helpers ────────────────────────────────────────
+    function _matchingArrangementIndex(song) {
+        if (!song || !song.arrangements || !song.arrangements.length) return null;
+        // Find the arrangement whose name matches the current auto-filter role.
+        // This is the arrangement the card would open for the current instrument.
+        var want = state.filters.arr_has;
+        // Resolve the active role from the current instrument profile
+        var activeProfileId = (sm && sm._activeInstrumentProfile) || '';
+        var activeRoleLabel = null;
+        if (activeProfileId) {
+            var insts = window.feedBack && window.feedBack._instruments;
+            if (Array.isArray(insts)) {
+                for (var ii = 0; ii < insts.length; ii++) {
+                    var ir = insts[ii].roles || [];
+                    for (var ij = 0; ij < ir.length; ij++) {
+                        if (activeProfileId === insts[ii].id + '-' + ir[ij].id) {
+                            activeRoleLabel = ir[ij].label;
+                            break;
+                        }
+                    }
+                    if (activeRoleLabel) break;
+                }
+            }
         }
-        const color = acc >= MASTERY_ACCURACY ? 'bg-fb-good' : (acc >= 0.5 ? 'bg-fb-mid' : 'bg-fb-low');
-        const text = acc >= 0.5 && acc < MASTERY_ACCURACY ? 'text-black' : 'text-white';
-        return '<span class="fb-acc-badge absolute bottom-0 right-0 ' + color + '/90 ' + text + ' px-2 py-0.5 rounded-tl-md text-xs font-bold flex items-center gap-1">' +
-            '<svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/></svg>' + pct + '%</span>';
+        // First pass: prefer arrangement matching the active role exactly.
+        if (activeRoleLabel) {
+            for (var i = 0; i < song.arrangements.length; i++) {
+                var a = song.arrangements[i];
+                var sn = a.smart_name || a.name || '';
+                if (sn === activeRoleLabel) return a.index != null ? a.index : i;
+            }
+            // Active role selected but no matching arrangement — return null
+            // so the badge shows "n/a" instead of falling back to a different role.
+            return null;
+        }
+        // Without an active role, fall back to arrangement auto-filter.
+        if (!want.length) return null;
+        // Fallback: first arrangement matching any auto-filter value.
+        for (var i = 0; i < song.arrangements.length; i++) {
+            var a2 = song.arrangements[i];
+            var sn2 = a2.smart_name || a2.name || '';
+            for (var j = 0; j < want.length; j++) {
+                if (sn2 === want[j]) return a2.index != null ? a2.index : i;
+            }
+        }
+        return null;
+    }
+
+    function _perArrangementAccuracy(filename, arrIndex) {
+        var map = state.arrangementAccuracy[filename];
+        if (!map) return null;
+        return typeof map[arrIndex] === 'number' ? map[arrIndex] : null;
+    }
+
+    function accuracyBadge(filename, variant, song) {
+        // Auto-resolve song from grid cache when not passed (e.g. repaint path).
+        if (!song && state.songsById) song = state.songsById[filename];
+        // Per-role accuracy: find the arrangement matching the current instrument
+        // role filter, and use ITS accuracy rather than the song-wide max.
+        var acc = null;
+        var arrIdx = song ? _matchingArrangementIndex(song) : null;
+        var hasMatchingArrangement = arrIdx != null;
+        if (hasMatchingArrangement) {
+            acc = _perArrangementAccuracy(filename, arrIdx);
+        }
+        // Never fall back to song-wide max — that would attribute a
+        // different role's score to the currently selected role.
+        var hasArr = song && song.arrangements && song.arrangements.length > 0;
+        if (acc == null && !hasArr) return '';
+
+        var pct = acc != null ? Math.floor(acc * 100) : null;
+        // When the arrangement filter is inactive, all songs appear — but some
+        // may not have the selected role's arrangement. Show "n/a" in that case.
+        // When the filter IS active, songs without a match are already excluded
+        // server-side, so we only show "— %" (unplayed) or the percentage.
+        var displayLabel;
+        if (pct != null) {
+            displayLabel = pct + '%';
+        } else if (!state.filters.arr_has.length && !hasMatchingArrangement) {
+            displayLabel = 'n/a';
+        } else {
+            displayLabel = '— %';
+        }
+        if (variant === 'tree') {
+            var color = acc != null && acc >= MASTERY_ACCURACY ? 'text-fb-good' : acc != null && acc >= 0.5 ? 'text-fb-mid' : 'text-fb-low';
+            return '<span class="fb-acc-badge text-xs font-bold ' + color + '">' + displayLabel + '</span>';
+        }
+
+        // Build hover overlay with all arrangement accuracies
+        var hoverOverlay = '';
+        if (song && song.arrangements && song.arrangements.length > 0) {
+            var songTuning = song.tuning_name || '';
+            var items = '';
+            for (var ai = 0; ai < song.arrangements.length; ai++) {
+                var a = song.arrangements[ai];
+                var aiIdx = a.index != null ? a.index : ai;
+                var aAcc = _perArrangementAccuracy(filename, aiIdx);
+                var aName = a.smart_name || a.name || ('#' + aiIdx);
+                var aLabel = aAcc != null ? Math.floor(aAcc * 100) + '%' : '—';
+                var aColor = aAcc != null
+                    ? (aAcc >= MASTERY_ACCURACY ? 'text-fb-good' : aAcc >= 0.5 ? 'text-fb-mid' : 'text-fb-low')
+                    : 'text-gray-600';
+                // Only show tuning for pitched instruments (not drums/keys)
+                var isPitched = _isPitchedArrangement(aName);
+                var tuningPart = isPitched && songTuning ? ' &middot; ' + esc(songTuning) : '';
+                items += '<div class="flex items-center gap-1 px-2 py-0.5"><span class="text-xs text-fb-textDim flex-1">' + esc(aName) + tuningPart + '</span><span class="text-xs font-bold ' + aColor + '">' + aLabel + '</span></div>';
+            }
+            hoverOverlay = '<div class="opacity-0 group-hover:opacity-100 transition" style="position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,0.8);border-radius:0 0 0.5rem 0.5rem;z-index:20;pointer-events:none">' + items + '</div>';
+        }
+
+        // Color is now inline (not Tailwind) so we can also set border-color.
+        var badgeColor = acc != null ? (acc >= MASTERY_ACCURACY ? 'rgba(34,197,94,0.9)' : (acc >= 0.5 ? 'rgba(234,179,8,0.9)' : 'rgba(239,68,68,0.9)')) : 'rgba(75,85,99,0.9)';
+        var badgeText = acc != null && acc >= 0.5 && acc < MASTERY_ACCURACY ? 'text-black' : 'text-white';
+        var borderColor = acc != null ? (acc >= MASTERY_ACCURACY ? '#22c55e' : (acc >= 0.5 ? '#eab308' : '#ef4444')) : '#4b5563';
+        return '<span class="fb-acc-badge absolute bottom-0 right-0 px-2 py-0.5 rounded-tl-md text-xs font-bold flex items-center gap-1 opacity-100 group-hover:opacity-0 transition border-l-2 border-t-2 ' + badgeText + '" style="background:' + badgeColor + ';border-color:' + borderColor + '">' +
+            displayLabel + '</span>' + hoverOverlay;
+    }
+
+    function _roleIcon(arrName) {
+        var insts = window.feedBack && window.feedBack._instruments;
+        if (!Array.isArray(insts)) return '●';
+        var name = (arrName || '').toLowerCase();
+        for (var i = 0; i < insts.length; i++) {
+            var inst = insts[i];
+            var roles = inst.roles || [];
+            for (var j = 0; j < roles.length; j++) {
+                var r = roles[j];
+                if (name === r.label.toLowerCase()) {
+                    // Multi-role: show instrument id first letter + role first letter
+                    if (inst.roles.length > 1) {
+                        return (inst.id[0] || '?').toUpperCase() + '<span class="text-[0.5rem]">' + (r.label[0] || '?').toUpperCase() + '</span>';
+                    }
+                    return (inst.id[0] || (r.label[0] || '?')).toUpperCase();
+                }
+                // Check arrangement_names too
+                var names = r.arrangement_names || [];
+                for (var k = 0; k < names.length; k++) {
+                    if (name === names[k]) {
+                        if (inst.roles.length > 1) {
+                            return (inst.id[0] || '?').toUpperCase() + '<span class="text-[0.5rem]">' + (r.label[0] || '?').toUpperCase() + '</span>';
+                        }
+                        return (inst.id[0] || (r.label[0] || '?')).toUpperCase();
+                    }
+                }
+            }
+        }
+        return '●';
+    }
+
+    function _isPitchedArrangement(arrName) {
+        var insts = window.feedBack && window.feedBack._instruments;
+        if (!Array.isArray(insts)) return true;  // unknown → assume pitched
+        var name = (arrName || '').toLowerCase();
+        for (var i = 0; i < insts.length; i++) {
+            var inst = insts[i];
+            var roles = inst.roles || [];
+            for (var j = 0; j < roles.length; j++) {
+                var r = roles[j];
+                if (name === r.label.toLowerCase()) return inst.detect_strategy === 'pitch';
+                var names = r.arrangement_names || [];
+                for (var k = 0; k < names.length; k++) {
+                    if (name === names[k]) return inst.detect_strategy === 'pitch';
+                }
+            }
+        }
+        return true;  // unknown → assume pitched
     }
 
     // ── Metadata-refresh per-tile state (the "Refresh Metadata" batch) ─────────
@@ -576,10 +746,10 @@
     async function applyScoreRefresh() {
         if (!_dirtyScores.size) return;
         const fresh = await jget('/api/stats/best');
-        // Fetch failed — keep the entries dirty so the next trigger (or screen
-        // enter) retries rather than silently dropping the badge update.
+        const freshArr = await jget('/api/stats/best-by-arrangement');
         if (!fresh) return;
         state.accuracy = fresh;
+        if (freshArr) state.arrangementAccuracy = freshArr;
         const keys = Array.from(_dirtyScores);
         _dirtyScores.clear();
         keys.forEach(repaintAccuracy);
@@ -737,7 +907,7 @@
         const l = fmtLabel(song);
         if (!l) return '';
         const c = l === 'FEEDPAK' ? 'bg-fb-primary text-white' : 'bg-black/70 text-fb-textDim';
-        return '<span class="absolute bottom-0 left-0 ' + c + ' text-[0.5625rem] font-bold px-1.5 py-0.5 rounded-tr-md tracking-wide">' + l + '</span>';
+        return '<span class="absolute bottom-0 left-0 ' + c + ' text-[0.5625rem] font-bold px-1.5 py-0.5 rounded-tr-md tracking-wide opacity-100 group-hover:opacity-0 transition">' + l + '</span>';
     }
 
     // Personal-layer badges (P2): a difficulty pip + a tag count, painted from the
@@ -841,7 +1011,7 @@
             const badgeTitle = targetNotes
                 ? ('Custom Tuning: ' + targetNotes)
                 : tuningLabel;
-            const pos = 'absolute top-2 ' + (state.selectMode ? 'left-9' : 'left-2');
+            const pos = 'absolute top-0 left-0 rounded-br-md';
             // Tag the chip with its offsets so decorateTuningChips() can colour it
             // green (matches your current tuning) / amber (needs a retune) after paint.
             // Also flag a bass-only song (every arrangement is a bass part) so coverage
@@ -854,10 +1024,10 @@
                 ? ' data-tuning-chip data-tuning-offsets="' + esc(rawOffsets.join(',')) + '"'
                     + (chipIsBass ? ' data-tuning-bass="1"' : '') : '';
             if (targetNotes) {
-                tuning = '<span class="' + pos + ' bg-fb-mid text-black text-[0.5625rem] font-bold px-1.5 py-0.5 rounded-sm leading-tight max-w-[5.5rem] text-center"' + matchAttr + ' title="' + esc(badgeTitle) + '">'
+                tuning = '<span class="' + pos + ' bg-fb-mid text-black text-[0.5625rem] font-bold px-1.5 py-0.5 rounded-sm leading-tight max-w-[5.5rem] text-center opacity-100 group-hover:opacity-0 transition"' + matchAttr + ' title="' + esc(badgeTitle) + '">'
                     + esc('Custom Tuning') + '<br><span class="font-semibold tracking-wide">' + esc(targetNotes) + '</span></span>';
             } else {
-                tuning = '<span class="' + pos + ' bg-fb-mid text-black text-[0.625rem] font-bold px-1.5 py-0.5 rounded-sm"' + matchAttr + ' title="' + esc(badgeTitle) + '">' + esc(tuningLabel) + '</span>';
+                tuning = '<span class="' + pos + ' bg-fb-mid text-black text-[0.625rem] font-bold px-1.5 py-0.5 rounded-sm opacity-100 group-hover:opacity-0 transition"' + matchAttr + ' title="' + esc(badgeTitle) + '">' + esc(tuningLabel) + '</span>';
             }
         }
         // Display-only (pointer-events-none) so a click falls through to the
@@ -892,7 +1062,7 @@
         return '<div class="group relative" data-fn="' + esc(key) + '" data-letter="' + esc(songBucket(song)) + '" data-library-song="' + esc(songId(song)) + '" data-library-provider="' + esc(state.provider) + '">' +
             '<div class="relative aspect-square rounded-lg overflow-hidden bg-fb-card cursor-pointer' + selRing + '" data-v3-play>' +
             '<img src="' + esc(artUrl(shown)) + '" alt="" loading="lazy" decoding="async" class="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105" onerror="this.style.visibility=\'hidden\'">' +
-            tuning + checkbox + accuracyBadge(key) + fmtBadge(shown) + personalBadges(song) + enrichBadge(key, song.unmatched) + overlay +
+            tuning + checkbox + accuracyBadge(key, '', song) + fmtBadge(shown) + personalBadges(song) + enrichBadge(key, song.unmatched) + overlay +
             '<div class="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition">' +
             inlineBtns +
             '<button data-fav data-fav-idle="text-white" title="Favorite" aria-label="Favorite" aria-pressed="' + (fav ? 'true' : 'false') + '" class="w-7 h-7 rounded-full bg-black/50 hover:bg-black/70 flex items-center justify-center text-sm ' + (fav ? 'text-fb-accent' : 'text-white') + '">' + (fav ? '♥' : '♡') + '</button>' +
@@ -2816,6 +2986,10 @@
         const mark = st === 'has' ? '✓ ' : st === 'lacks' ? '✕ ' : '';
         return '<button data-tri="' + group + '" data-val="' + esc(value) + '" class="px-2 py-1 rounded-md text-xs border ' + cls + '">' + mark + esc(label) + '</button>';
     }
+    function renderDrawerIfOpen() {
+        const d = document.getElementById('v3-songs-drawer');
+        if (d && !d.classList.contains('hidden') && d.innerHTML.trim()) renderDrawer();
+    }
     function renderDrawer() {
         const d = document.getElementById('v3-songs-drawer');
         if (!d) return;
@@ -2824,7 +2998,7 @@
             '<div class="p-5 space-y-5">' +
             '<div class="flex items-center justify-between"><h3 class="text-lg font-semibold text-fb-text">Filters</h3>' +
             '<button data-drawer-close class="text-fb-textDim hover:text-fb-text">✕</button></div>' +
-            section('Arrangements', ARRANGEMENTS.map((a) => triPill('arr', a, a, triState(f.arr_has, f.arr_lacks, a))).join('')) +
+            section('Arrangements', _arrangementOptions().map((a) => triPill('arr', a, a, triState(f.arr_has, f.arr_lacks, a))).join('')) +
             section('Stems (feedpak)', STEMS.map((s) => triPill('stem', s, s, triState(f.stem_has, f.stem_lacks, s))).join('')) +
             section('Lyrics', ['', '1', '0'].map((v) => '<button data-lyrics="' + v + '" class="px-2 py-1 rounded-md text-xs border ' + (f.lyrics === v ? 'bg-fb-primary text-white border-fb-primary' : 'bg-gray-800/50 text-fb-textDim border-gray-700') + '">' + (v === '' ? 'Any' : v === '1' ? 'Has lyrics' : 'No lyrics') + '</button>').join('')) +
             // Progress (mastery bands) — multi-select; server filters via song_stats.
@@ -2873,7 +3047,7 @@
 
         d.querySelectorAll('[data-tri]').forEach((b) => b.addEventListener('click', () => {
             const g = b.getAttribute('data-tri'), v = b.getAttribute('data-val');
-            if (g === 'arr') cycleTri(f.arr_has, f.arr_lacks, v);
+            if (g === 'arr') { cycleTri(f.arr_has, f.arr_lacks, v); _arrAutoInstrument = null; }
             else if (g === 'stem') cycleTri(f.stem_has, f.stem_lacks, v);
             else if (g === 'tuning') { const i = f.tunings.indexOf(v); if (i >= 0) f.tunings.splice(i, 1); else f.tunings.push(v); }
             renderDrawer();
@@ -2894,6 +3068,7 @@
             state.filters = { arr_has: [], arr_lacks: [], stem_has: [], stem_lacks: [], lyrics: '', tunings: [], mastery: [], match: [], genre: [] };
             state.artist = '';
             state.album = '';
+            _arrAutoInstrument = null;
             renderDrawer();
             await loadArtistCatalog();
             refreshArtistAlbumSelects();
@@ -3475,9 +3650,23 @@
         // Restore last-used sort/format/view/filters once, before building the
         // toolbar so its selects reflect the saved choice (default: Artist A–Z).
         if (!_prefsRestored) { applySavedPrefs(); _prefsRestored = true; }
+        // ── Auto-apply instrument arrangement filter on first render ─────
+        // auto_filter_instrument setting is already refreshed in
+        // onV3SongsScreenEnter before render() is called.
+        if (_autoFilterEnabled && _arrAutoInstrument === null && !state.filters.arr_has.length && !state.filters.arr_lacks.length) {
+            try {
+                var sr2 = await fetch('/api/settings');
+                if (sr2.ok) {
+                    var sd2 = await sr2.json();
+                    var instId = sd2 && sd2.instrument;
+                    if (instId) _applyArrangementAutoFilter(instId);
+                }
+            } catch (_) {}
+        }
         const providers = await loadProviders();
         const [, tn] = await Promise.all([
             (async () => { state.accuracy = (await jget('/api/stats/best')) || {}; })(),
+            (async () => { state.arrangementAccuracy = (await jget('/api/stats/best-by-arrangement')) || {}; })(),
             jget('/api/library/tuning-names?provider=' + enc(state.provider)),
             loadArtistCatalog(),
             // Artist-page gates (PR-B) ride the initial fetch batch so the
@@ -3646,6 +3835,26 @@
     }
 
     async function onV3SongsScreenEnter() {
+        // Always refresh the auto-filter toggle state so the user can
+        // enable/disable it in Settings without a full page reload.
+        try {
+            var sr = await fetch('/api/settings');
+            if (sr.ok) {
+                var sd = await sr.json();
+                _autoFilterEnabled = sd.auto_filter_instrument !== false;
+                // If the toggle was turned off, clear any previously-applied filter.
+                if (!_autoFilterEnabled && state.filters.arr_has.length) {
+                    state.filters.arr_has = [];
+                    state.filters.arr_lacks = [];
+                    _arrAutoInstrument = null;
+                }
+                // If the toggle was turned on and no filter is active, apply it.
+                if (_autoFilterEnabled && _arrAutoInstrument === null && !state.filters.arr_has.length && !state.filters.arr_lacks.length) {
+                    var instId = sd && sd.instrument;
+                    if (instId) _applyArrangementAutoFilter(instId);
+                }
+            }
+        } catch (_) {}
         // A library scan / DLC-folder change marked the grid stale — re-fetch
         // from scratch instead of restoring a cached (possibly empty, pre-DLC)
         // snapshot. Must win over every fast-path below.
@@ -4081,6 +4290,53 @@
     };
 
     if (sm && typeof sm.on === 'function') {
+        // ── Instrument auto-filter ────────────────────────────────────────
+        // When a different instrument is selected in the topbar, filter the
+        // library to show only songs that have arrangements for that instrument.
+        // Clears on manual arrangement filter change; re-applies on next
+        // instrument switch.
+        var _arrAutoInstrument = null;
+        var _autoFilterEnabled = true;     // mirror of auto_filter_instrument setting
+
+        function _instrumentArrangementNames(instrumentId) {
+            var insts = sm && sm._instruments;
+            if (!Array.isArray(insts)) return null;
+            for (var i = 0; i < insts.length; i++) {
+                if (insts[i].id === instrumentId && insts[i].roles) {
+                    var names = [];
+                    for (var j = 0; j < insts[i].roles.length; j++) {
+                        var label = insts[i].roles[j].label;
+                        if (label && names.indexOf(label) < 0) names.push(label);
+                    }
+                    return names.length ? names : null;
+                }
+            }
+            return null;
+        }
+
+        function _applyArrangementAutoFilter(instrumentId) {
+            var names = _instrumentArrangementNames(instrumentId);
+            if (!names) return false;
+            _arrAutoInstrument = instrumentId;
+            state.filters.arr_has = names.slice();
+            state.filters.arr_lacks = [];
+            return true;
+        }
+
+        // When the player changes their instrument in the topbar, auto-filter
+        // the library to show only songs with arrangements matching that
+        // instrument's roles (e.g. Lead+Rhythm for guitar, Bass for bass).
+        // Cleared when the user manually edits the arrangement filter; re-applies
+        // on the next instrument switch.
+        sm.on('instrument:changed', function (e) {
+            var instId = e && e.detail && e.detail.instrument;
+            if (!instId || !_autoFilterEnabled) return;
+            if (_applyArrangementAutoFilter(instId)) {
+                reload();
+                renderDrawerIfOpen();
+            }
+        });
+
         sm.on('screen:changed', (e) => {
             const id = e && e.detail && e.detail.id;
             if (id === 'v3-songs') { onV3SongsScreenEnter(); return; }

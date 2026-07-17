@@ -407,6 +407,7 @@
                 <button type="button" class="fb-tab" data-tab="mic">Mic</button>
                 <button type="button" class="fb-tab" data-tab="plugins">Plugins</button>
                 <button type="button" class="fb-tab" data-tab="system">System</button>
+                <button type="button" class="fb-tab" data-tab="instruments">Instruments</button>
             </div>
 
             <!-- ══ GAMEPLAY ════════════════════════════════════════════════ -->
@@ -433,21 +434,18 @@
                             </label>
                         </div>
                     </div>
-                    <!-- Default arrangement -->
+                    <!-- Auto-filter library by instrument -->
                     <div class="fb-srow">
-                        <span class="fb-srow-icon"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg></span>
+                        <span class="fb-srow-icon"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/></svg></span>
                         <div class="fb-srow-main">
-                            <div class="fb-srow-title">Default arrangement</div>
-                            <div class="fb-srow-desc">Which arrangement loads first when you open a song.</div>
+                            <div class="fb-srow-title">Auto-filter by instrument</div>
+                            <div class="fb-srow-desc">When enabled, the song library automatically filters to show only songs with arrangements for your selected instrument. Disable to browse all songs freely.</div>
                         </div>
                         <div class="fb-srow-control">
-                            <select id="default-arrangement" onchange="persistSetting('default_arrangement', this.value)"
-                                class="bg-dark-700 border border-gray-800 rounded-xl px-3 py-2.5 text-sm text-gray-300 outline-none">
-                                <option value="">Most notes (auto)</option>
-                                <option value="Lead">Lead</option>
-                                <option value="Rhythm">Rhythm</option>
-                                <option value="Bass">Bass</option>
-                            </select>
+                            <label class="fb-switch">
+                                <input type="checkbox" id="setting-auto-filter-instrument" checked onchange="persistSetting('auto_filter_instrument', this.checked)">
+                                <span class="fb-switch-track"></span>
+                            </label>
                         </div>
                     </div>
                     <!-- Instrument pathway -->
@@ -912,6 +910,14 @@
                     <div id="settings-status" class="text-sm text-gray-500"></div>
                 </div>
             </div>
+
+            <!-- ══ INSTRUMENTS ══════════════════════════════════════════════ -->
+            <div class="fb-tabpanel" data-tab="instruments">
+                <div class="fb-tabpanel-head"><h3>Instruments</h3></div>
+                <div class="fb-srows" id="instruments-settings-panel">
+                    <div class="text-fb-textDim text-sm px-1">Loading instruments…</div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -1324,6 +1330,7 @@
     <script defer src="/static/v3/lessons.js"></script>
     <script defer src="/static/v3/dashboard.js"></script>
     <script defer src="/static/v3/settings.js"></script>
+    <script defer src="/static/v3/instruments-settings.js"></script>
     <script defer src="/static/v3/interface-size-ui.js"></script>
     <!-- First-run home tour: spotlights the home cards via the shared tour
          engine (tour-engine.js, loaded above). Auto-runs once after onboarding

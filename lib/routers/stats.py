@@ -151,20 +151,23 @@ def api_record_stats(data: dict):
         progression_summary = None
         try:
             import progression as progression_mod
+            reg = getattr(appstate, "instrument_registry", None)
             instrument = progression_mod.instrument_for_arrangement(
-                appstate.meta_db.arrangement_entry(filename, arrangement)
+                appstate.meta_db.arrangement_entry(filename, arrangement),
+                registry=reg,
             )
-            progression_summary = appstate.meta_db.record_progression_event(
-                "song_completed",
-                {
-                    "filename": filename,
-                    "instrument": instrument,
-                    "accuracy": accuracy,
-                    "score": score,
-                    "is_diagnostic": filename == appstate.builtin_diagnostic_filename(),
-                },
-                appstate.get_progression_content(),
-            )
+            if instrument is not None:
+                progression_summary = appstate.meta_db.record_progression_event(
+                    "song_completed",
+                    {
+                        "filename": filename,
+                        "instrument": instrument,
+                        "accuracy": accuracy,
+                        "score": score,
+                        "is_diagnostic": filename == appstate.builtin_diagnostic_filename(),
+                    },
+                    appstate.get_progression_content(),
+                )
         except Exception:
             log.warning("stats side-effects (progression) failed", exc_info=True)
         return {"stats": row, "progress": progress, "progression": progression_summary}
@@ -238,6 +241,12 @@ def api_stats_best():
     return appstate.meta_db.best_accuracy_map()
 
 
+@router.get("/api/stats/best-by-arrangement")
+def api_stats_best_by_arrangement():
+    """Return {filename: {arrangement_index: best_accuracy}} for per-role badging."""
+    return appstate.meta_db.arrangement_accuracy_map()
+
+
 @router.get("/api/stats/top")
 def api_top_stats(limit: int = 5):
     """Top scored songs (best first), joined to song metadata, for the profile
@@ -262,4 +271,5 @@ def api_top_stats(limit: int = 5):
 
 @router.get("/api/stats/{filename:path}")
 def api_song_stats(filename: str):
+    """Return per-arrangement stats for a single song."""
     return appstate.meta_db.get_song_stats(filename)

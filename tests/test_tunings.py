@@ -17,11 +17,12 @@ from tunings import (
 
 
 def test_valid_tuning_for_key_builtin_and_provider_names():
-    # A built-in valid for the key is accepted; a built-in valid only for a
-    # DIFFERENT key (misapplied, e.g. "Drop D" on a 5-string bass) is rejected.
+    # Built-in valid for the key is accepted.
     assert _valid_tuning_for_key("bass-5", "Drop A") == "Drop A"
+    # Misapplied built-in (Drop D on a 5-string bass — the 5-string drop is Drop A) is rejected.
     assert _valid_tuning_for_key("bass-5", "Drop D") is None
-    assert _valid_tuning_for_key("guitar-6", "Standard") == "Standard"
+    # Legacy "Standard" is mapped to the all-zero tuning for the key.
+    assert _valid_tuning_for_key("guitar-6", "Standard") == "E Standard"
     # A name unknown to every built-in table is a provider/custom tuning (tuner
     # plugin, /api/tunings) the pure layer can't resolve — accept it so settings
     # round-trip rather than normalizing it away to Standard.
@@ -171,8 +172,8 @@ def test_default_tunings_include_extended_host_profiles():
 
 
 def test_default_tuning_frequencies_are_derived_from_midis():
-    assert DEFAULT_TUNINGS["guitar-6"]["Standard"] == open_midis_to_freqs([40, 45, 50, 55, 59, 64])
-    assert DEFAULT_TUNINGS["bass-6"]["Standard"] == open_midis_to_freqs([23, 28, 33, 38, 43, 48])
+    assert DEFAULT_TUNINGS["guitar-6"]["E Standard"] == open_midis_to_freqs([40, 45, 50, 55, 59, 64])
+    assert DEFAULT_TUNINGS["bass-6"]["B Standard"] == open_midis_to_freqs([23, 28, 33, 38, 43, 48])
 
 
 def test_tuning_offsets_from_named_presets():
@@ -199,7 +200,7 @@ def test_settings_profiles_default_to_lead_rhythm_and_bass():
     assert set(settings["instrument_profiles"]) == {"guitar-lead", "guitar-rhythm", "bass"}
     assert settings["instrument"] == "guitar"
     assert settings["string_count"] == 6
-    assert settings["tuning"] == "Standard"
+    assert settings["tuning"] == "E Standard"
     assert settings["pathway"] == "songs"
     assert settings["instrument_profiles"]["guitar-lead"]["pathway"] == "songs"
 
@@ -239,7 +240,7 @@ def test_flat_instrument_patch_defaults_to_target_string_count():
     patched = apply_flat_instrument_patch_to_profiles(settings, {"instrument": "bass"})
     assert patched["instrument"] == "bass"
     assert patched["string_count"] == 4
-    assert patched["tuning"] == "Standard"
+    assert patched["tuning"] == "E Standard"
     assert patched["active_instrument_profile"] == "bass"
     assert patched["instrument_profiles"]["bass"]["string_count"] == 4
 
@@ -248,7 +249,9 @@ def test_flat_string_count_patch_resets_incompatible_named_tuning():
     settings = settings_with_instrument_profiles({"instrument": "guitar", "string_count": 6, "tuning": "DADGAD"})
     patched = apply_flat_instrument_patch_to_profiles(settings, {"string_count": 7})
     assert patched["string_count"] == 7
-    assert patched["tuning"] == "Standard"
+    # DADGAD is a 6-string tuning — patching to 7 strings resets to B Standard
+    # (the all-zero tuning for guitar-7) because the cross-key check rejects it.
+    assert patched["tuning"] == "B Standard"
 
 
 # ── freqs_to_midis (the /api/tunings tuningMidis inverse) ────────────────────
@@ -266,7 +269,7 @@ def test_freqs_to_midis_round_trips_at_nonstandard_reference():
     # reference (client-side log2-at-440 reconstruction drifts here).
     from tunings import freqs_to_midis
     for ref in (430.0, 432.0, 444.0, 450.0):
-        for midis in (TUNING_PRESET_MIDIS["guitar-8"]["Standard"], TUNING_PRESET_MIDIS["bass-5"]["Standard"]):
+        for midis in (TUNING_PRESET_MIDIS["guitar-8"]["F# Standard"], TUNING_PRESET_MIDIS["bass-5"]["B Standard"]):
             freqs = open_midis_to_freqs(midis, ref)
             assert freqs_to_midis(freqs, ref) == midis, f"ref={ref}"
 
