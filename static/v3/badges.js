@@ -279,9 +279,25 @@
         if (sm && sm.emit) sm.emit('instrument:changed', {
             instrument: settings.instrument, stringCount: settings.string_count, tuning: settings.tuning, pathway: settings.pathway,
         });
+        // Apply preferred highway for this instrument if one is set.
+        _applyPreferredHighway(settings.instrument);
         pushToTuner();
         renderTuner(); // reflect new tuning on the tuner card
         return true;
+    }
+
+    async function _applyPreferredHighway(instrumentId) {
+        try {
+            var r = await fetch('/api/settings');
+            if (!r.ok) return;
+            var s = await r.json();
+            var overrides = s.instrument_overrides || {};
+            var prefs = overrides[instrumentId] || {};
+            var hw = prefs.preferred_highway;
+            if (hw && typeof hw === 'string') {
+                localStorage.setItem('vizSelection', hw);
+            }
+        } catch (_) {}
     }
 
     // Drive the tuner plugin's instrument + tuning from the selection.

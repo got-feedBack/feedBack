@@ -9,6 +9,7 @@
     var OVERRIDES_KEY = 'instrument_overrides';
     var _overrides = {};
     var _instruments = [];
+    var _vizPlugins = [];
     var _saveTimer = 0;
     var _openCards = {};  // instId -> bool, survives re-renders
 
@@ -99,6 +100,9 @@
                 html += _renderTunings(inst, over);
             }
 
+            // ── Preferred highway ───────────────────────
+            html += _renderHighwaySelect(inst, over);
+
             // ── Info row ───────────────────────────────
             html += '<div class="text-[0.625rem] text-fb-textDim flex flex-wrap gap-3 pb-2">' +
                 '<span>Ref: ' + esc(String(inst.reference_pitch)) + ' Hz</span>' +
@@ -176,6 +180,19 @@
         return html;
     }
 
+    function _renderHighwaySelect(inst, over) {
+        if (!_vizPlugins.length) return '';
+        var current = over.preferred_highway || '';
+        var opts = '<option value="">Auto (match arrangement)</option>';
+        for (var v = 0; v < _vizPlugins.length; v++) {
+            var vp = _vizPlugins[v];
+            opts += '<option value="' + esc(vp.id) + '"' + (vp.id === current ? ' selected' : '') + '>' + esc(vp.name) + '</option>';
+        }
+        return '<div class="mb-2" data-section="highway" data-inst="' + esc(inst.id) + '">' +
+            '<div class="text-[0.625rem] uppercase tracking-wider text-fb-textDim mb-1.5">Preferred highway</div>' +
+            '<select data-highway="' + esc(inst.id) + '" class="bg-gray-800/50 border border-gray-700 rounded-md px-2 py-1 text-xs text-fb-text outline-none focus:border-fb-primary w-full">' + opts + '</select></div>';
+    }
+
     function _renderTunings(inst, over) {
         var html = '<div data-section="tunings" data-inst="' + esc(inst.id) + '">' +
             '<div class="text-[0.625rem] uppercase tracking-wider text-fb-textDim mb-1.5">Tuning presets</div>';
@@ -217,7 +234,22 @@
                     if (std && entry.offsets && std.length === entry.offsets.length) {
                         for (var oi = 0; oi < entry.offsets.length; oi++) {
                             midis.push(std[oi] + entry.offsets[oi]);
-                        }
+        // Preferred highway
+        panel.querySelectorAll('[data-highway]').forEach(function (sel) {
+            sel.addEventListener('change', function () {
+                var instId = sel.getAttribute('data-highway');
+                var over = getOverrides(instId);
+                var val = sel.value;
+                if (val) {
+                    over.preferred_highway = val;
+                } else {
+                    delete over.preferred_highway;
+                }
+                saveOverridesDebounced();
+                renderInstruments();
+            });
+        });
+    }
                     }
                     var noteLabel = midis.length ? midis.map(function (m) { return midiToNote(m); }).join(' ') : '';
                     var offStr = entry.offsets ? entry.offsets.map(function (o) { return (o >= 0 ? '+' : '') + o; }).join(',') : '';
@@ -373,6 +405,15 @@
         try {
             var r = await fetch('/api/instruments');
             if (r.ok) _instruments = await r.json();
+        } catch (_) {}
+
+        // Load visualization plugins for highway dropdown
+        try {
+            var pr = await fetch('/api/plugins');
+            if (pr.ok) {
+                var plugins = await pr.json();
+                _vizPlugins = plugins.filter(function (p) { return p.type === 'visualization'; });
+            }
         } catch (_) {}
 
         try {
