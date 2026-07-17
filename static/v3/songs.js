@@ -3651,19 +3651,25 @@
         // toolbar so its selects reflect the saved choice (default: Artist A–Z).
         if (!_prefsRestored) { applySavedPrefs(); _prefsRestored = true; }
         // ── Auto-apply instrument arrangement filter on first render ─────
-        if (_arrAutoInstrument === null && !state.filters.arr_has.length && !state.filters.arr_lacks.length) {
+        // Always read the auto-filter toggle from settings so the user can
+        // enable/disable it in Settings → Gameplay without a full page reload.
+        try {
+            var sr = await fetch('/api/settings');
+            if (sr.ok) {
+                var sd = await sr.json();
+                _autoFilterEnabled = sd.auto_filter_instrument !== false;
+            }
+        } catch (_) {}
+        if (_autoFilterEnabled && _arrAutoInstrument === null && !state.filters.arr_has.length && !state.filters.arr_lacks.length) {
             try {
-                var sr = await fetch('/api/settings');
-                if (sr.ok) {
-                    var sd = await sr.json();
-                    var instId = sd && sd.instrument;
-                    // Respect the auto-filter toggle in Gameplay settings.
-                    var autoFilter = sd.auto_filter_instrument !== false;
-                    _autoFilterEnabled = autoFilter;
-                    console.log('auto-filter: initial render instrument=' + instId + ' enabled=' + autoFilter + ' raw=' + sd.auto_filter_instrument);
-                    if (instId && autoFilter) _applyArrangementAutoFilter(instId);
-                }
+                var instId = sd && sd.instrument;
+                if (instId) _applyArrangementAutoFilter(instId);
             } catch (_) {}
+        } else if (!_autoFilterEnabled && state.filters.arr_has.length) {
+            // Toggle was turned off — clear any previously-applied auto-filter.
+            state.filters.arr_has = [];
+            state.filters.arr_lacks = [];
+            _arrAutoInstrument = null;
         }
         const providers = await loadProviders();
         const [, tn] = await Promise.all([
@@ -4312,7 +4318,6 @@
         // on the next instrument switch.
         sm.on('instrument:changed', function (e) {
             var instId = e && e.detail && e.detail.instrument;
-            console.log('auto-filter: instrument=' + instId + ' enabled=' + _autoFilterEnabled);
             if (!instId || !_autoFilterEnabled) return;
             if (_applyArrangementAutoFilter(instId)) {
                 reload();
