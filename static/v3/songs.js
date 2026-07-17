@@ -554,8 +554,11 @@
         if (arrIdx != null) {
             acc = _perArrangementAccuracy(filename, arrIdx);
         }
-        // Fall back to song-wide max when no per-role match.
-        if (acc == null) acc = state.accuracy[filename];
+        // Fall back to song-wide max only when no auto-filter is active.
+        // When a specific role is selected but the song has no matching
+        // arrangement, show nothing instead of attributing a different
+        // role's score.
+        if (acc == null && !state.filters.arr_has.length) acc = state.accuracy[filename];
         var hasArr = song && song.arrangements && song.arrangements.length > 0;
         // Show badge when we have accuracy OR the song has arrangements
         // (so the hover overlay works even for unplayed songs).
