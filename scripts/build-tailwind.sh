@@ -7,15 +7,26 @@
 #
 # Pin to Tailwind 3.x so the input/config syntax matches what was
 # already shipped via the Play CDN (Tailwind 4 has breaking changes).
+#
+# Run this from a checkout with NO untracked plugin directories present (a
+# `git worktree add --detach` of this branch is the safest way). The content
+# glob (tailwind.config.js) scans `./plugins/**` on disk regardless of
+# .gitignore — a dev machine with private/out-of-tree plugins checked out
+# locally (e.g. audio_engine, plugin_manager) will silently bake their classes
+# into the committed CSS, which CI's clean checkout can never reproduce and
+# will permanently fail the tailwind-fresh gate.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-# Pin to the exact version used to generate the committed CSS — committed
-# artifacts must rebuild byte-stable for diff-friendly maintenance. The
-# pinned version is the one that produced the current static/tailwind.min.css
-# (visible in its top-of-file header comment); bump deliberately when you
-# want to track upstream Tailwind 3.x updates, and regenerate the CSS in
-# the same commit.
-exec npx -y tailwindcss@3.4.19 \
+# Byte-stable rebuilds require the exact same resolved dependency tree, not
+# just the same top-level tailwindcss version: `npx -y tailwindcss@x.y.z`
+# installs into a scratch npx cache and lets npm re-resolve transitive deps
+# (postcss, cssnano, autoprefixer) to whatever's current on the registry at
+# invocation time — those drift independently of the pinned version and
+# silently produced non-reproducible output between two machines. tailwindcss
+# is now a pinned devDependency (package.json/package-lock.json); `npm ci`
+# before this script (both here and in CI) is what actually makes the output
+# reproducible.
+exec npx tailwindcss \
     -c tailwind.config.js \
     -i static/_tailwind.src.css \
     -o static/tailwind.min.css \

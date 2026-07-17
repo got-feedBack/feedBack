@@ -63,10 +63,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        # npm ci runs third-party postinstall scripts; don't leave the token in
+        # git config for them (this job never pushes).
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Rebuild Tailwind CSS
         run: bash scripts/build-tailwind.sh
