@@ -402,6 +402,7 @@
     }
 
     async function load() {
+        console.log('instruments-settings: load() started');
         try {
             var r = await fetch('/api/instruments');
             if (r.ok) _instruments = await r.json();
@@ -430,6 +431,13 @@
 
         renderInstruments();
     }
+
+    // Sync test: update the panel IMMEDIATELY at script load time so we can
+    // distinguish "script not loaded" from "async fetch failed".
+    (function () {
+        var panel = document.getElementById(PANEL_ID);
+        if (panel) panel.innerHTML = '<div class="text-fb-textDim text-sm px-1">Fetching data…</div>';
+    })();
 
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', load);
