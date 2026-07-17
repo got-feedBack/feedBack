@@ -567,12 +567,13 @@
         if (acc == null && !hasArr) return '';
 
         var pct = acc != null ? Math.floor(acc * 100) : null;
-        // Display: "n/a" when the selected role has no arrangement in this song;
-        // "— %" when the arrangement exists but hasn't been played yet.
+        // Display: "n/a" when the auto-filter is active but this song has no
+        // arrangement matching the selected role. "— %" when the arrangement
+        // exists but hasn't been scored yet.
         var displayLabel;
         if (pct != null) {
             displayLabel = pct + '%';
-        } else if (_arrAutoInstrument && !hasMatchingArrangement) {
+        } else if (state.filters.arr_has.length && !hasMatchingArrangement) {
             displayLabel = 'n/a';
         } else {
             displayLabel = '— %';
