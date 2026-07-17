@@ -502,9 +502,7 @@
         // Find the arrangement whose name matches the current auto-filter role.
         // This is the arrangement the card would open for the current instrument.
         var want = state.filters.arr_has;
-        if (!want.length) return null;
         // Resolve the active role from the current instrument profile
-        // so we show mastery for the user's selected role (Lead/Rhythm).
         var activeProfileId = (sm && sm._activeInstrumentProfile) || '';
         var activeRoleLabel = null;
         if (activeProfileId) {
@@ -533,6 +531,8 @@
             // so the badge shows "n/a" instead of falling back to a different role.
             return null;
         }
+        // Without an active role, fall back to arrangement auto-filter.
+        if (!want.length) return null;
         // Fallback: first arrangement matching any auto-filter value.
         for (var i = 0; i < song.arrangements.length; i++) {
             var a2 = song.arrangements[i];
@@ -567,13 +567,14 @@
         if (acc == null && !hasArr) return '';
 
         var pct = acc != null ? Math.floor(acc * 100) : null;
-        // Display: "n/a" when the auto-filter is active but this song has no
-        // arrangement matching the selected role. "— %" when the arrangement
-        // exists but hasn't been scored yet.
+        // When the arrangement filter is inactive, all songs appear — but some
+        // may not have the selected role's arrangement. Show "n/a" in that case.
+        // When the filter IS active, songs without a match are already excluded
+        // server-side, so we only show "— %" (unplayed) or the percentage.
         var displayLabel;
         if (pct != null) {
             displayLabel = pct + '%';
-        } else if (state.filters.arr_has.length && !hasMatchingArrangement) {
+        } else if (!state.filters.arr_has.length && !hasMatchingArrangement) {
             displayLabel = 'n/a';
         } else {
             displayLabel = '— %';
