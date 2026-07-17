@@ -294,25 +294,8 @@
             var overrides = s.instrument_overrides || {};
             var prefs = overrides[instrumentId] || {};
             var hw = prefs.preferred_highway;
-            if (hw && typeof hw === 'string') {
-                localStorage.setItem('vizSelection', hw);
-                // Also update the picker DOM so it takes effect immediately
-                // (the song:ready handler reads sel.value, not localStorage).
-                var sel = document.getElementById('viz-picker');
-                if (sel) {
-                    var found = false;
-                    for (var i = 0; i < sel.options.length; i++) {
-                        if (sel.options[i].value === hw) { sel.value = hw; found = true; break; }
-                    }
-                    // If not in the picker yet (plugins still loading), add a
-                    // temporary option so song:ready picks it up.
-                    if (!found && hw) {
-                        var opt = document.createElement('option');
-                        opt.value = hw;
-                        opt.selected = true;
-                        sel.appendChild(opt);
-                    }
-                }
+            if (hw && typeof hw === 'string' && typeof window.setViz === 'function') {
+                window.setViz(hw);
             }
         } catch (_) {}
     }
