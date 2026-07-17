@@ -256,6 +256,10 @@ export function setupAppUpdates() {
         // the note reflect the unsupported state.
         if (linuxNote) linuxNote.classList.remove('hidden');
         checkBtn.disabled = true;
+        // Reset the button out of any leftover "Restart now" state (e.g. an
+        // update was staged on nightly, then the user switched channels).
+        checkBtn.textContent = 'Check for updates';
+        checkBtn.dataset.mode = 'check';
         statusEl.textContent = message || 'Auto-update is not available on this platform.';
     }
 
@@ -279,20 +283,35 @@ export function setupAppUpdates() {
         // Healthy for the current channel — clear any "unsupported" UI left
         // over from a prior channel selection.
         if (linuxNote) linuxNote.classList.add('hidden');
-        checkBtn.disabled = false;
         const base = `Version ${s.currentVersion || '?'} · ${s.channel || channelSelect.value}`;
+        // The button is a little state machine driven by the status: grayed
+        // out while a check/download is in flight, flipped to "Restart now"
+        // (dataset.mode='restart', consumed by the click handler) once an
+        // update is staged, and back to a plain check button otherwise.
         let action;
+        let btnLabel = 'Check for updates';
+        let btnMode = 'check';
+        let btnDisabled = false;
         switch (s.status) {
             case 'checking':
                 action = 'checking for updates…';
+                btnDisabled = true;
                 break;
             case 'downloading': {
                 const pct = typeof s.percent === 'number' ? s.percent : null;
                 action = pct === null ? 'update available — downloading…' : `downloading update… ${pct}%`;
+                btnDisabled = true;
                 break;
             }
             case 'downloaded':
-                action = 'update ready — restart to apply';
+                action = 'update ready';
+                if (typeof updateApi.apply === 'function') {
+                    btnLabel = 'Restart now';
+                    btnMode = 'restart';
+                } else {
+                    // Older bridge without apply(): fall back to text-only.
+                    action = 'update ready — restart to apply';
+                }
                 break;
             case 'error':
                 action = s.message ? `update error: ${s.message}` : 'update check failed';
@@ -302,6 +321,9 @@ export function setupAppUpdates() {
                 action = `up to date · last checked ${fmtTimestamp(s.lastChecked)}`;
                 break;
         }
+        checkBtn.textContent = btnLabel;
+        checkBtn.dataset.mode = btnMode;
+        checkBtn.disabled = btnDisabled;
         const line = `${base} · ${action}`;
         statusEl.textContent = extra ? `${extra} · ${line}` : line;
         // A download runs in the background (the check returns immediately), so
@@ -381,6 +403,26 @@ export function setupAppUpdates() {
         });
 
         checkBtn.addEventListener('click', async () => {
+            // In restart mode (set by renderFrom once an update is staged) the
+            // button applies the update instead of checking again.
+            if (checkBtn.dataset.mode === 'restart') {
+                checkBtn.disabled = true;
+                checkBtn.textContent = 'Restarting…';
+                try {
+                    const r = await updateApi.apply();
+                    if (r?.status === 'error') {
+                        console.warn('[updater] apply returned error:', r.message || 'unknown');
+                        renderFrom(r, 'Restart failed.');
+                    }
+                    // On success the app quits + relaunches — nothing to render.
+                } catch (e) {
+                    console.warn('[updater] apply failed:', e);
+                    statusEl.textContent = `Restart failed: ${e?.message || e}`;
+                    checkBtn.textContent = 'Restart now';
+                    checkBtn.disabled = false;
+                }
+                return;
+            }
             checkBtn.disabled = true;
             statusEl.textContent = 'Checking for updates…';
             let result;
