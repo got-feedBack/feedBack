@@ -368,11 +368,12 @@ export function setupAppUpdates() {
             if (!APP_UPDATE_CHANNELS.includes(val)) return;
             try { localStorage.setItem('feedBack-update-channel', val); localStorage.removeItem('slopsmith-update-channel'); } catch (_) {}
             try {
-                // Await setChannel so the status line reflects what actually
-                // happened — rendering "Channel set" unconditionally would
-                // mislead users when the IPC rejects.
-                await Promise.resolve(updateApi.setChannel(val));
-                renderStatus(`Channel set to ${val}.`);
+                // Render from setChannel()'s own return value (same reasoning
+                // as the check button: it's computed synchronously at the
+                // moment of the switch, so it can't be stale, unlike a
+                // follow-up getStatus() call).
+                const result = await Promise.resolve(updateApi.setChannel(val));
+                renderFrom(result, `Channel set to ${val}.`);
             } catch (e) {
                 console.warn('[updater] setChannel failed:', e);
                 renderStatus(`Failed to set channel to ${val}: ${e?.message || e}`);
@@ -382,19 +383,26 @@ export function setupAppUpdates() {
         checkBtn.addEventListener('click', async () => {
             checkBtn.disabled = true;
             statusEl.textContent = 'Checking for updates…';
+            let result;
             try {
                 // The Linux check returns immediately (any download runs in the
-                // background); we don't act on the returned status directly —
-                // renderStatus() below reads the authoritative state and starts
-                // the progress poll if a download is now under way.
-                await updateApi.checkNow();
+                // background).
+                result = await updateApi.checkNow();
             } catch (e) {
                 console.warn('[updater] checkNow failed:', e);
                 statusEl.textContent = `Update check failed: ${e?.message || e}`;
                 checkBtn.disabled = false;
                 return;
             }
-            renderStatus();
+            // Render straight from checkNow()'s own return value rather than a
+            // follow-up getStatus() call. checkNow() computes that value
+            // synchronously at the moment it decides the outcome, so it can't
+            // be stale; a separate getStatus() round-trip right after it can
+            // race with anything that resets state in between (a concurrent
+            // channel switch, another in-flight check settling) and show a
+            // blanked "up to date · last checked never" even though this check
+            // just succeeded.
+            renderFrom(result);
         });
 
         _appUpdatesWired = true;
