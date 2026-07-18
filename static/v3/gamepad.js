@@ -130,10 +130,16 @@
         return null;
     }
 
-    function anyLiveConnectedPad() {
+    // Same standard-mapping filter as firstLiveStandardPad — otherwise a
+    // still-connected non-standard raw mirror (or the real pad simply
+    // reporting a different mapping) can mask the actual pad's disconnect:
+    // the toast never fires and polling never stops, even though the pad
+    // this module can act on is gone.
+    function anyLiveStandardPad() {
         var pads = navigator.getGamepads ? navigator.getGamepads() : [];
         for (var i = 0; i < pads.length; i++) {
-            if (pads[i] && pads[i].connected) return true;
+            var p = pads[i];
+            if (p && p.connected && p.mapping === 'standard') return true;
         }
         return false;
     }
@@ -156,6 +162,12 @@
     window.addEventListener('gamepadconnected', function (e) {
         var idx = e.gamepad && e.gamepad.index;
         console.log('[gamepad] connected', idx, e.gamepad && e.gamepad.id, 'mapping:', e.gamepad && e.gamepad.mapping);
+        // Non-standard slots (raw HID mirrors, or anything this module can't
+        // safely act on) are never tracked/toasted/polled for — only ever
+        // treat a standard-mapped pad as "a controller connected". Keeping a
+        // non-standard slot out of connectedIndices also keeps it out of
+        // anyLiveStandardPad's count, so it can't mask a real disconnect.
+        if (!e.gamepad || e.gamepad.mapping !== 'standard') return;
         if (connectedIndices[idx]) return; // already-announced slot re-firing (focus regain, etc.)
         // On the Deck, Steam Input mirrors a real pad with 1-2 virtual XInput
         // slots of its own (same physical button presses, extra indices) — only
@@ -178,7 +190,7 @@
         var idx = e.gamepad && e.gamepad.index;
         console.log('[gamepad] disconnected', idx, e.gamepad && e.gamepad.id);
         delete connectedIndices[idx];
-        if (!anyLiveConnectedPad()) {
+        if (!anyLiveStandardPad()) {
             polling = false;
             notify('Controller disconnected', '🔌');
         }

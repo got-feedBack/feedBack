@@ -4141,12 +4141,19 @@
 
     async function _gpMove(delta) {
         if (!state.total) return;
-        const base = _gpIdx == null ? 0 : _gpIdx;
-        const next = Math.max(0, Math.min(state.total - 1, base + delta));
-        if (_gpIdx != null && next === _gpIdx) return;
-        _gpIdx = next;
-        await ensureWindow(Math.max(0, next - 1), Math.min(state.total, next + 2));
-        await _gpEnsureVisible(next);
+        if (_gpIdx == null) {
+            // Nothing selected yet — land on the first card and stop, same as
+            // shortcuts.js's legacy _handleLibArrowNav does for an empty
+            // selection: the first press establishes a cursor, it doesn't also
+            // move it (Right/Down previously skipped straight past row 0).
+            _gpIdx = 0;
+        } else {
+            const next = Math.max(0, Math.min(state.total - 1, _gpIdx + delta));
+            if (next === _gpIdx) return;
+            _gpIdx = next;
+        }
+        await ensureWindow(Math.max(0, _gpIdx - 1), Math.min(state.total, _gpIdx + 2));
+        await _gpEnsureVisible(_gpIdx);
         _gpApplyHighlight();
     }
 
@@ -4159,9 +4166,22 @@
     // controls, buttons, and dialog/drawer overlays — same intent as
     // shortcuts.js's _isInsideInteractiveControl, reimplemented locally since
     // this is a plain script (not an ES module) and can't import it.
+    //
+    // The form-control/button check requires the element to be VISIBLE, not
+    // merely present: screens stay in the DOM (hidden, not removed) when you
+    // navigate away, so a real <button> focused on some OTHER now-hidden
+    // screen (dashboard, etc.) can leave document.activeElement pointing at
+    // it — an el.closest('#v3-songs') scope check would let that stale focus
+    // through fine, but would ALSO wrongly stop blocking genuinely-focused
+    // shared chrome like the topbar search input (#v3-search lives outside
+    // #v3-songs's DOM subtree even while v3-songs is the active screen).
+    // Visibility is the actual distinction that matters here, not DOM
+    // nesting. The dialog/drawer-overlay and contentEditable checks stay as
+    // they were — overlay-level concerns regardless of which screen sits
+    // underneath.
     function _gpBlockedTarget(el) {
         if (!el) return false;
-        if (['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(el.tagName)) return true;
+        if (['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(el.tagName) && el.offsetParent !== null) return true;
         if (el.isContentEditable) return true;
         if (el.closest && el.closest('[role="dialog"], .feedBack-modal, #lib-filter-drawer')) return true;
         return false;
