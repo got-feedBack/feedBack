@@ -667,6 +667,16 @@ class MetadataDB:
                 self.conn.execute(_ddl)
             except sqlite3.OperationalError:
                 pass
+        # Manual playlist ordering (tester ask): `position` orders the
+        # PLAYLISTS themselves (playlist_songs.position orders songs within
+        # one). NULL = unpositioned — those sort alphabetically AFTER the
+        # manually positioned ones, and system playlists stay pinned first
+        # regardless (see list_playlists). Additive, idempotent — same
+        # pattern as `rules`/`kind` above.
+        try:
+            self.conn.execute("ALTER TABLE playlists ADD COLUMN position INTEGER")
+        except sqlite3.OperationalError:
+            pass
         # Wishlist / "wanted" (feedBack#636 item 4): a persisted, actionable
         # list of songs the user does NOT own yet — the *arr "Wanted/Monitored"
         # analogue. Unlike playlists (which reference owned local songs by
@@ -2405,10 +2415,14 @@ class MetadataDB:
 
     def list_playlists(self) -> list[dict]:
         from urllib.parse import quote
+        # Order: system playlists pinned first, then manually positioned user
+        # playlists (position = drag order), then unpositioned ones
+        # alphabetically — so a manual order wins and a playlist created after
+        # a reorder still lands somewhere predictable (see reorder_playlists).
         rows = self.conn.execute(
             "SELECT id, name, system_key, created_at, updated_at, kind FROM playlists "
             "WHERE rules IS NULL "          # smart collections live in the source picker, not here
-            "ORDER BY (system_key IS NULL), name COLLATE NOCASE"
+            "ORDER BY (system_key IS NULL), (position IS NULL), position, name COLLATE NOCASE"
         ).fetchall()
         out = []
         for r in rows:
@@ -2707,6 +2721,30 @@ class MetadataDB:
                     (pos, pid, fn),
                 )
             self.conn.execute("UPDATE playlists SET updated_at = datetime('now') WHERE id = ?", (pid,))
+            self.conn.commit()
+        return True
+
+    def reorder_playlists(self, ordered_ids: list[int]) -> bool:
+        """Persist a manual ordering of the playlists THEMSELVES: position =
+        index in `ordered_ids` (the songs-within sibling is reorder_playlist).
+        Caller (the route) validates the list is an exact permutation of the
+        current non-system playlist ids."""
+        with self._lock:
+            for pos, pid in enumerate(ordered_ids):
+                self.conn.execute(
+                    "UPDATE playlists SET position = ?, updated_at = datetime('now') WHERE id = ?",
+                    (pos, pid),
+                )
+            self.conn.commit()
+        return True
+
+    def clear_playlist_positions(self) -> bool:
+        """Drop every manual playlist position → back to alphabetical
+        (the "Sort A–Z" affordance)."""
+        with self._lock:
+            self.conn.execute(
+                "UPDATE playlists SET position = NULL, updated_at = datetime('now') "
+                "WHERE position IS NOT NULL")
             self.conn.commit()
         return True
 

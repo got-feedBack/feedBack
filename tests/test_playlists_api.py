@@ -175,3 +175,94 @@ def test_deleting_playlist_removes_custom_cover(client, server):
     assert _playlist_cover_path(pid).exists()
     client.delete(f"/api/playlists/{pid}")
     assert not _playlist_cover_path(pid).exists()
+
+
+# ── Reordering the playlists THEMSELVES (not songs-within) ───────────────────
+
+def _mk(client, name):
+    return client.post("/api/playlists", json={"name": name}).json()["id"]
+
+
+def _ids(client):
+    return [p["id"] for p in client.get("/api/playlists").json()]
+
+
+def test_playlists_default_order_is_alphabetical(client):
+    b = _mk(client, "Bravo")
+    a = _mk(client, "alpha")      # NOCASE: lowercase still sorts by letter
+    z = _mk(client, "Zulu")
+    assert _ids(client) == [a, b, z]
+
+
+def test_playlist_manual_reorder_persists(client):
+    a = _mk(client, "Alpha")
+    b = _mk(client, "Bravo")
+    c = _mk(client, "Charlie")
+    r = client.post("/api/playlists/reorder", json={"order": [c, a, b]})
+    assert r.status_code == 200
+    assert [p["id"] for p in r.json()] == [c, a, b]
+    # persists across independent list calls
+    assert _ids(client) == [c, a, b]
+    assert _ids(client) == [c, a, b]
+
+
+def test_playlist_reorder_excludes_system_and_keeps_it_pinned(client):
+    # First toggle creates the "Saved for Later" system playlist.
+    client.post("/api/saved/toggle", json={"filename": "x.archive"})
+    a = _mk(client, "Alpha")
+    b = _mk(client, "Bravo")
+    saved = next(p["id"] for p in client.get("/api/playlists").json() if p["system_key"])
+    # A system id in the order is rejected — it isn't reorderable.
+    assert client.post("/api/playlists/reorder", json={"order": [saved, b, a]}).status_code == 400
+    # User playlists reorder; the system playlist stays pinned first.
+    assert client.post("/api/playlists/reorder", json={"order": [b, a]}).status_code == 200
+    listing = client.get("/api/playlists").json()
+    assert listing[0]["system_key"] == "saved_for_later"
+    assert [p["id"] for p in listing[1:]] == [b, a]
+
+
+def test_playlist_reorder_rejects_bad_orders(client):
+    a = _mk(client, "Alpha")
+    b = _mk(client, "Bravo")
+    for bad in (
+        [a],                # missing an id (partial order)
+        [a, b, 999999],     # extra unknown id
+        [a, a],             # duplicate (drops b)
+        [a, 999999],        # unknown id in place of b
+        "nope",             # not a list
+        [a, str(b)],        # non-int entry
+        [True, False],      # bools are ints to Python — must still be rejected
+        None,               # {"order": null}
+    ):
+        assert client.post("/api/playlists/reorder", json={"order": bad}).status_code == 400, bad
+    assert client.post("/api/playlists/reorder", json={}).status_code == 400
+    # Nothing was persisted by any rejected request.
+    assert _ids(client) == [a, b]
+
+
+def test_sort_alpha_clears_manual_order(client):
+    a = _mk(client, "Alpha")
+    b = _mk(client, "Bravo")
+    z = _mk(client, "Zulu")
+    client.post("/api/playlists/reorder", json={"order": [z, b, a]})
+    assert _ids(client) == [z, b, a]
+    r = client.post("/api/playlists/sort-alpha")
+    assert r.status_code == 200
+    assert [p["id"] for p in r.json()] == [a, b, z]
+    assert _ids(client) == [a, b, z]
+
+
+def test_new_playlist_after_manual_reorder_sorts_alphabetically_after_positioned(client):
+    a = _mk(client, "Alpha")
+    b = _mk(client, "Bravo")
+    client.post("/api/playlists/reorder", json={"order": [b, a]})
+    # New playlists are unpositioned → they follow the manually positioned
+    # ones, alphabetically among themselves, and never disturb the manual
+    # order ("Aardvark" would be first alphabetically).
+    z = _mk(client, "Zebra")
+    aa = _mk(client, "Aardvark")
+    assert _ids(client) == [b, a, aa, z]
+    # A subsequent full reorder must include the newcomers (exact permutation).
+    assert client.post("/api/playlists/reorder", json={"order": [b, a]}).status_code == 400
+    assert client.post("/api/playlists/reorder", json={"order": [z, aa, b, a]}).status_code == 200
+    assert _ids(client) == [z, aa, b, a]

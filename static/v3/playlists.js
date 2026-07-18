@@ -144,19 +144,29 @@
         const root = document.getElementById('v3-playlists');
         if (!root) return;
         const lists = (await jget('/api/playlists')) || [];
+        // Drag-to-reorder is for user playlists only — system ones (Saved for
+        // Later) stay pinned first by the server ordering.
+        const userCount = lists.filter((p) => !p.system_key).length;
         root.innerHTML =
             '<div class="max-w-5xl mx-auto px-6 md:px-8 pb-8">' +
             '<div class="flex items-center justify-end gap-2 mb-6">' +
+            // Sort A–Z: clears the manual (drag) order server-side. Only worth
+            // showing once there are two user playlists to order.
+            (userCount > 1
+                ? '<button id="v3-pl-sort-az" title="Sort playlists alphabetically (clears manual order)" class="text-sm text-fb-textDim hover:text-fb-text px-2">Sort A–Z</button>' : '') +
             // Curated album (P6): a hand-picked ORDERED set with a chosen chart
             // per track — same machinery as a playlist, kind='album'.
             '<button id="v3-pl-new-album" title="A hand-picked, ordered set of songs — your version of an album, with your chosen chart per track" class="bg-fb-card/80 hover:bg-fb-card border border-fb-border/60 text-fb-text px-4 py-2 rounded-md text-sm font-medium">💿 New album</button>' +
             '<button id="v3-pl-new" class="bg-fb-primary hover:bg-fb-primaryHi text-white px-4 py-2 rounded-md text-sm font-medium shadow-lg shadow-fb-primary/20">New playlist</button>' +
             '</div>' +
             (lists.length
-                ? '<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">' + lists.map((p) =>
-                    '<button data-pl="' + p.id + '" class="text-left bg-fb-card/80 backdrop-blur rounded-xl p-4 border border-fb-border/50 hover:border-fb-primary/40 transition">' +
+                ? '<div id="v3-pl-grid" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">' + lists.map((p) =>
+                    '<button data-pl="' + p.id + '"' + (p.system_key ? '' : ' draggable="true"') + ' class="text-left bg-fb-card/80 backdrop-blur rounded-xl p-4 border border-fb-border/50 hover:border-fb-primary/40 transition">' +
                     playlistCoverHtml(p) +
-                    '<div class="text-sm font-medium text-fb-text truncate">' + esc(p.name) + '</div>' +
+                    '<div class="flex items-center gap-1">' +
+                    '<span class="flex-1 min-w-0 text-sm font-medium text-fb-text truncate">' + esc(p.name) + '</span>' +
+                    (p.system_key ? '' : '<span class="cursor-grab text-fb-textDim/60 px-1" title="Drag to reorder">⠿</span>') +
+                    '</div>' +
                     '<div class="text-xs text-fb-textDim">' + (p.kind === 'album' ? '💿 Album · ' : '') + p.count + ' song' + (p.count === 1 ? '' : 's') + '</div>' +
                     '</button>').join('') + '</div>'
                 : '<p class="text-fb-textDim">No playlists yet. Create one to group songs.</p>') +
@@ -173,8 +183,44 @@
             await jsend('POST', '/api/playlists', { name, kind: 'album' });
             renderPlaylists();
         });
+        root.querySelector('#v3-pl-sort-az')?.addEventListener('click', async () => {
+            await jsend('POST', '/api/playlists/sort-alpha');
+            renderPlaylists();
+        });
         root.querySelectorAll('[data-pl]').forEach((b) =>
             b.addEventListener('click', () => renderPlaylistDetail(parseInt(b.getAttribute('data-pl'), 10))));
+        // Drag-reorder of the playlist cards themselves (mirrors wireSongRows).
+        // Only user playlists carry draggable="true"; system cards are neither
+        // drag sources nor drop targets, so nothing can be inserted ahead of
+        // them (and the server pins them first regardless).
+        const grid = root.querySelector('#v3-pl-grid');
+        if (grid) {
+            let dragEl = null;
+            grid.querySelectorAll('button[data-pl][draggable="true"]').forEach((card) => {
+                card.addEventListener('dragstart', () => { dragEl = card; card.classList.add('opacity-50'); });
+                card.addEventListener('dragend', () => { card.classList.remove('opacity-50'); });
+                card.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    if (!dragEl || dragEl === card) return;
+                    // Grid tiles flow left→right then wrap, so the insert side
+                    // is horizontal (the song rows' vertical-midpoint idiom,
+                    // rotated); moving to another row targets that row's cards.
+                    const rect = card.getBoundingClientRect();
+                    const after = (e.clientX - rect.left) > rect.width / 2;
+                    card.parentNode.insertBefore(dragEl, after ? card.nextSibling : card);
+                });
+                card.addEventListener('drop', async (e) => {
+                    e.preventDefault();
+                    const order = Array.from(grid.querySelectorAll('button[data-pl][draggable="true"]'))
+                        .map((x) => parseInt(x.getAttribute('data-pl'), 10));
+                    await jsend('POST', '/api/playlists/reorder', { order });
+                    // Re-sync from the server: if /reorder was rejected
+                    // (concurrent change) or the request failed, the optimistic
+                    // DOM order would otherwise diverge from what persisted.
+                    renderPlaylists();
+                });
+            });
+        }
     }
 
     async function renderPlaylistDetail(pid) {
