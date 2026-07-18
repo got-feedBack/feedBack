@@ -77,8 +77,14 @@
             // artist/album pages, v3-playlists' list<->detail view), else fall
             // back to the main menu, matching the direct showScreen() call the
             // settings Escape shortcut already uses.
-            var backBtn = document.querySelector('[data-ap-back], [data-albums-back], #v3-pl-back');
-            if (backBtn && visible(backBtn)) backBtn.click();
+            // querySelector alone would only ever look at the first match in
+            // DOM order across all three selectors — screens stay in the DOM
+            // (hidden, not removed) when you navigate away, so a hidden back
+            // button from a screen you're not on can sort before the visible
+            // one that actually applies. Check every match for visibility.
+            var backBtns = document.querySelectorAll('[data-ap-back], [data-albums-back], #v3-pl-back');
+            var backBtn = Array.prototype.find.call(backBtns, visible);
+            if (backBtn) backBtn.click();
             else if (window.showScreen) window.showScreen('v3-home');
             return;
         }
