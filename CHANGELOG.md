@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`chart-transform` capability domain (#952)** — plugins can now remap the
+  chart before rendering and scoring through a core-owned provider
+  coordinator. Synchronous transforms run after difficulty filtering; host
+  data is isolated from providers, accepted timelines are time-sorted, and
+  failures fall back to the original chart with a fixed public reason.
+  Effective chart arrays and metadata are available to 2D/custom renderers
+  and highway getters, while `getSongInfo()` retains the original metadata.
+  Provider selection persists and applies to primary and splitscreen highways.
 - **Gold tier (career passports)** — an earned badge turns **gold** when
   Virtuoso verifies an improvised jam in the passport's style (the
   `gold_improv` artifact relays with the drill snapshot; a genre inherits its
