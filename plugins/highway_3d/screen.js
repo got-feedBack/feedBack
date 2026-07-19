@@ -4259,6 +4259,19 @@
         _pcRefs = Math.max(0, _pcRefs - 1);
         if (_pcRefs > 0) return;
         if (_pcRetryTimer) { clearTimeout(_pcRetryTimer); _pcRetryTimer = 0; }
+        // Drop the screen:changed subscription too, not just the DOM. The
+        // refcount guard inside the hook makes a stale one harmless, but the
+        // listener and its closure would otherwise outlive the control for the
+        // page's lifetime — and a plugin re-load (new ?v=) evaluates this file
+        // again, binding another hook to the same bus while the old one stays.
+        // _pcBindScreenHook re-binds on the next acquire.
+        if (_pcScreenHook) {
+            try {
+                const bus = window.feedBack;
+                if (bus && typeof bus.off === 'function') bus.off('screen:changed', _pcScreenHook);
+            } catch (e) { /* best-effort: a host without off() just keeps the no-op hook */ }
+            _pcScreenHook = null;
+        }
         _pcTeardownDom();
     }
 

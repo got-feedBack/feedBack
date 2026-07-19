@@ -118,6 +118,7 @@ function load({ store: initialStore } = {}) {
         customVideoName: '',
     }, initialStore);
 
+    const bus = {};
     const listeners = new Set();
     const emit = (key) => { for (const fn of listeners) fn(key); };
     const writes = [];
@@ -137,7 +138,19 @@ function load({ store: initialStore } = {}) {
             getElementById: () => null,
         },
         window: {
-            feedBack: { ui: { playerControlSlot: () => dom.slot } },
+            feedBack: {
+                ui: { playerControlSlot: () => dom.slot },
+                // The real bus is an EventTarget wrapper exposing on/off. Modelled
+                // here so the screen:changed subscription — and its removal — are
+                // observable.
+                on: (ev, fn) => { (bus[ev] || (bus[ev] = [])).push(fn); },
+                off: (ev, fn) => {
+                    const l = bus[ev];
+                    if (!l) return;
+                    const i = l.indexOf(fn);
+                    if (i >= 0) l.splice(i, 1);
+                },
+            },
             h3dBgSetStyle: (v) => { writes.push(['style', v]); store.style = v; emit('style'); },
             h3dBgSetReactive: (v) => { writes.push(['reactive', v]); store.reactive = v; emit('reactive'); },
             h3dBgSetIntensity: (v) => { writes.push(['intensity', v]); store.intensity = v; emit('intensity'); },
@@ -155,7 +168,9 @@ function load({ store: initialStore } = {}) {
         + '   get refs() { return _pcRefs; } })',
         sandbox,
     );
-    return { api, dom, store, emit, writes, timers, sandbox, listenerCount: () => listeners.size };
+    const fireScreenChanged = () => (bus['screen:changed'] || []).slice().forEach((fn) => fn());
+    const screenHooks = () => (bus['screen:changed'] || []).length;
+    return { api, dom, store, emit, writes, timers, sandbox, listenerCount: () => listeners.size, fireScreenChanged, screenHooks };
 }
 
 test('mounts one control into the player-control slot', () => {
@@ -182,6 +197,26 @@ test('multiple renderer instances share a single control', () => {
     api._pcRelease();
     assert.equal(dom.slot.children.length, 0, 'last release must unmount');
     assert.equal(api.el, null);
+});
+
+test('the last release unbinds the screen:changed hook', () => {
+    const ctl = load();
+    ctl.api._pcAcquire();
+    assert.equal(ctl.screenHooks(), 1, 'acquire should subscribe once');
+
+    ctl.api._pcAcquire();
+    ctl.api._pcRelease();
+    assert.equal(ctl.screenHooks(), 1, 'a partial release must keep the hook');
+
+    ctl.api._pcRelease();
+    assert.equal(ctl.screenHooks(), 0, 'the hook outlived the control');
+
+    // And re-acquiring must re-subscribe exactly once, not zero times (the
+    // bind is guarded on _pcScreenHook, so failing to null it would leave the
+    // control permanently deaf to chrome rebuilds).
+    ctl.api._pcAcquire();
+    assert.equal(ctl.screenHooks(), 1, 're-acquire did not re-subscribe');
+    ctl.api._pcRelease();
 });
 
 test('teardown unsubscribes from the settings bus', () => {
