@@ -60,7 +60,7 @@ function loadChecker(opts) {
     const calls = [];
     const window = {
         parseRawTuningOffsets: loadParseRawTuningOffsets(),
-        feedBack: opts.noWorkingTuning ? {} : { workingTuning: { get: () => ({ instrument: 'bass' }) } },
+        feedBack: opts.noWorkingTuning ? {} : { workingTuning: { get: () => ({ instrument: opts.instrument || 'bass' }) } },
         _tunerAutoOpen: opts.noCoverage ? undefined : {
             coverageReport: async (info) => {
                 calls.push(info);
@@ -174,6 +174,26 @@ test('a coverage call that throws degrades to unknown, not mismatch', async () =
     const checker = loadChecker({ coverage: async () => { throw new Error('tuner exploded'); } });
     const out = await checker.checkPlaylistTuning([song({})]);
     assert.deepEqual(plain(out.map((r) => r.state)), ['unknown']);
+});
+
+test('the bass perspective uses #1003 bass offsets instead of guitar offsets', async () => {
+    const checker = loadChecker({ instrument: 'bass', coverage: async () => REPORT_COVERED });
+    await checker.checkPlaylistTuning([song({
+        tuning_offsets: '0 0 0 0 0 0',
+        bass_tuning_offsets: '-2 -2 -2 -2 -2 -2',
+    })]);
+    assert.deepEqual(plain(checker.calls[0].tuning), [-2, -2, -2, -2, -2, -2]);
+    assert.equal(checker.calls[0].arrangement, 'Bass');
+});
+
+test("the guitar perspective ignores a song's bass offsets", async () => {
+    const checker = loadChecker({ instrument: 'guitar', coverage: async () => REPORT_COVERED });
+    await checker.checkPlaylistTuning([song({
+        tuning_offsets: '0 0 0 0 0 0',
+        bass_tuning_offsets: '-2 -2 -2 -2 -2 -2',
+    })]);
+    assert.deepEqual(plain(checker.calls[0].tuning), [0, 0, 0, 0, 0, 0]);
+    assert.equal(checker.calls[0].arrangement, 'Lead');
 });
 
 test('a bass-only chart is scored against bass base pitches', async () => {

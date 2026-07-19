@@ -194,6 +194,26 @@ def test_playlist_songs_carry_tuning_offsets_for_the_check(client, server):
     assert song["tuning_name"] == "Drop D"
 
 
+def test_playlist_songs_carry_role_specific_tunings(client, server):
+    db = server.meta_db
+    db.put("roles.archive", 0, 0, {
+        "title": "Roles",
+        "tuning_name": "E Standard",
+        "tuning_offsets": "0 0 0 0 0 0",
+        "bass_tuning_name": "A Standard",
+        "bass_tuning_offsets": "-2 -2 -2 -2 -2 -2",
+        "rhythm_tuning_name": "Drop D",
+        "rhythm_tuning_offsets": "-2 0 0 0 0 0",
+    })
+    pid = client.post("/api/playlists", json={"name": "Roles"}).json()["id"]
+    client.post(f"/api/playlists/{pid}/songs", json={"filename": "roles.archive"})
+    song = client.get(f"/api/playlists/{pid}").json()["songs"][0]
+    assert song["bass_tuning_name"] == "A Standard"
+    assert song["bass_tuning_offsets"] == "-2 -2 -2 -2 -2 -2"
+    assert song["rhythm_tuning_name"] == "Drop D"
+    assert song["rhythm_tuning_offsets"] == "-2 0 0 0 0 0"
+
+
 def test_playlist_songs_flag_bass_only_charts(client, server):
     # Every arrangement a bass part → bass_only, so coverage scores the row
     # against bass strings. A chart that ALSO has a guitar part must not be

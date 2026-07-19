@@ -2701,7 +2701,9 @@ class MetadataDB:
         rows = self.conn.execute(
             f"""SELECT ps.filename, ps.position, s.title, s.artist, s.tuning_name,
                        ps.arrangement, ps.work_key, s.arrangements,
-                       (s.filename IS NULL) AS dead, s.tuning_offsets
+                       (s.filename IS NULL) AS dead, s.tuning_offsets,
+                       s.bass_tuning_name, s.bass_tuning_offsets,
+                       s.rhythm_tuning_name, s.rhythm_tuning_offsets
                FROM playlist_songs ps LEFT JOIN songs s ON s.filename = ps.filename
                WHERE ps.playlist_id = ? {dead_filter}
                ORDER BY ps.position, ps.filename""",
@@ -2719,6 +2721,10 @@ class MetadataDB:
                 # rows are different tunings), and coverage needs to know whether to
                 # measure against bass or guitar base pitches.
                 "tuning_offsets": r[9] or "",
+                "bass_tuning_name": r[10] or "",
+                "bass_tuning_offsets": r[11] or "",
+                "rhythm_tuning_name": r[12] or "",
+                "rhythm_tuning_offsets": r[13] or "",
                 "bass_only": _arrangements_all_bass(r[7]),
                 "art_url": f"/api/song/{quote(r[0])}/art",
             }
@@ -2748,7 +2754,8 @@ class MetadataDB:
             self._ensure_work_display()
             row = self.conn.execute(
                 "SELECT wd.filename, s.title, s.artist, s.tuning_name, s.arrangements, "
-                "s.tuning_offsets "
+                "s.tuning_offsets, s.bass_tuning_name, s.bass_tuning_offsets, "
+                "s.rhythm_tuning_name, s.rhythm_tuning_offsets "
                 "FROM work_display wd JOIN songs s ON s.filename = wd.filename "
                 "WHERE wd.effective_work_key = ? AND wd.is_group_representative = 1",
                 (work_key,)).fetchone()
@@ -2763,6 +2770,10 @@ class MetadataDB:
                 return {"resolved_filename": row[0], "title": row[1] or row[0],
                         "artist": row[2] or "", "tuning_name": row[3] or "",
                         "tuning_offsets": row[5] or "",
+                        "bass_tuning_name": row[6] or "",
+                        "bass_tuning_offsets": row[7] or "",
+                        "rhythm_tuning_name": row[8] or "",
+                        "rhythm_tuning_offsets": row[9] or "",
                         "bass_only": _arrangements_all_bass(row[4]),
                         "arrangements": arrs,
                         "art_url": f"/api/song/{quote(row[0])}/art",
