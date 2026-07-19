@@ -1308,6 +1308,56 @@
         return lo;
     }
 
+    /**
+     * Return the chart time of the first fretted event that can still affect
+     * the camera at `now`, or the next fretted onset after it.
+     *
+     * This is intentionally a one-time full-chart scan. It runs only when a
+     * new song/arrangement's arrays first arrive, allowing the camera to frame
+     * the opening phrase during a silent intro instead of waiting for that
+     * phrase to enter the live targeting window. Open strings do not define a
+     * horizontal fret target, and malformed/out-of-range strings are ignored.
+     *
+     * Events already inside the behind-window, plus older sustains that are
+     * still ringing at `now`, return `now` so bootstrap framing matches the
+     * ordinary live path. Future events return their onset time.
+     */
+    function hwyFirstRelevantFrettedTime(notes, chords, now, behind, stringCount) {
+        const nStrings = Number.isFinite(stringCount) ? Math.max(0, Math.floor(stringCount)) : 0;
+        const cameraFloor = now - Math.max(0, Number(behind) || 0);
+        let first = Infinity;
+
+        const validFretted = n => n
+            && n.f > 0
+            && Number.isInteger(n.s)
+            && n.s >= 0
+            && n.s < nStrings;
+        const consider = (eventTime, sustain) => {
+            const t = Number(eventTime);
+            if (!Number.isFinite(t)) return;
+            const sus = Number(sustain);
+            const end = t + (Number.isFinite(sus) && sus > 0 ? sus : 0);
+            if (t < cameraFloor && end < now) return;
+            const relevantTime = t <= now ? now : t;
+            if (relevantTime < first) first = relevantTime;
+        };
+
+        if (notes) {
+            for (const n of notes) {
+                if (validFretted(n)) consider(n.t, n.sus);
+            }
+        }
+        if (chords) {
+            for (const ch of chords) {
+                if (!ch || !ch.notes) continue;
+                for (const cn of ch.notes) {
+                    if (validFretted(cn)) consider(ch.t, cn.sus);
+                }
+            }
+        }
+        return Number.isFinite(first) ? first : null;
+    }
+
     // Last arrangement <anchor> at or before chart time `t` (sorted by .time).
     // Mirrors static/highway.js getAnchorAt — until t reaches the first anchor’s
     // time, the first anchor still defines fret/width.
@@ -5255,29 +5305,31 @@
         let prevLockActive = false;
         let tgtLookY = 0, curLookY = 0;   // lerped look-at Y for self-correcting camera
         let aspectScale = 1;
-        // _camSnapped / _camPreScanned / _songKey: together they gate the first-data snap.
+        // _camSnapped / _camPreScanned / _songKey: together they gate the
+        // first-data bootstrap.
         //
-        // On the first update() frame where bundle.notes is available,
-        // _camPreScanned is set and the full notes array is scanned (O(N), once)
-        // to check whether ANY fretted note (f > 0) exists.  If none do (e.g. an
-        // all-open-string bass arrangement), _camSnapped is set to true immediately
-        // so the per-frame pre-pass is disabled for the entire song.
+        // On the first update() frame where both chart arrays are available,
+        // they are scanned once (O(N)) for the first relevant fretted event.
+        // The normal camera-target calculation is sampled at the point where
+        // that event first enters its targeting window, and curX/curDist are
+        // initialized immediately. This makes silent intros start with the same
+        // base framing they would otherwise acquire just before the first notes.
         //
-        // For charts that do have fretted notes, a lightweight O(window) pre-pass
-        // runs before any drawNote() call on every frame until the first frame
-        // where fretted notes appear in the camera targeting window (preWSum > 0).
-        // At that point curX/curDist are snapped directly to the computed targets,
-        // eliminating the camera swoop for songs with long silent intros.
+        // _camBootstrapHolding keeps that initialized target stable through the
+        // empty intro. It is released as soon as the ordinary live window has
+        // fret bounds/data, producing a continuous hand-off with no second snap.
+        // If the camera mode changes during the hold, live framing takes over.
         //
-        // Once _camSnapped is true it is never cleared for the current song; the
-        // pre-pass is a permanent no-op thereafter and the camera reverts to
-        // normal lerp-based tracking for the rest of the song.
+        // All-open/empty charts have no horizontal fret target, so they keep the
+        // default base view and disable bootstrap work immediately.
         //
-        // _songKey tracks the active song/arrangement so the snap state resets
+        // _songKey tracks the active song/arrangement so the bootstrap state resets
         // automatically when the user switches songs or arrangements via
         // reconnect() (which does not call renderer.destroy/init).
         let _camSnapped = false;
         let _camPreScanned = false;
+        let _camBootstrapHolding = false;
+        let _camBootstrapMode = null;
         let _songKey = null;
         // Smooth lookahead camera: fused world-X and displayed fret-span.
         let _lookaheadCamX = xFretMid(CAM_LOCK_CENTER_FRET);
@@ -9565,6 +9617,22 @@
             return now + CAM_LOOKAHEAD_SEC;
         }
 
+        // Earliest future chart time whose lookahead end reaches eventTime.
+        // lookaheadEndTime() is monotonic but measure-stepped, so a small
+        // bounded binary search works for both measure grids and the seconds
+        // fallback without duplicating/inverting its edge-case logic.
+        function lookaheadBootstrapTime(now, eventTime) {
+            if (!(eventTime > now) || lookaheadEndTime(now) >= eventTime) return now;
+            let lo = now;
+            let hi = eventTime;
+            for (let i = 0; i < 32; i++) {
+                const mid = (lo + hi) * 0.5;
+                if (lookaheadEndTime(mid) >= eventTime) hi = mid;
+                else lo = mid;
+            }
+            return hi;
+        }
+
         function lookaheadComputeFretBounds(now, anchors, notes, chords) {
             const tEnd = lookaheadEndTime(now);
             let minF = 99;
@@ -11505,6 +11573,8 @@
                     _songKey = key;
                     _camSnapped = false;
                     _camPreScanned = false;
+                    _camBootstrapHolding = false;
+                    _camBootstrapMode = null;
                     tgtX = curX = xFretMid(CAM_LOCK_CENTER_FRET);
                     tgtDist = curDist = CAM_DIST_BASE;
                     prevLowFretBonus = 0;
@@ -11530,112 +11600,130 @@
                 }
             }
 
-            // ── Camera pre-pass (first-data snap) ────────────────────────────
-            // Before any drawNote() call, iterate notes/chords to accumulate
-            // the camera targeting data for THIS frame.  If this is the first
-            // frame where fretted notes appear in the targeting window, snap
-            // curX/curDist directly to the computed targets so open-string note
-            // placement (which reads curX) and the camera are consistent on the
-            // snap frame.  After the snap _camSnapped is true and this block
-            // becomes a permanent no-op.  Open-string notes (f === 0) do not
-            // contribute to preWX/preWSum and therefore do not trigger the snap.
-            if (!_camSnapped) {
-                // One-time full-chart scan (runs exactly once when both bundle.notes
-                // and bundle.chords are available).  If no fretted note exists
-                // anywhere in either array the snap can never fire, so we disable
-                // the per-frame pre-pass immediately to avoid permanent overhead.
-                // Both arrays are checked because some arrangements have fretted
-                // notes only inside chords (chord-only charts, keys arrangements).
-                if (!_camPreScanned && notes && chords) {
-                    _camPreScanned = true;
-                    const hasFrettedNote  = notes.some(n => n.f > 0 && validString(n.s));
-                    const hasFrettedChord = chords.some(
-                        ch => ch.notes && ch.notes.some(cn => cn.f > 0 && validString(cn.s)));
-                    if (!hasFrettedNote && !hasFrettedChord) _camSnapped = true;
-                }
-                if (!_camSnapped) {
-                    if (cameraMode === 'lookahead') {
-                        const bd = lookaheadBoundsNow;
-                        if (bd) {
-                            _lookaheadCamX = lookaheadTargetWorldX(bd.minF, bd.maxF);
-                            _lookaheadFretSpan = Math.max(1, bd.maxF - bd.minF + 1);
-                            const lockSnapEl = cameraLockLow && bd.maxF <= 12;
-                            if (lockSnapEl) {
-                                const lockedBaseU = camBaseDistU(12);
-                                const lockedBonusU = camLowFretPullbackU(1);
-                                const lockZoomMul = CAM_LOCK_ZOOM_MIN +
-                                    (CAM_LOCK_ZOOM_MAX - CAM_LOCK_ZOOM_MIN) * cameraLockZoom;
-                                tgtX = xFretMid(CAM_LOCK_CENTER_FRET);
-                                tgtDist = (lockedBaseU + lockedBonusU) * K * lockZoomMul;
-                                prevLowFretBonus = lockedBonusU;
-                                _lookaheadLowBonusU = lockedBonusU;
-                            } else {
-                                const baseDU = camBaseDistU(_lookaheadFretSpan);
-                                const lowBU = camLowFretPullbackU(bd.minF);
-                                tgtDist = (baseDU + lowBU) * K;
-                                prevLowFretBonus = lowBU;
-                                _lookaheadLowBonusU = lowBU;
-                                tgtX = _lookaheadCamX;
-                            }
-                            curX = tgtX;
-                            curDist = tgtDist;
-                            _camSnapped = true;
-                            _lookaheadCamPrevNow = now;
+            // ── Camera bootstrap (first chart data) ──────────────────────────
+            // Initialize against the first relevant fretted phrase as soon as
+            // the complete chart arrays arrive. For a future phrase, sample the
+            // same window state that live framing will have when the phrase
+            // first becomes relevant, then hold it through the silent intro.
+            // This is O(N) once per song/arrangement and a permanent no-op after.
+            if (!_camSnapped && !_camPreScanned && notes && chords) {
+                _camPreScanned = true;
+                const firstFrettedTime = hwyFirstRelevantFrettedTime(
+                    notes, chords, now, CAM_TGT_BEHIND, nStr);
+
+                if (cameraMode === 'lookahead'
+                    && (lookaheadBoundsNow || firstFrettedTime !== null)) {
+                    // Anchors can make the live lookahead valid before the first
+                    // fretted event does. Prefer that already-current framing;
+                    // only project forward when the live window is truly empty.
+                    const bootstrapNow = lookaheadBoundsNow
+                        ? now
+                        : lookaheadBootstrapTime(now, firstFrettedTime);
+                    const bd = lookaheadBoundsNow
+                        || lookaheadComputeFretBounds(bootstrapNow, anchors, notes, chords);
+                    if (bd) {
+                        _lookaheadCamX = lookaheadTargetWorldX(bd.minF, bd.maxF);
+                        _lookaheadFretSpan = Math.max(1, bd.maxF - bd.minF + 1);
+                        const lockSnapEl = cameraLockLow && bd.maxF <= 12;
+                        if (lockSnapEl) {
+                            const lockedBaseU = camBaseDistU(12);
+                            const lockedBonusU = camLowFretPullbackU(1);
+                            const lockZoomMul = CAM_LOCK_ZOOM_MIN +
+                                (CAM_LOCK_ZOOM_MAX - CAM_LOCK_ZOOM_MIN) * cameraLockZoom;
+                            tgtX = xFretMid(CAM_LOCK_CENTER_FRET);
+                            tgtDist = (lockedBaseU + lockedBonusU) * K * lockZoomMul;
+                            prevLowFretBonus = lockedBonusU;
+                            _lookaheadLowBonusU = lockedBonusU;
+                            prevLockActive = true;
+                        } else {
+                            const baseDU = camBaseDistU(_lookaheadFretSpan);
+                            const lowBU = camLowFretPullbackU(bd.minF);
+                            tgtDist = (baseDU + lowBU) * K;
+                            prevLowFretBonus = lowBU;
+                            _lookaheadLowBonusU = lowBU;
+                            tgtX = _lookaheadCamX;
+                            prevLockActive = false;
                         }
+                        curX = tgtX;
+                        curDist = tgtDist;
+                        _camSnapped = true;
+                        _lookaheadCamPrevNow = now;
+                        _camBootstrapHolding = bootstrapNow > now && !lookaheadBoundsNow;
+                        _camBootstrapMode = _camBootstrapHolding ? cameraMode : null;
                     } else {
-                    let preWX = 0, preWSum = 0, preDistMin = 99, preDistMax = 0, preDistGot = false;
-                    if (notes) {
-                        for (const n of notes) {
-                            // bundle.notes is time-sorted: skip fully-expired sustains,
-                            // break once the onset is beyond the camera window.
-                            if (n.t + (n.sus || 0) < camT0) continue;
-                            if (n.t > camT1) break;
-                            if (!validString(n.s)) continue;
-                            const nInWin  = n.f > 0 && n.t >= camT0;
-                            const nSusNow = n.f > 0 && n.t < camT0 && n.t + (n.sus || 0) >= now;
-                            if (nInWin || nSusNow) {
-                                const w = Math.exp(-Math.abs(n.t - now) / camTau);
-                                preWX += xFretMid(n.f) * w; preWSum += w;
-                                if (n.f < preDistMin) preDistMin = n.f;
-                                if (n.f > preDistMax) preDistMax = n.f;
+                        // Defensive fallback for malformed chart timing. The
+                        // helper found a fretted event, so this should be
+                        // unreachable; keeping the default is safer than a
+                        // delayed mid-song snap.
+                        _camSnapped = true;
+                    }
+                } else if (firstFrettedTime === null) {
+                    // Empty and all-open charts without lookahead anchor bounds
+                    // have no horizontal fret target.
+                    _camSnapped = true;
+                } else {
+                    const bootstrapNow = Math.max(now, firstFrettedTime - camAhead);
+                    const bootstrapT0 = bootstrapNow - CAM_TGT_BEHIND;
+                    const bootstrapT1 = bootstrapNow + camAhead;
+                    let preWX = 0, preWSum = 0;
+                    let preDistMin = 99, preDistMax = 0, preDistGot = false;
+
+                    for (const n of notes) {
+                        if (n.t + (n.sus || 0) < bootstrapT0) continue;
+                        if (n.t > bootstrapT1) break;
+                        if (!validString(n.s)) continue;
+                        const nInWin = n.f > 0 && n.t >= bootstrapT0;
+                        const nSusNow = n.f > 0 && n.t < bootstrapT0
+                            && n.t + (n.sus || 0) >= bootstrapNow;
+                        if (nInWin || nSusNow) {
+                            const w = Math.exp(-Math.abs(n.t - bootstrapNow) / camTau);
+                            preWX += xFretMid(n.f) * w;
+                            preWSum += w;
+                            if (n.f < preDistMin) preDistMin = n.f;
+                            if (n.f > preDistMax) preDistMax = n.f;
+                            preDistGot = true;
+                        }
+                    }
+                    for (const ch of chords) {
+                        if (!ch.notes) continue;
+                        if (ch.t > bootstrapT1) break;
+                        const chNotes = filterValidNotes(ch.notes);
+                        if (!chNotes.length) continue;
+                        let maxSus = 0;
+                        for (const n of chNotes) if ((n.sus || 0) > maxSus) maxSus = n.sus;
+                        if (ch.t + maxSus < bootstrapT0) continue;
+                        const chOnsetInWin = ch.t >= bootstrapT0;
+                        const chSusNow = ch.t < bootstrapT0
+                            && ch.t + maxSus >= bootstrapNow;
+                        if (!chOnsetInWin && !chSusNow) continue;
+                        const chW = Math.exp(-Math.abs(ch.t - bootstrapNow) / camTau);
+                        for (const cn of chNotes) {
+                            const cnOk = chOnsetInWin
+                                || (chSusNow && ch.t + (cn.sus || 0) >= bootstrapNow);
+                            if (cn.f > 0 && cnOk) {
+                                preWX += xFretMid(cn.f) * chW;
+                                preWSum += chW;
+                                if (cn.f < preDistMin) preDistMin = cn.f;
+                                if (cn.f > preDistMax) preDistMax = cn.f;
                                 preDistGot = true;
                             }
                         }
                     }
-                    if (chords) {
-                        for (const ch of chords) {
-                            if (!ch.notes) continue;
-                            // bundle.chords is time-sorted: break once onset is beyond window.
-                            if (ch.t > camT1) break;
-                            const chNotes = filterValidNotes(ch.notes);
-                            if (!chNotes.length) continue;
-                            let maxSus = 0;
-                            for (const n of chNotes) if ((n.sus || 0) > maxSus) maxSus = n.sus;
-                            if (ch.t + maxSus < camT0) continue; // fully expired
-                            const chOnsetInWin = ch.t >= camT0;
-                            const chSusNow     = ch.t < camT0 && ch.t + maxSus >= now;
-                            if (!chOnsetInWin && !chSusNow) continue;
-                            const chW = Math.exp(-Math.abs(ch.t - now) / camTau);
-                            for (const cn of chNotes) {
-                                const cnOk = chOnsetInWin || (chSusNow && ch.t + (cn.sus || 0) >= now);
-                                if (cn.f > 0 && cnOk) {
-                                    preWX += xFretMid(cn.f) * chW; preWSum += chW;
-                                    if (cn.f < preDistMin) preDistMin = cn.f;
-                                    if (cn.f > preDistMax) preDistMax = cn.f;
-                                    preDistGot = true;
-                                }
-                            }
-                        }
-                    }
+
                     if (preWSum > 0) {
-                        _applyNoteCamTargets(preWX, preWSum, preDistMin, preDistMax, preDistGot,
-                                             camHystF, camDistHystF, /* skipDistHyst= */ true);
-                        curX    = tgtX;
+                        prevLockActive = _applyNoteCamTargets(
+                            preWX, preWSum, preDistMin, preDistMax, preDistGot,
+                            camHystF, camDistHystF, /* skipDistHyst= */ true);
+                        curX = tgtX;
                         curDist = tgtDist;
-                        _camSnapped = true;
                     }
-                    } // end steady-mode pre-pass branch
-                } // end !_camSnapped (post-prescan guard)
+                    // The relevant-event helper and this accumulator share
+                    // validity/window rules; still finish defensively if a
+                    // malformed event could not produce a target.
+                    _camSnapped = true;
+                    _camBootstrapHolding = preWSum > 0 && bootstrapNow > now;
+                    _camBootstrapMode = _camBootstrapHolding ? cameraMode : null;
+                }
             }
 
             pbBeg(4);
@@ -13582,7 +13670,30 @@
 
             // ── Camera target ─────────────────────────────────────────────
             let lockActive;
-            if (!(cameraMode === 'lookahead')) {
+            let bootstrapHoldActive = false;
+            if (_camBootstrapHolding) {
+                if (_camBootstrapMode !== cameraMode) {
+                    _camBootstrapHolding = false;
+                    _camBootstrapMode = null;
+                } else {
+                    const liveFramingReady = cameraMode === 'lookahead'
+                        ? lookaheadBoundsNow !== null
+                        : camDistGot;
+                    if (liveFramingReady) {
+                        _camBootstrapHolding = false;
+                        _camBootstrapMode = null;
+                    } else {
+                        bootstrapHoldActive = true;
+                    }
+                }
+            }
+
+            if (bootstrapHoldActive) {
+                // Keep the chart-load target intact until the ordinary live
+                // path can compute the same phrase. Camera Director still
+                // layers its free-camera transform in camUpdate().
+                lockActive = prevLockActive;
+            } else if (!(cameraMode === 'lookahead')) {
                 lockActive = _applyNoteCamTargets(
                     camWX, camWSum, camDistMin, camDistMax, camDistGot,
                     camHystF, camDistHystF, /* skipDistHyst= */ false);
@@ -15866,6 +15977,8 @@
             prevLockActive = false;
             _camSnapped = false;
             _camPreScanned = false;
+            _camBootstrapHolding = false;
+            _camBootstrapMode = null;
             _songKey = null;
             _slideTargetSet = null;
             _slideTargetNotesRef = null;
