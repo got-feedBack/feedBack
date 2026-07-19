@@ -55,7 +55,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   survives only as the fallback on anchor-less charts). At most **two wires are ever lit at
   once**: when overlapping decay tails (fast passages) would light a run of wires, the
   flash collapses to the outermost pair of the lit span — one bracket, never a picket
-  fence. The gem's rim joins in: on a confirmed hit the outline flashes in the
+  fence. The flash itself is a one-shot "lightning strike": a near-instant crack up, a
+  fast shocked fall with an electric flicker biting into it, then hard dark — a held
+  sustain triggers exactly one strike and the wires go out while the note rings on. The gem's rim joins in: on a confirmed hit the outline flashes in the
   string's own colour with the same intensity treatment as the wires, fading with the
   scorer's alpha. With no scorer attached, nothing changes.
 

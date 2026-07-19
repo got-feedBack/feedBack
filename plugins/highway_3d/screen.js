@@ -921,7 +921,13 @@
     // The provider already fades its own `alpha` on a struck note; this tail
     // just keeps the hand-off from popping, and smooths the frame-to-frame
     // jitter of a held sustain (whose alpha tracks live input level).
-    const FRET_WIRE_HIT_DECAY = 0.32;
+    // The flash is a one-shot "lightning strike" pulse, not a lingering glow:
+    // a near-instant crack up, then a fast shocked fall with an electric
+    // flicker, then HARD ZERO — a held sustain does not keep the wires lit.
+    const FRET_WIRE_HIT_RISE = 0.025;         // s, the crack — near-instant fade-in
+    const FRET_WIRE_HIT_FALL = 0.16;          // s, the shock dying out; dark after
+    const FRET_WIRE_HIT_FLICKER_HZ = 26;      // shudder rate during the fall
+    const FRET_WIRE_HIT_FLICKER_DEPTH = 0.35; // how deep the shudder bites (0..1)
 
     const S_BASE = 3 * K;
     const S_GAP = 4 * K;
@@ -4784,11 +4790,18 @@
         const _scrStringAnticipation = new Array(MAX_RENDER_STRINGS).fill(0);
         const _scrFretHeat           = new Array(NFRETS + 1).fill(0);
         // Fret-wire hit flash. _fwHitIn is per-frame (cleared with the rest of
-        // the frame state, written by drawNote when a provider confirms a note);
-        // _fwHitGlow persists across frames so the flash can decay smoothly
-        // rather than snapping off the frame the provider goes quiet.
+        // the frame state, written by drawNote when a provider confirms a note).
+        // A RISING EDGE on it triggers a one-shot pulse: _fwPulseT0 records the
+        // strike's chart time, _fwPulseAmp its amplitude, _fwPrevIn detects the
+        // edge (a held 'active' verdict keeps the input high continuously, so a
+        // sustain triggers exactly one pulse — the wire goes dark while the
+        // note rings on). _fwHitGlow holds each wire's evaluated envelope value
+        // this frame, for the outer-pair selection below.
         const _fwHitIn               = new Float32Array(NFRETS + 1);
         const _fwHitGlow             = new Float32Array(NFRETS + 1);
+        const _fwPulseT0             = new Float32Array(NFRETS + 1).fill(-Infinity);
+        const _fwPulseAmp            = new Float32Array(NFRETS + 1);
+        const _fwPrevIn              = new Float32Array(NFRETS + 1);
         // Per-frame chord accumulator. A chord flashes only the OUTERMOST wires
         // of its shape, but drawNote() sees one chord note at a time and can't
         // know the span — so hits accumulate here keyed by chord, and the flash
@@ -12700,23 +12713,47 @@
                 }
 
                 const _fwDt = now - _fwHitPrevTime;
-                if (!(_fwDt >= 0) || _fwDt > 1) _fwHitGlow.fill(0); // first frame, seek, or long stall
-                const _fwDecay = (_fwDt > 0 && _fwDt <= 1)
-                    ? Math.exp(-_fwDt / FRET_WIRE_HIT_DECAY)
-                    : 0;
+                if (!(_fwDt >= 0) || _fwDt > 1) {   // first frame, seek, or long stall
+                    _fwHitGlow.fill(0);
+                    _fwPulseT0.fill(-Infinity);
+                    _fwPulseAmp.fill(0);
+                    _fwPrevIn.fill(0);
+                }
                 _fwHitPrevTime = now;
-                // Decay EVERY wire's glow state, but flash only the OUTERMOST
-                // pair of lit wires. Fast passages overlap their decay tails, so
-                // without this a run of consecutive notes lights a picket fence
-                // of wires at once; collapsing to the outer pair keeps the whole
-                // lit span reading as ONE bracket — the same rule chords already
-                // follow, applied across everything currently glowing. Interior
-                // wires keep decaying invisibly (the base tier loop re-seeds
-                // their materials each frame), so the bracket tightens naturally
-                // as outer tails expire.
+                // Evaluate every wire's pulse, but flash only the OUTERMOST pair
+                // of lit wires (one bracket, never a picket fence — the chord
+                // rule applied across everything currently pulsing). The pulse
+                // itself is the lightning strike: a rising edge on the input
+                // triggers it, it cracks up over RISE, falls over FALL with a
+                // high-rate flicker biting into it (the shock), and is then
+                // hard-zero — a held sustain keeps the input high but triggers
+                // nothing new, so the wires go dark while the note rings.
+                const _fwSpan = FRET_WIRE_HIT_RISE + FRET_WIRE_HIT_FALL;
                 let _fwLo = -1, _fwHi = -1;
                 for (let _f = 0; _f <= NFRETS; _f++) {
-                    const _g = Math.max(_fwHitIn[_f], _fwHitGlow[_f] * _fwDecay);
+                    const _in = _fwHitIn[_f];
+                    if (_in > 0.004 && _fwPrevIn[_f] <= 0.004) {
+                        _fwPulseT0[_f] = now;    // strike
+                        _fwPulseAmp[_f] = _in;
+                    }
+                    _fwPrevIn[_f] = _in;
+                    let _g = 0;
+                    const _pt = now - _fwPulseT0[_f];
+                    if (_pt >= 0 && _pt < _fwSpan) {
+                        if (_pt < FRET_WIRE_HIT_RISE) {
+                            _g = _pt / FRET_WIRE_HIT_RISE;
+                        } else {
+                            const _u = (_pt - FRET_WIRE_HIT_RISE) / FRET_WIRE_HIT_FALL;
+                            _g = (1 - _u) * (1 - _u);   // fast drop, easing out
+                            // Electric shudder during the fall only — the crack
+                            // itself stays clean.
+                            _g *= 1 - FRET_WIRE_HIT_FLICKER_DEPTH
+                                * (0.5 + 0.5 * Math.sin(_pt * 6.2832 * FRET_WIRE_HIT_FLICKER_HZ));
+                        }
+                        _g *= _fwPulseAmp[_f];
+                    } else if (_pt < 0) {
+                        _fwPulseT0[_f] = -Infinity; // seek landed before the strike
+                    }
                     _fwHitGlow[_f] = _g;
                     if (_g < 0.004) continue;   // below perceptible
                     if (_fwLo < 0) _fwLo = _f;
