@@ -4011,6 +4011,12 @@
         butterchurn: { intensity: false, reactive: false, why: 'Butterchurn reacts to audio itself - tune it in Settings > 3D Highway, or its Visualizer panel' },
     };
     let _pcRefs = 0, _pcEl = null, _pcSel = null, _pcReactive = null, _pcIntensity = null;
+    // Non-disabled wrappers around the two greyable controls. A native-disabled
+    // <button>/<input> receives no pointer events, so its `title` tooltip never
+    // shows on hover — the whole "greyed out, says why on hover" affordance
+    // would be dead. The reason lives on these wrappers instead, and the
+    // disabled control gets pointer-events:none so the hover reaches them.
+    let _pcReactiveWrap = null, _pcIntensityWrap = null;
     let _pcListener = null, _pcRetry = 0, _pcRetryTimer = 0;
 
     // The player chrome exposes this slot once it has initialised. A host
@@ -4065,6 +4071,10 @@
     function _pcPaint(btn, on, disabled, reason) {
         btn._on = !!on && !disabled;
         btn.disabled = !!disabled;
+        btn.setAttribute('aria-disabled', disabled ? 'true' : 'false');
+        // pointer-events:none lets the hover fall through to _pcReactiveWrap,
+        // which carries the reason a disabled button's own title can't show.
+        btn.style.pointerEvents = disabled ? 'none' : '';
         btn.style.cursor = disabled ? 'not-allowed' : 'pointer';
         btn.style.opacity = disabled ? '.45' : '1';
         btn.title = reason || 'React to the audio';
@@ -4105,12 +4115,24 @@
             _pcPaint(_pcReactive, !!_bgReadSetting(null, 'reactive'), !uses.reactive,
                 uses.reactive ? 'React to the audio' : why);
         }
+        // The reason shows via the wrapper (see _pcReactiveWrap); empty when
+        // enabled so the control's own title takes over.
+        if (_pcReactiveWrap) {
+            _pcReactiveWrap.title = uses.reactive ? '' : why;
+            _pcReactiveWrap.style.cursor = uses.reactive ? '' : 'not-allowed';
+        }
         if (_pcIntensity) {
             _pcIntensity.value = String(_bgReadSetting(null, 'intensity'));
             _pcIntensity.disabled = !uses.intensity;
+            _pcIntensity.setAttribute('aria-disabled', uses.intensity ? 'false' : 'true');
+            _pcIntensity.style.pointerEvents = uses.intensity ? '' : 'none';
             _pcIntensity.style.opacity = uses.intensity ? '1' : '.45';
             _pcIntensity.style.cursor = uses.intensity ? '' : 'not-allowed';
             _pcIntensity.title = uses.intensity ? 'Background intensity' : why;
+        }
+        if (_pcIntensityWrap) {
+            _pcIntensityWrap.title = uses.intensity ? '' : why;
+            _pcIntensityWrap.style.cursor = uses.intensity ? '' : 'not-allowed';
         }
     }
     // Mirror the current values into the Settings panel's controls when it's
@@ -4174,6 +4196,7 @@
         box.appendChild(_pcSel);
         const optWrap = document.createElement('div');
         optWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:.25rem;margin-top:.375rem;';
+        _pcReactiveWrap = optWrap;   // carries the greyed-out reason on hover
         _pcReactive = _pcPill('Reactive', 'React to the audio');
         _pcReactive.addEventListener('click', () => {
             if (_pcReactive.disabled) return;
@@ -4184,6 +4207,10 @@
         box.appendChild(optWrap);
 
         box.appendChild(_pcGroupLabel('Intensity'));
+        // Wrapper carries the reason on hover when the slider is disabled — a
+        // native-disabled <input> shows no title of its own.
+        _pcIntensityWrap = document.createElement('div');
+        _pcIntensityWrap.style.cssText = 'width:100%;';
         _pcIntensity = document.createElement('input');
         _pcIntensity.type = 'range';
         _pcIntensity.min = '0'; _pcIntensity.max = '1'; _pcIntensity.step = '0.05';
@@ -4200,7 +4227,8 @@
             try { window.h3dBgSetIntensity(parseFloat(_pcIntensity.value)); }
             catch (e) { console.error('[3D-Hwy] bg intensity set failed', e); }
         });
-        box.appendChild(_pcIntensity);
+        _pcIntensityWrap.appendChild(_pcIntensity);
+        box.appendChild(_pcIntensityWrap);
         slot.appendChild(box);
         _pcEl = box;
         _pcSync();
@@ -4218,6 +4246,7 @@
         if (_pcListener) { _bgUnsubscribe(_pcListener); _pcListener = null; }
         if (_pcEl && _pcEl.parentNode) _pcEl.parentNode.removeChild(_pcEl);
         _pcEl = null; _pcSel = null; _pcReactive = null; _pcIntensity = null;
+        _pcReactiveWrap = null; _pcIntensityWrap = null;
     }
     function _pcAcquire() {
         _pcRefs++;

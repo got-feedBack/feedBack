@@ -339,3 +339,32 @@ test('greyed-out controls explain themselves on hover', () => {
     assert.match(api.react.title, /butterchurn/i);
     assert.match(api.intens.title, /butterchurn/i);
 });
+
+// A native-disabled <button>/<input> fires no pointer events, so its own
+// `title` never shows on hover. The reason must therefore also sit on the
+// non-disabled wrapper, and the disabled control must let the hover fall
+// through (pointer-events:none) — otherwise the "says why on hover" feature is
+// dead in the browser while these tests pass on the swallowed control title.
+test('the greyed-out reason reaches a hoverable wrapper', () => {
+    const { api, store, emit } = load();
+    api._pcAcquire();
+    store.style = 'video';           // uses neither setting
+    emit('style');
+
+    assert.match(api.react.parentNode.title, /nothing to adjust/i,
+        'reactive reason must be on the wrapper, not only the disabled pill');
+    assert.equal(api.react.style.pointerEvents, 'none',
+        'disabled pill must pass hover through to its wrapper');
+
+    assert.match(api.intens.parentNode.title, /nothing to adjust/i,
+        'intensity reason must be on the wrapper, not only the disabled slider');
+    assert.equal(api.intens.style.pointerEvents, 'none',
+        'disabled slider must pass hover through to its wrapper');
+
+    // ...and an enabled style clears the wrapper so the control's own title wins.
+    store.style = 'particles';
+    emit('style');
+    assert.equal(api.react.parentNode.title, '');
+    assert.equal(api.intens.parentNode.title, '');
+    assert.equal(api.intens.style.pointerEvents, '');
+});
