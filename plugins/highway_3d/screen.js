@@ -4789,19 +4789,21 @@
         const _scrStringSustain      = new Array(MAX_RENDER_STRINGS).fill(false);
         const _scrStringAnticipation = new Array(MAX_RENDER_STRINGS).fill(0);
         const _scrFretHeat           = new Array(NFRETS + 1).fill(0);
-        // Fret-wire hit flash. _fwHitIn is per-frame (cleared with the rest of
-        // the frame state, written by drawNote when a provider confirms a note).
-        // A RISING EDGE on it triggers a one-shot pulse: _fwPulseT0 records the
-        // strike's chart time, _fwPulseAmp its amplitude, _fwPrevIn detects the
-        // edge (a held 'active' verdict keeps the input high continuously, so a
-        // sustain triggers exactly one pulse — the wire goes dark while the
-        // note rings on). _fwHitGlow holds each wire's evaluated envelope value
-        // this frame, for the outer-pair selection below.
+        // Fret-wire hit flash. ONE strike per judged hit-zone event: the first
+        // frame a note (or strummed chord) gets a good verdict, its identity
+        // lands in _fwStruck and its wires get a strike request via _fwHitIn —
+        // and never again for that event, no matter how long the verdict stays
+        // live (a held sustain rings on with dark wires) and no matter what the
+        // per-wire input did between events (two consecutive correct notes on
+        // the SAME fret are two events → two strikes; an edge detector on the
+        // wire would have merged them). Same seen-map pattern as _sparkSeen.
+        // _fwPulseT0/_fwPulseAmp carry each wire's active pulse; _fwHitGlow is
+        // the evaluated envelope this frame, for the outer-pair selection.
         const _fwHitIn               = new Float32Array(NFRETS + 1);
         const _fwHitGlow             = new Float32Array(NFRETS + 1);
         const _fwPulseT0             = new Float32Array(NFRETS + 1).fill(-Infinity);
         const _fwPulseAmp            = new Float32Array(NFRETS + 1);
-        const _fwPrevIn              = new Float32Array(NFRETS + 1);
+        const _fwStruck              = new Map();
         // Per-frame chord accumulator. A chord flashes only the OUTERMOST wires
         // of its shape, but drawNote() sees one chord note at a time and can't
         // know the span — so hits accumulate here keyed by chord, and the flash
@@ -12695,9 +12697,14 @@
                 // open strings already use. The shape's own outer pair (wire
                 // behind the lowest fret, wire at the highest) survives only as
                 // the fallback for charts with no anchors.
-                for (const _fwE of _fwChordAcc.values()) {
+                for (const [_fwEK, _fwE] of _fwChordAcc) {
                     const _fwA = Math.max(_fwE.a, _fwE.openA);
                     if (_fwA <= 0) continue;
+                    // The strum is ONE event: strike its wires once, on the
+                    // first frame any member gets a good verdict.
+                    const _fwCK = 'c|' + _fwEK;
+                    if (_fwStruck.has(_fwCK)) continue;
+                    _fwStruck.set(_fwCK, now);
                     let _w0 = -1, _w1 = -1;
                     const _fwB = anchorLaneBoundsAt(_drawAnchors, _fwE.t);
                     if (_fwB) {
@@ -12717,8 +12724,9 @@
                     _fwHitGlow.fill(0);
                     _fwPulseT0.fill(-Infinity);
                     _fwPulseAmp.fill(0);
-                    _fwPrevIn.fill(0);
+                    _fwStruck.clear();  // replayed notes strike again after a seek
                 }
+                if (_fwStruck.size > 900) _fwStruck.clear(); // bounded, same as _sparkSeen
                 _fwHitPrevTime = now;
                 // Evaluate every wire's pulse, but flash only the OUTERMOST pair
                 // of lit wires (one bracket, never a picket fence — the chord
@@ -12731,12 +12739,15 @@
                 const _fwSpan = FRET_WIRE_HIT_RISE + FRET_WIRE_HIT_FALL;
                 let _fwLo = -1, _fwHi = -1;
                 for (let _f = 0; _f <= NFRETS; _f++) {
+                    // _fwHitIn is nonzero ONLY on the frame an event first lands
+                    // (the seen-map gates every producer), so any input is a
+                    // fresh strike — and it restarts a pulse already in flight,
+                    // which is what a rapid re-hit on the same wire should do.
                     const _in = _fwHitIn[_f];
-                    if (_in > 0.004 && _fwPrevIn[_f] <= 0.004) {
+                    if (_in > 0.004) {
                         _fwPulseT0[_f] = now;    // strike
                         _fwPulseAmp[_f] = _in;
                     }
-                    _fwPrevIn[_f] = _in;
                     let _g = 0;
                     const _pt = now - _fwPulseT0[_f];
                     if (_pt >= 0 && _pt < _fwSpan) {
@@ -14021,17 +14032,25 @@
                         _fwE.openA = _fwA;   // open strings in the chord → lane edges
                     }
                 } else if (n.f > 0 && n.f <= NFRETS) {
-                    if (_fwA > _fwHitIn[n.f - 1]) _fwHitIn[n.f - 1] = _fwA;
-                    if (_fwA > _fwHitIn[n.f]) _fwHitIn[n.f] = _fwA;
+                    const _fwK = 'n|' + s + '|' + n.f + '|' + n.t;
+                    if (!_fwStruck.has(_fwK)) {
+                        _fwStruck.set(_fwK, now);
+                        if (_fwA > _fwHitIn[n.f - 1]) _fwHitIn[n.f - 1] = _fwA;
+                        if (_fwA > _fwHitIn[n.f]) _fwHitIn[n.f] = _fwA;
+                    }
                 } else if (n.f === 0) {
                     // Sampled at the note's own time, matching how the open
                     // slab's width is derived (openNoteLaneBoxW(n.t)) — so the
                     // flashed wires are the ones the slab is actually drawn
                     // between, even if the lane has since moved.
-                    const _fwB = anchorLaneBoundsAt(_drawAnchors, n.t);
-                    if (_fwB) {
-                        if (_fwA > _fwHitIn[_fwB.dMin]) _fwHitIn[_fwB.dMin] = _fwA;
-                        if (_fwA > _fwHitIn[_fwB.dMax]) _fwHitIn[_fwB.dMax] = _fwA;
+                    const _fwK = 'n|' + s + '|0|' + n.t;
+                    if (!_fwStruck.has(_fwK)) {
+                        _fwStruck.set(_fwK, now);
+                        const _fwB = anchorLaneBoundsAt(_drawAnchors, n.t);
+                        if (_fwB) {
+                            if (_fwA > _fwHitIn[_fwB.dMin]) _fwHitIn[_fwB.dMin] = _fwA;
+                            if (_fwA > _fwHitIn[_fwB.dMax]) _fwHitIn[_fwB.dMax] = _fwA;
+                        }
                     }
                 }
             }
