@@ -2475,6 +2475,21 @@ function createHighway() {
                 hwState._chartLastAdvanceAt = newPerfNow;
             }
         },
+        // Count-ins deliberately hold the chart at their start position while
+        // the backing transport is stopped. A normal setTime(t) creates a live
+        // interpolation anchor, which makes smooth renderers creep forward for
+        // up to _CHART_MAX_INTERP_MS before stall detection catches up. Keep
+        // the raw position but clear the live anchor so the bundle reports
+        // isPlaying=false immediately. The first genuinely advancing audio
+        // sample re-anchors through setTime() and resumes smooth motion.
+        freezeTime(t) {
+            hwState.chartTime = t + hwState.songOffset;
+            hwState.currentTime = hwState.chartTime + hwState.avOffsetSec;
+            hwState._chartAnchorAudioT = t;
+            hwState._chartAnchorPerfNow = NaN;
+            hwState._chartLastAdvanceAt = 0;
+            hwState._chartObservedRate = 1;
+        },
         setAvOffset(ms) { hwState.avOffsetSec = (Number(ms) || 0) / 1000; hwState.currentTime = hwState.chartTime + hwState.avOffsetSec; },
         getAvOffset() { return hwState.avOffsetSec * 1000; },
 

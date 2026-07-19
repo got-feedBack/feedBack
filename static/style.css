@@ -81,6 +81,10 @@ html { scroll-behavior: smooth; }
     border-color: #4080e0;
     color: #93c5fd;
 }
+.section-practice-pill.section-practice-pill--armed {
+    border-color: #d97706;
+    color: #fbbf24;
+}
 .section-practice-pill-icon { font-size: 13px; line-height: 1; }
 .section-practice-pill-caret { font-size: 10px; opacity: 0.8; }
 
@@ -104,6 +108,110 @@ html { scroll-behavior: smooth; }
     pointer-events: auto !important;
 }
 #section-practice-bar.section-practice-bar--open { display: flex; }
+
+.practice-loop-heading {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    color: #f8fafc;
+    font-size: 14px;
+}
+
+.practice-loop-status {
+    color: #94a3b8;
+    font-size: 11px;
+    font-weight: 500;
+    text-align: right;
+}
+
+.practice-loop-status[data-state="armed"] { color: #fbbf24; }
+.practice-loop-status[data-state="starting"] { color: #7dd3fc; }
+.practice-loop-status[data-state="active"] { color: #86efac; }
+
+.practice-loop-group {
+    min-width: 0;
+    margin: 0;
+    padding: 8px 0;
+    border: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.practice-loop-group:last-child {
+    padding-bottom: 0;
+    border-bottom: 0;
+}
+
+.practice-loop-group-title {
+    margin-bottom: 6px;
+    color: #94a3b8;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.practice-loop-start {
+    border-color: rgba(34, 211, 238, 0.55) !important;
+}
+
+.practice-loop-bounds {
+    min-width: 5.5rem;
+    color: #94a3b8;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+
+.practice-loop-saved {
+    margin-top: 6px;
+}
+
+.practice-loop-saved select {
+    flex: 1 1 180px;
+    min-width: 0;
+}
+
+.practice-loop-option {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 6px;
+    color: #cbd5e1;
+    font-size: 11px;
+}
+
+.practice-loop-option select {
+    flex: 0 0 190px;
+    width: 190px;
+}
+
+.practice-section-empty {
+    color: #64748b;
+    font-size: 11px;
+    font-style: italic;
+}
+
+#section-practice-bar button:disabled,
+#section-practice-bar select:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+}
+
+#section-practice-bar button:focus-visible,
+#section-practice-bar select:focus-visible,
+#section-practice-bar input:focus-visible {
+    outline: 2px solid #22d3ee;
+    outline-offset: 2px;
+}
+
+#section-practice-bar .loop-point-set {
+    border-color: rgba(74, 222, 128, 0.55);
+    background: rgba(20, 83, 45, 0.5);
+    color: #86efac;
+}
 
 /* v3 chrome: the pill rides the left icon rail; popover opens to its right. */
 .section-practice-control--v3 { padding: 0; }

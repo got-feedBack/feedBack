@@ -1032,6 +1032,22 @@
             _setState(shouldPlay ? 'playing' : 'paused', { requesterId: source.requesterId, readiness: 'ready', reason: source.reason });
         }
         else if (name === 'loop-restarted') {
+            const startTime = _number(source.loopA, null);
+            const endTime = _number(source.loopB, null);
+            if (startTime != null && endTime != null) {
+                // The core loop bridge emits one legacy loop:restart event for
+                // both the initial pass and later wraps. Promote a previously
+                // armed snapshot to active here without requiring a duplicate
+                // loop-set event.
+                _updateLoopFromSnapshot({
+                    ...currentSession.loop,
+                    startTime,
+                    endTime,
+                    enabled: true,
+                    state: 'active',
+                    requesterId: source.requesterId,
+                });
+            }
             if (currentSession.loop) currentSession.loop.lastRestartAt = _now();
         } else if (name === 'loop-stale') {
             if (currentSession.loop) currentSession.loop.state = 'stale';

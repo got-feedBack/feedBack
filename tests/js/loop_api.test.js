@@ -74,6 +74,9 @@ function buildSandbox() {
                 className: '',
                 textContent: '',
                 value: '',
+                disabled: false,
+                dataset: {},
+                setAttribute() {},
                 // _syncSavedLoopSelection iterates over <select>.options.
                 // An empty option list is fine for these unit tests; the
                 // sync becomes a no-op (no matching option found).
@@ -91,6 +94,8 @@ function buildSandbox() {
             return Promise.resolve({ completed: true, from: 0, to: s });
         },
         _audioTime: () => 0,
+        audioSeekGen: () => 0,
+        _cancelCountIn: () => {},
         // updateLoopUI references formatTime for the label; we don't
         // assert on the label text in these tests, so a stub is enough.
         formatTime: (s) => String(s),
@@ -127,6 +132,11 @@ function loadFunctions(sandbox, src) {
         var loopA = null;
         var loopB = null;
         var _loopMutationGen = 0;
+        var _loopPhase = 'inactive';
+        var _loopSource = null;
+        var _loopOperationGen = 0;
+        var _loopWrapInFlight = false;
+        var _loopPreferences = { activation: 'arm', firstPass: 'count-in', repeat: 'count-in' };
         var _sectionPracticeSelected = -1;
         var _sectionPracticeWholeSection = false;
         var _sectionPracticeSavedPartIndex = 0;
@@ -134,10 +144,19 @@ function loadFunctions(sandbox, src) {
             sectionPracticeModeCalls.push({ on, opts: opts || {} });
         }
         function _updateSectionPracticeHighlight(ct) {}
+        function _syncSectionPracticeFromLoop() {}
         function _updateEditRegionBtn() {}
+        ${extractFunction(src, 'function _validLoopBounds')}
+        ${extractFunction(src, 'function _loopTransportSnapshot()')}
+        ${extractFunction(src, 'function _emitLoopSet(')}
+        ${extractFunction(src, 'function _emitLoopCleared(')}
+        ${extractFunction(src, 'function _setPointButtonState(')}
+        ${extractFunction(src, 'function cancelLoopOperations')}
         ${extractFunction(src, 'function clearLoop(')}
         ${extractFunction(src, 'function _syncSavedLoopSelection()')}
         ${extractFunction(src, 'async function setLoop(')}
+        ${extractFunction(src, 'function _loopTimelineDuration()')}
+        ${extractFunction(src, 'function _updateLoopTimeline(')}
         ${extractFunction(src, 'function updateLoopUI()')}
         // Expose for the test runner.
         globalThis.__setLoop = setLoop;

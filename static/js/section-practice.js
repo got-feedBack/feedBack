@@ -7,11 +7,11 @@
 // setLoop() and practiceSection() call each other. So it is cut BY NAME, and
 // everything it calls back into app.js goes through the host seam.
 //
-// It owns its own state — the _sectionPractice* / _sectionParents* scalars are read
-// nowhere else and move in with it. It needs 11 hooks from app.js, and four of those
-// are read-only GETTERS: loopA / loopB / _audioSeekGen / _loopMutationGen are only
-// ever READ here, never written, so app.js keeps owning them and no state container
-// is needed.
+// It owns only section-selection state — the _sectionPractice* /
+// _sectionParents* scalars are read nowhere else and move in with it. Loop
+// bounds and lifecycle belong to the shared loop controller. Calls back into
+// app.js and the controller cross the host seam so the module graph remains
+// acyclic.
 //
 // app.js used to reach IN and reset this module's state directly (clearLoop() zeroed
 // the selection; changeArrangement() invalidated the parent count). It cannot now — an
@@ -62,9 +62,9 @@ let _sectionPracticeMode = false;
 let _sectionPracticeActiveParent = -1;
 let _sectionPracticeWholeSection = false;
 let _sectionPracticeSavedPartIndex = 0;
-// Monotonic token to cancel stale practiceSection() retries: a newer click
+// Monotonic token to cancel stale practiceSection() requests: a newer click
 // (or a song/arrangement change, which also bumps _audioSeekGen) supersedes
-// any in-flight retry loop so it can't re-arm the wrong loop/count-in.
+// any in-flight controller work so it cannot arm the wrong loop.
 let _sectionPracticeRequestGen = 0;
 // >0 while a practiceSection() request is awaiting its loop. While set,
 // _syncSectionPracticeFromLoop() (e.g. from a mid-await bar re-render) must not
@@ -78,10 +78,10 @@ export function _setSectionPracticeMode(on, opts = {}) {
     _sectionPracticeMode = next;
     const cb = document.getElementById('section-practice-mode');
     if (cb) cb.checked = _sectionPracticeMode;
-    // Surface the "looping" state on the collapsed pill so the user can tell
-    // Section Practice is armed without opening the popover.
+    // Section selection is UI state only. The loop controller separately owns
+    // the pill's armed/active classes.
     const pill = document.getElementById('section-practice-pill');
-    if (pill) pill.classList.toggle('section-practice-pill--active', _sectionPracticeMode);
+    if (pill) pill.classList.toggle('section-practice-pill--section-selected', _sectionPracticeMode);
     _sectionPracticeFollowParent = -1;
     if (_sectionPracticeMode) {
         if (opts.defaultWholeOn) {
@@ -93,10 +93,9 @@ export function _setSectionPracticeMode(on, opts = {}) {
         }
     } else {
         // Turning the feature off must cancel any in-flight practiceSection()
-        // retry: otherwise a stale setLoop() that lands after the user unchecks
-        // Section Practice would re-arm the loop, flip the mode back on via
-        // _syncSectionPracticeFromLoop(), and restart playback through
-        // startCountIn(). Bumping the request gen makes the pending retry bail.
+        // request: otherwise stale controller work landing after the user
+        // unchecks Section Practice could re-arm the loop and flip the mode
+        // back on via _syncSectionPracticeFromLoop().
         _sectionPracticeRequestGen++;
         // Cancel any pending count-in: every section-practice teardown routes
         // through here (mode toggle off, clearLoop, and _hideSectionPracticeBar
@@ -495,18 +494,59 @@ function _migrateSectionPracticeDomLayout(bar) {
 }
 
 function _sectionPracticeBarInnerHtml() {
-    return '<div class="section-practice-row section-practice-controls-row">'
+    return '<div class="practice-loop-heading">'
+        + '<strong>Practice &amp; Loops</strong>'
+        + '<span id="loop-status" class="practice-loop-status" data-state="inactive" aria-live="polite">No loop configured</span>'
+        + '</div>'
+        + '<section class="practice-loop-group" aria-labelledby="custom-loop-heading">'
+        + '<div class="practice-loop-group-title" id="custom-loop-heading">Custom loop</div>'
+        + '<div class="section-practice-row practice-loop-actions">'
+        + '<button type="button" onclick="setLoopStart()" id="btn-loop-a" class="v3-pop-btn" aria-pressed="false" title="Set loop start at the current time">Set A</button>'
+        + '<button type="button" onclick="setLoopEnd()" id="btn-loop-b" class="v3-pop-btn" aria-pressed="false" disabled title="Set loop end at the current time">Set B</button>'
+        + '<button type="button" onclick="startLoop()" id="btn-loop-start" class="v3-pop-btn practice-loop-start" disabled aria-describedby="loop-status">Start Loop</button>'
+        + '<button type="button" onclick="clearLoop()" id="btn-loop-clear" class="v3-pop-btn" disabled>Clear</button>'
+        + '<button type="button" onclick="saveCurrentLoop()" id="btn-loop-save" class="v3-pop-btn" disabled>Save</button>'
+        + '<span id="loop-label" class="practice-loop-bounds" aria-live="polite"></span>'
+        + '</div>'
+        + '<div class="section-practice-row practice-loop-saved">'
+        + '<label class="sr-only" for="saved-loops">Saved loops</label>'
+        + '<select id="saved-loops" onchange="loadSavedLoop(this.value)" class="v3-pop-select" disabled>'
+        + '<option value="">Saved Loops</option>'
+        + '</select>'
+        + '<button type="button" onclick="deleteSelectedLoop()" id="btn-loop-delete" class="v3-pop-btn" disabled aria-label="Delete selected saved loop">Delete</button>'
+        + '</div>'
+        + '</section>'
+        + '<fieldset class="practice-loop-group practice-loop-options">'
+        + '<legend class="practice-loop-group-title">How the loop plays</legend>'
+        + '<label class="practice-loop-option" for="loop-activation-preference"><span>After setting a loop</span>'
+        + '<select id="loop-activation-preference" class="v3-pop-select" onchange="updateLoopPreference(\'activation\', this.value)">'
+        + '<option value="arm">Wait for me to start</option><option value="auto">Start automatically</option>'
+        + '</select></label>'
+        + '<label class="practice-loop-option" for="loop-first-pass-preference"><span>When the loop starts</span>'
+        + '<select id="loop-first-pass-preference" class="v3-pop-select" onchange="updateLoopPreference(\'firstPass\', this.value)">'
+        + '<option value="count-in">Count in first (4 beats)</option><option value="immediate">Start right away</option>'
+        + '</select></label>'
+        + '<label class="practice-loop-option" for="loop-repeat-preference"><span>When the loop repeats</span>'
+        + '<select id="loop-repeat-preference" class="v3-pop-select" onchange="updateLoopPreference(\'repeat\', this.value)">'
+        + '<option value="count-in">Count in again (4 beats)</option><option value="continuous">Repeat right away</option>'
+        + '</select></label>'
+        + '</fieldset>'
+        + '<section class="practice-loop-group practice-section-group" aria-labelledby="practice-section-heading">'
+        + '<div class="practice-loop-group-title" id="practice-section-heading">Practice Section</div>'
+        + '<div class="section-practice-row section-practice-controls-row">'
         + '<label class="section-practice-mode-wrap" title="Loop the selected section until turned off">'
         + '<input type="checkbox" id="section-practice-mode" onchange="onSectionPracticeModeChange()">'
-        + '<span class="section-practice-mode-text">Practice Section</span>'
+        + '<span class="section-practice-mode-text">Use selected section</span>'
         + '</label>'
         + _sectionPracticeWholeCheckboxHtml()
         + _sectionPracticePieceRowHtml()
         + '</div>'
         + '<div class="section-practice-row section-practice-chips-row">'
         + '<span class="section-practice-label">Sections:</span>'
-        + '<div id="section-practice-scroll" class="section-practice-scroll" role="toolbar"></div>'
-        + '</div>';
+        + '<div id="section-practice-scroll" class="section-practice-scroll" role="toolbar" aria-label="Song sections"></div>'
+        + '<span id="section-practice-empty" class="practice-section-empty hidden">No chart sections available.</span>'
+        + '</div>'
+        + '</section>';
 }
 
 function _ensureSectionPracticeWholeCheckbox() {
@@ -545,13 +585,13 @@ function _sectionPracticeCurrentPartIndex() {
 function _sectionPracticePillHtml() {
     return '<button type="button" id="section-practice-pill" class="section-practice-pill"'
         + ' aria-haspopup="dialog" aria-expanded="false" aria-controls="section-practice-bar"'
-        + ' aria-label="Section practice"'
-        + ' onclick="toggleSectionPracticePopover()" title="Section practice">'
+        + ' aria-label="Practice &amp; Loops"'
+        + ' onclick="toggleSectionPracticePopover()" title="Practice &amp; Loops">'
         + '<span class="section-practice-pill-icon" aria-hidden="true">'
         + '<svg class="v3-rail-svg section-practice-pill-svg" viewBox="0 0 24 24">'
         + '<path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,4A8,8 0 0,1 20,12A8,8 0 0,1 12,20A8,8 0 0,1 4,12A8,8 0 0,1 12,4M12,6A6,6 0 0,0 6,12A6,6 0 0,0 12,18A6,6 0 0,0 18,12A6,6 0 0,0 12,6M12,8A4,4 0 0,1 16,12A4,4 0 0,1 12,16A4,4 0 0,1 8,12A4,4 0 0,1 12,8M12,10A2,2 0 0,0 10,12A2,2 0 0,0 12,14A2,2 0 0,0 14,12A2,2 0 0,0 12,10Z"/>'
         + '</svg></span>'
-        + '<span class="section-practice-pill-text">Practice</span>'
+        + '<span class="section-practice-pill-text">Practice &amp; Loops</span>'
         + '<span class="section-practice-pill-caret" aria-hidden="true">▾</span>'
         + '</button>';
 }
@@ -568,12 +608,12 @@ function _syncSectionPracticePillV3Chrome(isV3) {
             ring.setAttribute('aria-hidden', 'true');
             pill.insertBefore(ring, pill.firstChild);
         }
-        pill.setAttribute('title', 'Practice');
-        pill.setAttribute('aria-label', 'Practice');
+        pill.setAttribute('title', 'Practice & Loops');
+        pill.setAttribute('aria-label', 'Practice & Loops');
     } else {
         if (ring) ring.remove();
-        pill.setAttribute('title', 'Section practice');
-        pill.setAttribute('aria-label', 'Section practice');
+        pill.setAttribute('title', 'Practice & Loops');
+        pill.setAttribute('aria-label', 'Practice & Loops');
     }
 }
 
@@ -679,7 +719,11 @@ function _ensureSectionPracticeDom() {
     let bar = document.getElementById('section-practice-bar');
     if (bar) {
         _ensureSectionPracticeControlWrap(bar);
-        _migrateSectionPracticeDomLayout(bar);
+        if (!bar.querySelector('.practice-loop-options')) {
+            bar.innerHTML = _sectionPracticeBarInnerHtml();
+        } else {
+            _migrateSectionPracticeDomLayout(bar);
+        }
         if (!bar.querySelector('#section-practice-piece-row')) {
             const controlsRow = bar.querySelector('.section-practice-controls-row')
                 || bar.querySelector('.section-practice-primary-row');
@@ -692,6 +736,7 @@ function _ensureSectionPracticeDom() {
         _ensureSectionPracticeWholeCheckbox();
         bar.querySelector('.section-practice-show-all-wrap')?.remove();
         _placeSectionPracticeControlForChrome();
+        host.updateLoopUI();
         return bar;
     }
     const controls = document.getElementById('player-controls');
@@ -701,7 +746,7 @@ function _ensureSectionPracticeDom() {
     bar.id = 'section-practice-bar';
     bar.className = 'section-practice-bar';
     bar.setAttribute('role', 'dialog');
-    bar.setAttribute('aria-label', 'Section practice');
+    bar.setAttribute('aria-label', 'Practice & Loops');
     bar.innerHTML = _sectionPracticeBarInnerHtml();
     const ctrl = document.createElement('div');
     ctrl.id = 'section-practice-control';
@@ -713,6 +758,7 @@ function _ensureSectionPracticeDom() {
     // anchors on `#player-controls > button:last-of-type` (see static/v3/index.html).
     _mountSectionPracticeControlSafe(ctrl);
     _placeSectionPracticeControlForChrome();
+    host.updateLoopUI();
     return bar;
 }
 
@@ -822,7 +868,9 @@ export function _sectionPracticeBarIsReady() {
     const ctrl = document.getElementById('section-practice-control');
     if (!ctrl || ctrl.classList.contains('section-practice-control--hidden')) return false;
     const scroll = document.getElementById('section-practice-scroll');
-    return !!(scroll && scroll.querySelector('[data-parent-idx]'));
+    const empty = document.getElementById('section-practice-empty');
+    return !!(scroll && (scroll.querySelector('[data-parent-idx]')
+        || (empty && !empty.classList.contains('hidden'))));
 }
 
 export function _installSectionPracticeDrawHook() {
@@ -893,10 +941,21 @@ export function renderSectionPracticeBar() {
     const bar = _ensureSectionPracticeDom();
     const scroll = document.getElementById('section-practice-scroll');
     if (!bar || !scroll) return;
+    const empty = document.getElementById('section-practice-empty');
+    const mode = document.getElementById('section-practice-mode');
+    const whole = document.getElementById('section-practice-whole');
     if (!parents.length) {
-        _hideSectionPracticeBar();
+        _showSectionPracticeBar(bar);
+        scroll.innerHTML = '';
+        if (empty) empty.classList.remove('hidden');
+        if (mode) mode.disabled = true;
+        if (whole) whole.disabled = true;
+        _syncSectionPracticePieceUi();
         return;
     }
+    if (empty) empty.classList.add('hidden');
+    if (mode) mode.disabled = false;
+    if (whole) whole.disabled = false;
     if (_sectionPracticeActiveParent >= parents.length) {
         _sectionPracticeResetSelectionUi();
     }
@@ -1037,49 +1096,40 @@ export async function practiceSection(index, opts = {}) {
     // loop. Cleared in finally so every exit path (bail, success, failure) resets.
     _sectionPracticeRequestInFlight++;
     try {
-    host._cancelCountIn();
-    _setSectionPracticeMode(true, { skipClearLoop: true });
+        _setSectionPracticeMode(true, { skipClearLoop: true });
 
-    // setLoop() is seek-gated: it returns false when the seek is cancelled
-    // during arrangement switches / teardown-gen bumps, or when the backend
-    // clock clamps off-target. Retry briefly to land after the transport
-    // becomes ready without forking the loop system.
-    let ok = false;
-    for (let attempt = 0; attempt < 5; attempt++) {
-        // A newer click or a song/arrangement change supersedes this retry.
+        // This feature only supplies chart-derived bounds. setLoop's shared
+        // controller applies the activation, first-pass, and repeat policies.
+        let ok = false;
         if (requestGen !== _sectionPracticeRequestGen || seekGen !== audioSeekGen() || loopGen !== host._loopMutationGen()) return;
         try {
-            // skipSectionSync: this function owns the section-practice state and
-            // applies it below under the request-gen guard, so a stale retry
-            // landing here can't re-sync/re-arm via setLoop's shared path.
-            // commitGuard: also prevent a superseded retry from committing
-            // loopA/loopB at all — setLoop re-checks this right before arming,
-            // after its internal seek await, so a stale loop is never armed.
+            // skipSectionSync: this function owns section-selection state and
+            // applies it below under the request-gen guard.
+            // commitGuard: prevent a superseded request from committing bounds
+            // at all; the controller re-checks it immediately before arming.
             ok = await host.setLoop(start, end, {
+                activation: 'preference',
+                source: 'section',
                 skipSectionSync: true,
                 commitGuard: () => requestGen === _sectionPracticeRequestGen && seekGen === audioSeekGen() && loopGen === host._loopMutationGen(),
             });
         } catch (err) {
             ok = false;
         }
-        if (ok) break;
-        await new Promise(res => setTimeout(res, 60 + attempt * 90));
-    }
-    // Re-check after the awaited retries before applying any loop/count-in state.
-    if (requestGen !== _sectionPracticeRequestGen || seekGen !== audioSeekGen() || loopGen !== host._loopMutationGen()) return;
+        // Re-check after the awaited controller work before painting selection.
+        if (requestGen !== _sectionPracticeRequestGen || seekGen !== audioSeekGen() || loopGen !== host._loopMutationGen()) return;
 
-    if (ok) {
-        _sectionPracticeWholeSection = whole;
-        if (!whole) {
-            _sectionPracticeSelected = index;
-            _sectionPracticeSavedPartIndex = index;
+        if (ok) {
+            _sectionPracticeWholeSection = whole;
+            if (!whole) {
+                _sectionPracticeSelected = index;
+                _sectionPracticeSavedPartIndex = index;
+            }
+            _blurSectionPracticeFocusIfNeeded();
+            _updateSectionPracticeHighlight(_audioTime());
+        } else {
+            _setSectionPracticeMode(false, { skipClearLoop: true });
         }
-        _blurSectionPracticeFocusIfNeeded();
-        _updateSectionPracticeHighlight(_audioTime());
-        host.startCountIn({ immediate: true });
-    } else {
-        _setSectionPracticeMode(false, { skipClearLoop: true });
-    }
     } finally {
         _sectionPracticeRequestInFlight--;
     }
@@ -1189,7 +1239,8 @@ export function _maybeRefreshSectionPracticeDuration(dur) {
 
 // Re-render when section metadata appears (before audio duration is known).
 export function _ensureSectionPracticeBar() {
-    if (_sectionPracticeSourceSections().length === 0) return;
+    const player = document.getElementById('player');
+    if (!player || !player.classList.contains('active') || !host.currentFilename()) return;
     if (!_sectionPracticeBarIsReady()) {
         renderSectionPracticeBar();
     }

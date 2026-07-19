@@ -50,6 +50,8 @@ function extractFunction(src, signature) {
 
 function buildSandbox() {
     const emitCalls = [];
+    const freezeCalls = [];
+    let pauseCalls = 0;
     const sandbox = {
         // Globals the function reads/writes via closure. Declared as `var`
         // in the eval prelude so they attach to the sandbox.
@@ -78,7 +80,11 @@ function buildSandbox() {
         // Stubbed feedBack DOM dependencies.
         audio: { pause() {} },
         jucePlayer: { pause: () => Promise.resolve(), play: () => Promise.resolve(true) },
-        highway: { setTime() {}, getBPM: () => 120 },
+        highway: {
+            setTime() {},
+            freezeTime(time) { freezeCalls.push(time); },
+            getBPM: () => 120,
+        },
 
         // Stubbed app.js helpers.
         // Resolve with the real shape `{ completed, from, to }` so
@@ -110,6 +116,9 @@ function buildSandbox() {
 
         // Capture for assertions.
         __emitCalls: emitCalls,
+        __freezeCalls: freezeCalls,
+        __getPauseCalls: () => pauseCalls,
+        pauseBackingForCountIn: async () => { pauseCalls++; },
         queueMicrotask,
     };
     // startCountIn was carved into static/js/count-in.js and now reaches back into
@@ -160,7 +169,7 @@ test('loop:restart fires once when wrap path runs', async () => {
     `;
     vm.runInContext(prelude, sandbox);
 
-    await sandbox.__startCountIn();
+    await sandbox.__startCountIn({ bounds: { a: 10, b: 20 } });
     // Allow the queued requestAnimationFrame microtask + the _audioSeek
     // promise chain to settle. Two awaits is enough: rAF microtask -> rewind
     // completion -> _audioSeek().then() -> emit.
@@ -177,6 +186,33 @@ test('loop:restart fires once when wrap path runs', async () => {
     assert.equal(detail.loopB, 20);
     assert.equal(detail.time, 10);
     assert.equal(Object.keys(detail).length, 3, `unexpected extra keys in detail: ${Object.keys(detail)}`);
+    assert.deepEqual(sandbox.__freezeCalls, [10], 'wrap count-in must freeze the highway at A');
+});
+
+test('an already-paused initial count-in does not pause backing a second time', async () => {
+    const src = fs.readFileSync(APP_JS, 'utf8').replace(/^export /gm, '');
+    const startCountInSrc = extractFunction(src, 'async function startCountIn');
+    const sandbox = buildSandbox();
+    const prelude = `
+        var _countingIn = false;
+        var _countInGen = 0;
+        var _countInTimer = null;
+        var _countInRaf = 0;
+        var S = { isPlaying: true, lastAudioTime: 0 };
+        ${startCountInSrc}
+        globalThis.__startCountIn = startCountIn;
+    `;
+    vm.runInContext(prelude, sandbox);
+
+    const started = await sandbox.__startCountIn({
+        bounds: { a: 10, b: 20 },
+        immediate: true,
+        backingAlreadyPaused: true,
+    });
+
+    assert.equal(started, true);
+    assert.equal(sandbox.__getPauseCalls(), 0);
+    assert.deepEqual(sandbox.__freezeCalls, [10], 'initial count-in must freeze the highway at A');
 });
 
 test('loop:restart aborts when seek lands far from loopA (JUCE rollback)', async () => {
@@ -205,7 +241,7 @@ test('loop:restart aborts when seek lands far from loopA (JUCE rollback)', async
     `;
     vm.runInContext(prelude, sandbox);
 
-    await sandbox.__startCountIn();
+    await sandbox.__startCountIn({ bounds: { a: 10, b: 20 } });
     await new Promise((r) => setImmediate(r));
     await new Promise((r) => setImmediate(r));
 

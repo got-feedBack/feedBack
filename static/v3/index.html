@@ -1000,6 +1000,16 @@
     <div id="player" class="screen">
         <canvas id="highway"></canvas>
 
+        <!-- Pointer-transparent A/B overlay aligned with the full-song Section
+             Map at the top of the player. It remains useful when that optional
+             plugin is hidden: the bounds still explain the active loop. -->
+        <div id="v3-loop-timeline" class="v3-loop-timeline" data-state="inactive" hidden aria-hidden="true">
+            <div id="v3-loop-timeline-region" class="v3-loop-timeline-region">
+                <span class="v3-loop-timeline-marker v3-loop-timeline-marker--a">A</span>
+                <span class="v3-loop-timeline-marker v3-loop-timeline-marker--b">B</span>
+            </div>
+        </div>
+
         <div id="v3-venue-mood-fx" class="venue-mood-fx hidden" aria-hidden="true">
             <div class="venue-mood-lights" aria-hidden="true"></div>
             <div class="venue-mood-crowd" aria-hidden="true"></div>
@@ -1030,6 +1040,19 @@
                     <div id="hud-time" class="text-sm text-gray-400 tabular-nums"></div>
                     <div id="hud-avoffset" class="text-xs text-gray-500 tabular-nums hidden" title="A/V offset — [ and ] to adjust, Shift for ±50 ms">A/V 0 ms</div>
                 </div>
+                <div id="v3-loop-indicator" class="v3-loop-indicator" data-state="inactive" hidden>
+                    <button id="v3-loop-indicator-open" class="v3-loop-indicator-main" type="button"
+                            onclick="toggleSectionPracticePopover()" title="Open Practice & Loops">
+                        <svg class="v3-loop-indicator-icon" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M7 7h10l-2.5-2.5M17 17H7l2.5 2.5M19 7l-4-4m-10 14 4 4M19 7v4M5 17v-4" />
+                        </svg>
+                        <span id="v3-loop-indicator-label" class="v3-loop-indicator-label">Loop ready</span>
+                        <span id="v3-loop-indicator-range" class="v3-loop-indicator-range"></span>
+                    </button>
+                    <button id="v3-loop-indicator-clear" class="v3-loop-indicator-clear" type="button"
+                            onclick="clearLoop()" title="Turn off loop" aria-label="Turn off loop">&times;</button>
+                </div>
+                <span id="v3-loop-announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true">Loop disabled</span>
                 <div id="v3-live-performance-hud" class="v3-live-performance-hud hidden is-idle" aria-live="polite" aria-atomic="true" aria-label="Live performance">
                     <div class="v3-live-performance-heading">
                         <span class="v3-live-performance-tag">LIVE</span>
@@ -1207,22 +1230,6 @@
                         <input type="range" id="player-av-offset-slider" min="-1000" max="1000" value="0" step="1" oninput="setAvOffsetMs(this.value)" class="accent-accent slider-input" title="A/V sync offset (ms) — positive = audio plays ahead of visuals. [ and ] adjust ±10 ms (Shift = ±50). Double-click to reset." ondblclick="setAvOffsetMs(0)" aria-labelledby="player-av-offset-slider-label">
                         <span id="player-av-offset-label" class="v3-pop-val tabular-nums">+0ms</span>
                     </span>
-                </div>
-                <div class="v3-pop-row">
-                    <span class="v3-pop-label">Loop</span>
-                    <span class="flex items-center gap-1 flex-wrap">
-                        <button onclick="setLoopStart()" id="btn-loop-a" class="v3-pop-btn" title="Set loop start at current time">A</button>
-                        <button onclick="setLoopEnd()" id="btn-loop-b" class="v3-pop-btn" title="Set loop end at current time">B</button>
-                        <button onclick="saveCurrentLoop()" id="btn-loop-save" class="v3-pop-btn hidden" title="Save this loop">Save</button>
-                        <button onclick="clearLoop()" id="btn-loop-clear" class="v3-pop-btn hidden" title="Clear loop">✕</button>
-                        <span id="loop-label" class="text-xs text-gray-500"></span>
-                    </span>
-                </div>
-                <div class="v3-pop-row">
-                    <select id="saved-loops" onchange="loadSavedLoop(this.value)" class="v3-pop-select max-w-[160px] hidden">
-                        <option value="">Saved Loops</option>
-                    </select>
-                    <button onclick="deleteSelectedLoop()" id="btn-loop-delete" class="v3-pop-btn hidden" title="Delete selected loop">✕</button>
                 </div>
                 <!-- Editor ⇄ 3D Highway round-trip (mirrors the v2 loop cluster). -->
                 <div class="v3-pop-row">
