@@ -12680,10 +12680,28 @@
                     ? Math.exp(-_fwDt / FRET_WIRE_HIT_DECAY)
                     : 0;
                 _fwHitPrevTime = now;
+                // Decay EVERY wire's glow state, but flash only the OUTERMOST
+                // pair of lit wires. Fast passages overlap their decay tails, so
+                // without this a run of consecutive notes lights a picket fence
+                // of wires at once; collapsing to the outer pair keeps the whole
+                // lit span reading as ONE bracket — the same rule chords already
+                // follow, applied across everything currently glowing. Interior
+                // wires keep decaying invisibly (the base tier loop re-seeds
+                // their materials each frame), so the bracket tightens naturally
+                // as outer tails expire.
+                let _fwLo = -1, _fwHi = -1;
                 for (let _f = 0; _f <= NFRETS; _f++) {
                     const _g = Math.max(_fwHitIn[_f], _fwHitGlow[_f] * _fwDecay);
                     _fwHitGlow[_f] = _g;
-                    if (_g < 0.004) continue;   // below perceptible — skip the lerps
+                    if (_g < 0.004) continue;   // below perceptible
+                    if (_fwLo < 0) _fwLo = _f;
+                    _fwHi = _f;
+                }
+                for (let _i = 0; _i < 2; _i++) {
+                    const _f = _i === 0 ? _fwLo : _fwHi;
+                    if (_f < 0) break;                       // nothing lit
+                    if (_i === 1 && _f === _fwLo) break;     // single wire lit
+                    const _g = _fwHitGlow[_f];
                     const _m = fretWireMats[_f];
                     if (!_m) continue;
                     _m.color.lerp(_fwHitColor, _g);
