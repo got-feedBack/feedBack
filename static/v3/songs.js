@@ -44,7 +44,7 @@
     ];
     const FORMATS = [['', 'All formats'], ['sloppak', 'Feedpak'], ['loose', 'Folder']];
     const ARRANGEMENTS = ['Lead', 'Rhythm', 'Bass', 'Combo', 'Vocals'];
-    const STEMS = ['guitar', 'bass', 'drums', 'vocals', 'other'];
+    const STEMS = ['guitar', 'bass', 'drums', 'vocals', 'piano', 'other'];
     const PAGE_SIZE = 24;
     // Extra rows rendered above/below the viewport so a fast scroll doesn't flash
     // blank before the next window render lands.
@@ -2940,7 +2940,17 @@
             '<div class="flex items-center justify-between"><h3 class="text-lg font-semibold text-fb-text">Filters</h3>' +
             '<button data-drawer-close class="text-fb-textDim hover:text-fb-text">✕</button></div>' +
             section('Arrangements', ARRANGEMENTS.map((a) => triPill('arr', a, a, triState(f.arr_has, f.arr_lacks, a))).join('')) +
-            section('Stems (feedpak)', STEMS.map((s) => triPill('stem', s, s, triState(f.stem_has, f.stem_lacks, s))).join('')) +
+            section('Stems (feedpak)', STEMS.map((s) => triPill('stem', s, s, triState(f.stem_has, f.stem_lacks, s))).join('') +
+                (() => {
+                    // One-click "which songs still need splitting": lacks EVERY
+                    // instrument stem — the same query Stem Splitter's own
+                    // missing-stems view runs. Toggles off if already active.
+                    const on = STEMS.every((s) => f.stem_lacks.includes(s)) && !f.stem_has.length;
+                    return '<button data-stem-unsplit class="px-2 py-1 rounded-md text-xs border '
+                        + (on ? 'bg-fb-primary text-white border-fb-primary' : 'bg-gray-800/50 text-fb-textDim border-gray-700')
+                        + '" title="Songs with no instrument stems — not yet split">'
+                        + (on ? '✕ ' : '') + 'Not split</button>';
+                })()) +
             section('Lyrics', ['', '1', '0'].map((v) => '<button data-lyrics="' + v + '" class="px-2 py-1 rounded-md text-xs border ' + (f.lyrics === v ? 'bg-fb-primary text-white border-fb-primary' : 'bg-gray-800/50 text-fb-textDim border-gray-700') + '">' + (v === '' ? 'Any' : v === '1' ? 'Has lyrics' : 'No lyrics') + '</button>').join('')) +
             // Progress (mastery bands) — multi-select; server filters via song_stats.
             section('Progress', [['mastered', 'Mastered'], ['in_progress', 'In progress'], ['not_started', 'Not started']].map((it) => '<button data-mastery="' + it[0] + '" class="px-2 py-1 rounded-md text-xs border ' + (f.mastery.includes(it[0]) ? 'bg-fb-primary text-white border-fb-primary' : 'bg-gray-800/50 text-fb-textDim border-gray-700') + '">' + it[1] + '</button>').join('')) +
@@ -3032,6 +3042,13 @@
             f.tuningMatch = b.getAttribute('data-tuning-match');
             renderDrawer();
         }));
+        d.querySelector('[data-stem-unsplit]')?.addEventListener('click', () => {
+            const on = STEMS.every((s) => f.stem_lacks.includes(s)) && !f.stem_has.length;
+            f.stem_has.length = 0;
+            f.stem_lacks.length = 0;
+            if (!on) f.stem_lacks.push(...STEMS);
+            renderDrawer();
+        });
         d.querySelectorAll('[data-lyrics]').forEach((b) => b.addEventListener('click', () => { f.lyrics = b.getAttribute('data-lyrics'); renderDrawer(); }));
         d.querySelectorAll('[data-mastery]').forEach((b) => b.addEventListener('click', () => { const v = b.getAttribute('data-mastery'); const i = f.mastery.indexOf(v); if (i >= 0) f.mastery.splice(i, 1); else f.mastery.push(v); renderDrawer(); }));
         d.querySelector('[data-grouping]')?.addEventListener('click', () => {

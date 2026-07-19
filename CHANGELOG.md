@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Library filter: one-click "Not split" + a piano stem pill.** The v3 Filters drawer's
+  stems section gains a **Not split** shortcut that selects "lacks every instrument stem"
+  in one tap — the same query Stem Splitter's missing-stems view runs — instead of
+  cycling five pills to ✕ by hand. The pill row also gains `piano` (the drawer offered
+  five of the canonical six stems, so a piano-only song wrongly matched a hand-built
+  "lacks all" filter). "No lyrics" already existed in the Lyrics section.
 - **Gold tier (career passports)** — an earned badge turns **gold** when
   Virtuoso verifies an improvised jam in the passport's style (the
   `gold_improv` artifact relays with the drill snapshot; a genre inherits its
