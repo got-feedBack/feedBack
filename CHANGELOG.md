@@ -229,6 +229,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine (`app.js`, `highway.js`, `playSong`, `showScreen`, the capability registry).
 
 ### Fixed
+- **Guitar Pro 8: the right backing track is extracted when a file carries more than one.**
+  `BackingTrack/AssetId` is a key into the GPIF's `<Assets>` registry — `<Asset
+  id="0"><EmbeddedFilePath>` names the exact path inside the archive — but it
+  was being matched against embedded *filename stems*. GP8 names embedded audio
+  by hash while ids are small integers, so that match essentially never hit: every
+  such file warned and fell through to "first audio asset". That was silently
+  correct while a file carried exactly one recording — with two, a backing track
+  declaring id 1 resolved to asset 0, i.e. the wrong take. Resolution now reads
+  the registry first (verifying the path is really in the archive, so a stale
+  entry falls through rather than resolving to nothing), then the legacy stem
+  match, then the first asset.
 - **Guitar Pro import no longer fails on non-ASCII song metadata (Windows).**
   The GP→arrangement-XML writers wrote their output with `Path.write_text()`
   and no explicit encoding, so on Windows (cp1252 default) a metadata
