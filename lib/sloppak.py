@@ -1114,11 +1114,19 @@ def load_song(
         sfile = str(s.get("file", ""))
         if not sid or not sfile:
             continue
-        stems.append({
+        entry = {
             "id": sid,
             "file": sfile,
             "default": stem_default_on(s.get("default", True)),
-        })
+        }
+        # Optional presentational fields (feedpak 1.16.0, spec §5.3). Omitted —
+        # not None — when absent, so payload builders can pass entries through
+        # without every stem growing null keys.
+        for key in ("name", "description"):
+            val = s.get(key)
+            if isinstance(val, str) and val.strip():
+                entry[key] = val
+        stems.append(entry)
 
     # The complete mixdown is a stem (spec §5.3), but it is not a *layer*: lift
     # it out so that no consumer of `stems` — the mixer, the library's stem

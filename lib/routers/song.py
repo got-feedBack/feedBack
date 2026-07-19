@@ -868,7 +868,8 @@ def _playable_stems_payload(filename: str, dlc) -> dict:
 
     return {
         "stems": [
-            {"id": s["id"], "url": _url(s["file"]), "default": s["default"]}
+            {"id": s["id"], "url": _url(s["file"]), "default": s["default"],
+             **{k: s[k] for k in ("name", "description") if k in s}}
             for s in loaded.stems
         ],
         "full_mix_url": _url(loaded.full_mix) if loaded.full_mix else None,

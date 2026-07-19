@@ -59,7 +59,8 @@ def _ws_payload(tmp_path, pak):
     return {
         "stems": [
             {"id": s["id"], "url": f"/api/sloppak/{q}/file/{quote(s['file'])}",
-             "default": s["default"]}
+             "default": s["default"],
+             **{k: s[k] for k in ("name", "description") if k in s}}
             for s in loaded.stems
         ],
         "full_mix_url": f"/api/sloppak/{q}/file/{quote(loaded.full_mix)}" if loaded.full_mix else None,
@@ -126,6 +127,33 @@ def test_rest_matches_the_ws_for_a_single_full_pack(tmp_path):
     assert rest == _ws_payload(tmp_path, pak)
     assert [s["id"] for s in rest["stems"]] == ["full"]
     assert rest["full_mix_url"] is None
+
+
+def test_stem_name_and_description_pass_through(tmp_path):
+    """feedpak 1.16.0 per-stem `name`/`description` (spec §5.3) reach the payload.
+
+    Presentational, so the rule is passthrough-or-omit: a stem that carries the
+    fields keeps them, a stem that doesn't must NOT grow null keys, and
+    non-string / blank values are dropped rather than surfaced.
+    """
+    pak = _pak(tmp_path, [
+        {"id": "guitar", "file": "stems/guitar.ogg", "name": "Rhythm Guitar"},
+        {"id": "click", "file": "stems/click.ogg", "name": "Click",
+         "description": "Metronome click with 4-count lead-in.", "default": "off"},
+        {"id": "bass", "file": "stems/bass.ogg"},
+        {"id": "junk", "file": "stems/junk.ogg", "name": 7, "description": "   "},
+    ], name="Labelled.feedpak")
+
+    rest = _payload(tmp_path, pak)
+    assert rest == _ws_payload(tmp_path, pak)
+    by_id = {s["id"]: s for s in rest["stems"]}
+    assert by_id["guitar"]["name"] == "Rhythm Guitar"
+    assert "description" not in by_id["guitar"]
+    assert by_id["click"]["name"] == "Click"
+    assert by_id["click"]["description"] == "Metronome click with 4-count lead-in."
+    assert by_id["click"]["default"] is False
+    assert "name" not in by_id["bass"] and "description" not in by_id["bass"]
+    assert "name" not in by_id["junk"] and "description" not in by_id["junk"]
 
 
 def test_a_broken_pack_yields_an_empty_list_not_an_error(tmp_path):
