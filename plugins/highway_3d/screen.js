@@ -4101,7 +4101,12 @@
     // page remains the way in.
     function _pcSlot() {
         try {
-            const fn = window.feedBack && window.feedBack.ui && window.feedBack.ui.playerControlSlot;
+            // Gate on the v3 shell per docs/plugin-v3-ui.md (matches the tuner
+            // precedent). The playerControlSlot typeof check below already
+            // covers the practical case - only v3 exposes it - but the
+            // documented checklist asks plugins to detect v3 explicitly.
+            if (!window.feedBack || window.feedBack.uiVersion !== 'v3') return null;
+            const fn = window.feedBack.ui && window.feedBack.ui.playerControlSlot;
             return typeof fn === 'function' ? fn() : null;
         } catch (_) { return null; }
     }

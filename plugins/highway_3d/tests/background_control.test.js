@@ -146,6 +146,7 @@ function load({ store: initialStore } = {}) {
         },
         window: {
             feedBack: {
+                uiVersion: 'v3',   // _pcSlot gates on this (docs/plugin-v3-ui.md)
                 ui: { playerControlSlot: () => dom.slot },
                 // The real bus is an EventTarget wrapper exposing on/off. Modelled
                 // here so the screen:changed subscription — and its removal — are
@@ -334,6 +335,19 @@ test('re-mounts into a fresh slot when the player chrome is rebuilt', () => {
     assert.equal(fresh.children.length, 1, 'did not remount into the new slot');
     assert.notEqual(api.el, first, 'stale node was reused');
     assert.equal(listenerCount(), 1, 'remount must not double-subscribe');
+});
+
+test('a non-v3 host mounts nothing (uiVersion gate)', () => {
+    const ctl = load();
+    ctl.sandbox.window.feedBack.uiVersion = 'v2';   // pre-v3 shell
+    ctl.api._pcAcquire();
+    assert.equal(ctl.api.el, null, 'must not mount when uiVersion is not v3');
+    assert.equal(ctl.dom.slot.children.length, 0);
+    // Retry loop must still terminate rather than spin.
+    let guard = 0;
+    while (ctl.timers.length && guard++ < 100) ctl.timers.shift()();
+    assert.ok(guard < 100, 'retry loop did not terminate');
+    ctl.api._pcRelease();
 });
 
 test('a host with no player-control slot mounts nothing and does not throw', () => {
