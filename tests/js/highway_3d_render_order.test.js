@@ -142,7 +142,7 @@ test('string mesh in buildBoard uses the named board-string layer', () => {
     assert.ok(layerIndex('BOARD_STRING') < layerIndex('BOARD_FRET_WIRE'));
 });
 
-test('static fret wires use bowed TubeGeometry + MeshStandardMaterial, named board-fret-wire layer, depthTest+depthWrite false, default gray 0x666688', () => {
+test('static fret wires use bowed TubeGeometry + MeshStandardMaterial, named board-fret-wire layer, depthTest+depthWrite false, idle tier FRET_WIRE_IDLE_HEX', () => {
     // Fret wires are a single shared, bowed TubeGeometry (backported from
     // highway_babylon): a CatmullRom curve whose middle pushes away from the
     // camera by FRET_BOW_DZ so the row of frets reads as wrapping a cylindrical
@@ -184,10 +184,19 @@ test('static fret wires use bowed TubeGeometry + MeshStandardMaterial, named boa
         /new\s+T\.MeshStandardMaterial\(/,
         'fret wires must use MeshStandardMaterial so scene light shades the metal',
     );
+    // The wire tiers moved to named constants (feedBack#969): idle is the
+    // dimmed 0x4A4A60 so the neck recedes and the anchor lane reads as the
+    // focus cue. Assert the material uses the constant AND pin the constant's
+    // value, so a retune is a deliberate two-line change here.
     assert.match(
         s,
-        /color\s*:\s*0x666688/,
-        'fret wire material must have default gray color 0x666688',
+        /color\s*:\s*FRET_WIRE_IDLE_HEX/,
+        'fret wire material must take its default color from FRET_WIRE_IDLE_HEX',
+    );
+    assert.match(
+        s,
+        /FRET_WIRE_IDLE_HEX\s*=\s*0x4A4A60/,
+        'FRET_WIRE_IDLE_HEX must be the dimmed idle gray-violet 0x4A4A60',
     );
     // Both depth flags asserted independently so the test doesn't pin property
     // order in the material literal.
@@ -208,7 +217,7 @@ test('static fret wires use bowed TubeGeometry + MeshStandardMaterial, named boa
     );
 });
 
-test('update() sets fret wire gold (0xD8A636) for in-anchor frets, gray (0x666688) otherwise', () => {
+test('update() sets fret wire FRET_WIRE_ACTIVE_HEX (gold) for in-anchor frets, FRET_WIRE_IDLE_HEX otherwise', () => {
     // Uses anchorLaneBoundsAt() — the same helper the dynamic lane uses —
     // so fret wire highlight aligns exactly with the lane edges:
     //   dMin = fret - 1,  dMax = fret + width - 1
@@ -226,13 +235,18 @@ test('update() sets fret wire gold (0xD8A636) for in-anchor frets, gray (0x66668
     );
     assert.match(
         s,
-        /_m\.color\.setHex\(\s*0xD8A636\s*\)/,
-        'update() must set gold 0xD8A636 for in-anchor fret wires',
+        /_m\.color\.setHex\(\s*FRET_WIRE_ACTIVE_HEX\s*\)/,
+        'update() must set FRET_WIRE_ACTIVE_HEX for in-anchor fret wires',
     );
     assert.match(
         s,
-        /_m\.color\.setHex\(\s*0x666688\s*\)/,
-        'update() must set gray 0x666688 for out-of-anchor fret wires',
+        /FRET_WIRE_ACTIVE_HEX\s*=\s*0xD8A636/,
+        'FRET_WIRE_ACTIVE_HEX must stay the anchor-lane gold 0xD8A636',
+    );
+    assert.match(
+        s,
+        /_m\.color\.setHex\(\s*FRET_WIRE_IDLE_HEX\s*\)/,
+        'update() must set FRET_WIRE_IDLE_HEX for out-of-anchor fret wires',
     );
     assert.match(
         s,
