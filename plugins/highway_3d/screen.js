@@ -3959,6 +3959,29 @@
         butterchurn: 'Butterchurn (visualizer)',
         image: 'Custom image', video: 'Custom video',
     };
+    // Which settings each background style actually consumes, so a control
+    // that would do nothing is greyed out instead of lying.
+    //
+    // Derived by reading the BG_STYLES bodies: a style uses `intensity` if its
+    // build() reads settings.intensity, and uses `reactive` if its update()
+    // dereferences the `bands` argument. 'butterchurn' is not a BG_STYLES entry
+    // at all - _bgMountStyle falls through to BG_STYLES.off - and it drives its
+    // own audio tap and opacity, so both are false for it.
+    //
+    // KEEP IN STEP WITH BG_STYLES. If a style starts reading bands or intensity
+    // and its row is not updated, the control stays greyed out and lies the
+    // other way. An id missing from this table defaults to both-enabled, which
+    // is the safe direction: a new style is assumed to use its settings.
+    const _PC_USES = {
+        off:         { intensity: false, reactive: false, why: 'No background to adjust' },
+        particles:   { intensity: true,  reactive: true },
+        silhouettes: { intensity: true,  reactive: true },
+        lights:      { intensity: true,  reactive: true },
+        geometric:   { intensity: true,  reactive: true },
+        image:       { intensity: true,  reactive: false, why: 'This background does not react to audio' },
+        video:       { intensity: false, reactive: false, why: 'The video plays as-is - nothing to adjust here' },
+        butterchurn: { intensity: false, reactive: false, why: 'Butterchurn reacts to audio itself - tune it in Settings > 3D Highway, or its Visualizer panel' },
+    };
     let _pcRefs = 0, _pcEl = null, _pcSel = null, _pcReactive = null, _pcIntensity = null;
     let _pcListener = null, _pcRetry = 0, _pcRetryTimer = 0;
 
@@ -3987,6 +4010,7 @@
         idle: '#181830',              // bg-dark-600
         hover: '#1e1e3a',             // bg-dark-500
         text: '#d1d5db',              // text-gray-300
+        textDim: '#6b7280',           // text-gray-500 (inert controls)
         onBg: 'rgba(20,83,45,0.5)',   // bg-green-900/50
         onText: '#86efac',            // text-green-300
     };
@@ -4006,11 +4030,21 @@
         b.addEventListener('mouseleave', () => { if (!b._on) b.style.backgroundColor = _PC_C.idle; });
         return b;
     }
-    // Paint a pill's on/off state. Only the Reactive toggle uses this today,
-    // so there is deliberately no 'selected' or 'disabled' variant - the style
-    // list is a <select>, not pills. Add those back if a second pill needs them.
-    function _pcPaint(btn, on) {
-        btn._on = !!on;
+    // Paint a pill's on/off state, optionally greyed out. `disabled` is used
+    // when the active background style ignores the setting entirely (see
+    // _pcSync and _PC_USES) - the pill stays visible so the layout
+    // does not jump, but it is inert and says why on hover.
+    function _pcPaint(btn, on, disabled, reason) {
+        btn._on = !!on && !disabled;
+        btn.disabled = !!disabled;
+        btn.style.cursor = disabled ? 'not-allowed' : 'pointer';
+        btn.style.opacity = disabled ? '.45' : '1';
+        btn.title = reason || 'React to the audio';
+        if (disabled) {
+            btn.style.backgroundColor = _PC_C.idle;
+            btn.style.color = _PC_C.textDim;
+            return;
+        }
         btn.style.backgroundColor = on ? _PC_C.onBg : _PC_C.idle;
         btn.style.color = on ? _PC_C.onText : _PC_C.text;
     }
@@ -4034,8 +4068,22 @@
             if (vid) vid.disabled = !_bgReadSetting(null, 'customVideoName');
             _pcSel.value = _bgReadSetting(null, 'style');
         }
-        if (_pcReactive) _pcPaint(_pcReactive, !!_bgReadSetting(null, 'reactive'));
-        if (_pcIntensity) _pcIntensity.value = String(_bgReadSetting(null, 'intensity'));
+        // Grey out whichever controls the ACTIVE style ignores (see _PC_USES).
+        // An unknown id enables both rather than disabling both, so a style
+        // added without a table row is merely unhelpful, never inert.
+        const uses = _PC_USES[_bgReadSetting(null, 'style')] || { intensity: true, reactive: true };
+        const why = uses.why || 'This background style ignores this setting';
+        if (_pcReactive) {
+            _pcPaint(_pcReactive, !!_bgReadSetting(null, 'reactive'), !uses.reactive,
+                uses.reactive ? 'React to the audio' : why);
+        }
+        if (_pcIntensity) {
+            _pcIntensity.value = String(_bgReadSetting(null, 'intensity'));
+            _pcIntensity.disabled = !uses.intensity;
+            _pcIntensity.style.opacity = uses.intensity ? '1' : '.45';
+            _pcIntensity.style.cursor = uses.intensity ? '' : 'not-allowed';
+            _pcIntensity.title = uses.intensity ? 'Background intensity' : why;
+        }
     }
     // Mirror the current values into the Settings panel's controls when it's
     // in the DOM.
@@ -4100,6 +4148,7 @@
         optWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:.25rem;margin-top:.375rem;';
         _pcReactive = _pcPill('Reactive', 'React to the audio');
         _pcReactive.addEventListener('click', () => {
+            if (_pcReactive.disabled) return;
             try { window.h3dBgSetReactive(!_pcReactive._on); }
             catch (e) { console.error('[3D-Hwy] bg reactive set failed', e); }
         });
@@ -4119,6 +4168,7 @@
         // thread mid-playback. settings.html's slider makes the same choice:
         // oninput only repaints its label, onchange calls the setter.
         _pcIntensity.addEventListener('change', () => {
+            if (_pcIntensity.disabled) return;
             try { window.h3dBgSetIntensity(parseFloat(_pcIntensity.value)); }
             catch (e) { console.error('[3D-Hwy] bg intensity set failed', e); }
         });
