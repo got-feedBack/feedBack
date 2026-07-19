@@ -5,9 +5,12 @@
 // mid-song. Two things about it are easy to get wrong and invisible when they
 // are:
 //
-//   * It is REFCOUNTED. Splitscreen creates one renderer instance per panel,
-//     but the settings it writes are global — four controls would be four ways
-//     to set one value, and a leaked refcount pins a dead control in the UI.
+//   * It is REFCOUNTED. Several renderer instances can be live at once (a
+//     splitscreen host creates one per panel), but the settings it writes are
+//     global — N controls would be N ways to set one value, and a leaked
+//     refcount pins a dead control in the UI. The multi-instance behaviour is
+//     exercised here with stubbed instances; it is NOT verified against a real
+//     splitscreen session, whose visualizer does not currently work.
 //   * It GREYS OUT controls the active style ignores. Not every background
 //     style reads `intensity`, and none of them read audio bands under
 //     Butterchurn, so a live-looking knob that does nothing is a real bug.
@@ -163,7 +166,7 @@ test('mounts one control into the player-control slot', () => {
     assert.equal(api.sel.children.length, BG_STYLE_IDS.length, 'one option per style');
 });
 
-test('splitscreen panels share a single control', () => {
+test('multiple renderer instances share a single control', () => {
     const { api, dom } = load();
     api._pcAcquire();
     api._pcAcquire();
