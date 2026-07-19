@@ -219,6 +219,56 @@ let _appUpdatePollTimer = null;
 // user switch). Used to revert the dropdown/localStorage if a switch fails,
 // so the UI/persisted state can never end up ahead of the real updater state.
 let _appUpdateAckedChannel = null;
+// Last [update-diag] renderFrom line logged, so the ~1.5s download poll (and
+// repeated no-op re-renders) don't flood the diagnostics ring buffer with
+// byte-identical lines and evict genuinely useful trace. Every real state or
+// percent change still differs and logs; the structured contribute() snapshot
+// (with its own ts) is unconditional, so liveness is never lost.
+let _appUpdateLastRenderLog = null;
+
+// Pure status → view model for the App-updates panel. DOM-free and exported so
+// the button/channel/text state machine can be unit-tested without a browser;
+// renderFrom() applies the returned shape to the DOM. `canApply` is whether the
+// bridge exposes apply() (older bridges fall back to text-only), `fmtTimestamp`
+// formats the "last checked" time, `channelValue` is the dropdown's fallback
+// when the status omits a channel.
+export function _appUpdateStatusView(s, { channelValue, canApply = true, fmtTimestamp = (t) => String(t) } = {}) {
+    if (!s) return { kind: 'unavailable' };
+    if (s.status === 'unsupported' || s.platform === 'linux') return { kind: 'unsupported' };
+    const base = `Version ${s.currentVersion || '?'} · ${s.channel || channelValue}`;
+    let action;
+    let btnLabel = 'Check for updates';
+    let btnMode = 'check';
+    let btnDisabled = false;
+    // Lock the channel selector only while a check/download is in flight —
+    // switching mid-operation abandons it. Enabled for every other status.
+    const channelDisabled = s.status === 'checking' || s.status === 'downloading';
+    switch (s.status) {
+        case 'checking':
+            action = 'checking for updates…';
+            btnDisabled = true;
+            break;
+        case 'downloading': {
+            const pct = typeof s.percent === 'number' ? s.percent : null;
+            action = pct === null ? 'update available — downloading…' : `downloading update… ${pct}%`;
+            btnDisabled = true;
+            break;
+        }
+        case 'downloaded':
+            action = 'update ready';
+            if (canApply) { btnLabel = 'Restart now'; btnMode = 'restart'; }
+            else { action = 'update ready — restart to apply'; }
+            break;
+        case 'error':
+            action = s.message ? `update error: ${s.message}` : 'update check failed';
+            break;
+        case 'idle':
+        default:
+            action = `up to date · last checked ${fmtTimestamp(s.lastChecked)}`;
+            break;
+    }
+    return { kind: 'status', line: `${base} · ${action}`, btnLabel, btnMode, btnDisabled, channelDisabled };
+}
 
 export function setupAppUpdates() {
     const block = document.getElementById('app-updates-block');
@@ -289,68 +339,39 @@ export function setupAppUpdates() {
     // visible and appends what's happening, so the download progress never
     // obscures which build you're on.
     function renderFrom(s, extra) {
-        // Diagnostic trace: log the raw status object on EVERY render
-        // (unconditionally, before any branching) — auto-captured by
-        // diagnostics.js's console wrap into the exportable ring buffer, so
-        // "Export Diagnostics" in this same Settings → System panel captures
-        // exactly what the app saw and decided, not just what the UI showed.
-        console.log('[update-diag] renderFrom', JSON.stringify(s), extra ? `extra=${extra}` : '');
-        if (!s) { statusEl.textContent = extra || 'Updater status unavailable.'; return; }
-        if (s.status === 'unsupported' || s.platform === 'linux') {
+        // Diagnostic trace: log the raw status object before any branching —
+        // auto-captured by diagnostics.js's console wrap into the exportable
+        // ring buffer, so "Export Diagnostics" in this same Settings → System
+        // panel captures exactly what the app saw and decided, not just what
+        // the UI showed. Deduped so a steady poll doesn't flood the ring buffer
+        // (see _appUpdateLastRenderLog); a real state/percent change differs and
+        // still logs; the structured contribute() snapshot below is unconditional.
+        const logKey = `${JSON.stringify(s)}|${extra || ''}`;
+        if (logKey !== _appUpdateLastRenderLog) {
+            _appUpdateLastRenderLog = logKey;
+            console.log('[update-diag] renderFrom', JSON.stringify(s), extra ? `extra=${extra}` : '');
+        }
+        const view = _appUpdateStatusView(s, {
+            channelValue: channelSelect.value,
+            canApply: typeof updateApi.apply === 'function',
+            fmtTimestamp,
+        });
+        if (view.kind === 'unavailable') { statusEl.textContent = extra || 'Updater status unavailable.'; return; }
+        if (view.kind === 'unsupported') {
             showLinuxFallback('Auto-update requires the AppImage build on the Nightly channel.');
             return;
         }
         // Healthy for the current channel — clear any "unsupported" UI left
         // over from a prior channel selection.
         if (linuxNote) linuxNote.classList.add('hidden');
-        const base = `Version ${s.currentVersion || '?'} · ${s.channel || channelSelect.value}`;
-        // The button is a little state machine driven by the status: grayed
-        // out while a check/download is in flight, flipped to "Restart now"
-        // (dataset.mode='restart', consumed by the click handler) once an
-        // update is staged, and back to a plain check button otherwise.
-        let action;
-        let btnLabel = 'Check for updates';
-        let btnMode = 'check';
-        let btnDisabled = false;
-        // Switching channels mid-check/download abandons the in-flight
-        // operation (a redundant setChannel() bumps main's checkGeneration),
-        // so lock the selector while one is active. Left enabled for every
-        // other status, including the Linux "unsupported" fallback above,
-        // where it's the only way to switch onto Nightly.
-        channelSelect.disabled = s.status === 'checking' || s.status === 'downloading';
-        switch (s.status) {
-            case 'checking':
-                action = 'checking for updates…';
-                btnDisabled = true;
-                break;
-            case 'downloading': {
-                const pct = typeof s.percent === 'number' ? s.percent : null;
-                action = pct === null ? 'update available — downloading…' : `downloading update… ${pct}%`;
-                btnDisabled = true;
-                break;
-            }
-            case 'downloaded':
-                action = 'update ready';
-                if (typeof updateApi.apply === 'function') {
-                    btnLabel = 'Restart now';
-                    btnMode = 'restart';
-                } else {
-                    // Older bridge without apply(): fall back to text-only.
-                    action = 'update ready — restart to apply';
-                }
-                break;
-            case 'error':
-                action = s.message ? `update error: ${s.message}` : 'update check failed';
-                break;
-            case 'idle':
-            default:
-                action = `up to date · last checked ${fmtTimestamp(s.lastChecked)}`;
-                break;
-        }
-        checkBtn.textContent = btnLabel;
-        checkBtn.dataset.mode = btnMode;
-        checkBtn.disabled = btnDisabled;
-        const line = `${base} · ${action}`;
+        // The button is a little state machine (dataset.mode drives the click
+        // handler's restart-vs-check branch); the channel selector locks only
+        // while a check/download is active. See _appUpdateStatusView.
+        channelSelect.disabled = view.channelDisabled;
+        checkBtn.textContent = view.btnLabel;
+        checkBtn.dataset.mode = view.btnMode;
+        checkBtn.disabled = view.btnDisabled;
+        const line = view.line;
         statusEl.textContent = extra ? `${extra} · ${line}` : line;
 
         // Live structured snapshot (overwrites, not a log) via the existing
