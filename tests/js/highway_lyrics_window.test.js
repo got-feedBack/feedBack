@@ -47,16 +47,16 @@ function makeStorage(initial) {
 test('cfg reader: defaults, clamping, corrupt JSON, live re-read', () => {
     const storage = makeStorage();
     const read = loadCfgReader(storage);
-    assert.deepEqual(read(), { upcomingLines: 2, lookaheadSec: 8 });
+    assert.deepEqual(read(), { upcomingLines: 2, lookaheadSec: 4 });
 
     storage.setItem('lyricsDisplay', JSON.stringify({ upcomingLines: 99, lookaheadSec: 0 }));
     assert.deepEqual(read(), { upcomingLines: 4, lookaheadSec: 1 }); // clamped
 
     storage.setItem('lyricsDisplay', '{not json');
-    assert.deepEqual(read(), { upcomingLines: 2, lookaheadSec: 8 }); // corrupt -> defaults
+    assert.deepEqual(read(), { upcomingLines: 2, lookaheadSec: 4 }); // corrupt -> defaults
 
     storage.setItem('lyricsDisplay', JSON.stringify({ upcomingLines: 1 }));
-    assert.deepEqual(read(), { upcomingLines: 1, lookaheadSec: 8 }); // partial merges over defaults
+    assert.deepEqual(read(), { upcomingLines: 1, lookaheadSec: 4 }); // partial merges over defaults
 });
 
 // ── drawLyrics harness ───────────────────────────────────────────────────
@@ -151,6 +151,22 @@ test('pre-song preview appears within lookahead, not before', () => {
     const near = makeCtx();
     draw({ lyrics, ctx: near, currentTime: 3 }, 2000, H); // 7s out <= 8s
     assert.deepEqual(near.calls.map(c => c.text), ['one']);
+});
+
+test('banner hides during an instrumental gap, returns within lookahead', () => {
+    // The "Marks Of The Evil One" report: short authored lines around a ~6s
+    // instrumental gap. Mid-gap the banner must hide (nothing is being
+    // sung), then return once the next line is inside the lookahead.
+    const lyrics = [syl(10, 'sung', true), syl(17, 'next', true)];
+    const draw = loadDrawLyrics({ upcomingLines: 2, lookaheadSec: 4 });
+
+    const midGap = makeCtx();
+    draw({ lyrics, ctx: midGap, currentTime: 12 }, 2000, H); // next is 5s out
+    assert.equal(midGap.calls.length, 0, 'mid-gap: no unsung lyrics on screen');
+
+    const nearNext = makeCtx();
+    draw({ lyrics, ctx: nearNext, currentTime: 13.5 }, 2000, H); // 3.5s out
+    assert.deepEqual(nearNext.calls.map(c => c.text), ['sung', 'next']);
 });
 
 test('banner hides after the last line ends with nothing upcoming', () => {

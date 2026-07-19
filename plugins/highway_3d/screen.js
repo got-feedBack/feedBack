@@ -6965,7 +6965,7 @@
         // because this plugin deliberately does not import the shared
         // module. Both read localStorage['lyricsDisplay'], so
         // highway.setLyricsDisplay() tunes both at once.
-        const LYRICS_DISPLAY_DEFAULTS = { upcomingLines: 2, lookaheadSec: 8 };
+        const LYRICS_DISPLAY_DEFAULTS = { upcomingLines: 2, lookaheadSec: 4 };
         let _lyrCfgRaw, _lyrCfg = LYRICS_DISPLAY_DEFAULTS;
         function getLyricsDisplayCfg() {
             let raw = null;

@@ -929,7 +929,11 @@ export function drawChords(hwState, W, H) {
 // without a reload.
 //   upcomingLines — how many lines beyond the current one may be shown (0-4)
 //   lookaheadSec  — how far ahead a line may start and still be previewed (1-30)
-const LYRICS_DISPLAY_DEFAULTS = { upcomingLines: 2, lookaheadSec: 8 };
+// lookahead default is deliberately modest (4s): dense singing still gets
+// full upcoming context (next lines start within a couple of seconds), but
+// the banner goes away during instrumental gaps instead of hanging there
+// with unsung lines — which reads as "the lyrics are out of sync".
+const LYRICS_DISPLAY_DEFAULTS = { upcomingLines: 2, lookaheadSec: 4 };
 let _lyricsCfgRaw;
 let _lyricsCfg = LYRICS_DISPLAY_DEFAULTS;
 export function getLyricsDisplayCfg() {
