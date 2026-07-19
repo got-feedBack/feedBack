@@ -61,25 +61,25 @@
     // without stopping. This flags them. It is READ-ONLY: nothing here edits a
     // playlist — removal is a separate, explicit, itemised action.
 
-    // ── SEAM — repoint HERE when `feat/v3-tuning-filter-instrument` lands ────
-    // The tuning this row should be scored against for the player's instrument.
-    // main indexes exactly ONE tuning per chart, derived from the guitar
-    // arrangement, so today a bass player is scored against the guitar chart's
-    // tuning — the very data source behind the reported bug. The sibling PR adds
-    // per-instrument tuning columns (`bass_tuning_name` / `bass_tuning_offsets`)
-    // plus a `libInstrument()` perspective; when it lands, this ONE function
-    // picks the bass tuning for a bass player and everything downstream (the
-    // chips, the summary, the filter, the remove list) follows with no other
-    // change. Kept as a function, not an inline read, for exactly that reason.
+    // Pick the indexed perspective that matches the player's live instrument.
+    // #1003 supplies bass-specific columns; when a song has no bass chart we
+    // deliberately fall back to the historical song-level guitar tuning.
     function rowTuningForCheck(s) {
+        let wantsBass = false;
+        try {
+            const wt = window.feedBack && window.feedBack.workingTuning;
+            const cur = wt && typeof wt.get === 'function' ? wt.get() : null;
+            wantsBass = !!cur && cur.instrument === 'bass';
+        } catch (_) { /* capability errors degrade to the song-level tuning */ }
+        const hasBassTuning = wantsBass && !!s.bass_tuning_offsets;
         return {
-            offsets: s.tuning_offsets || s.tuning_name,
-            // Score a bass-only chart against bass base pitches — a 4-string bass
-            // tuning read as guitar can false-match a guitarist.
-            isBass: !!s.bass_only,
+            offsets: hasBassTuning
+                ? s.bass_tuning_offsets : (s.tuning_offsets || s.tuning_name),
+            // The selected bass perspective uses bass base pitches. A bass-only
+            // fallback row does too; every other fallback is the lead chart.
+            isBass: hasBassTuning || !!s.bass_only,
         };
     }
-
     // A coverage report says "not covered" BOTH for a real mismatch and for
     // "I couldn't work it out" (missing settings/tuner data → an all-empty
     // report). Only a report carrying an actual reason — named string changes,
