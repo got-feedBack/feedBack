@@ -49,7 +49,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bracketing it light up. A fretted note lights the wire behind it and the wire it's
   pressed against; a chord lights only the outermost wires of its shape; an open
   string lights the anchor lane's edge wires (its gem is drawn as a slab spanning the
-  lane, so those are the wires it sits between). At most **two wires are ever lit at
+  lane, so those are the wires it sits between); a chord likewise lights the lane's edge
+  wires — the lit lane strip can run a fret past the chord's outermost fret, and a
+  bracket one wire inside the lit lane reads as misaligned (the shape's own outer pair
+  survives only as the fallback on anchor-less charts). At most **two wires are ever lit at
   once**: when overlapping decay tails (fast passages) would light a run of wires, the
   flash collapses to the outermost pair of the lit span — one bracket, never a picket
   fence. With no scorer attached, nothing changes.

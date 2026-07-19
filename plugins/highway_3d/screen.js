@@ -12653,25 +12653,30 @@
             // backward resets it — otherwise a flash from a hit we jumped away
             // from would linger on the wire.
             if (fretWireMats.length && _fwHitColor) {
-                // Resolve accumulated chord hits: a chord flashes ONLY the wire
-                // behind its lowest fret and the wire at its highest, so the
-                // shape reads as one bracketed block rather than a picket fence
-                // of every wire in between. Open strings within the chord light
-                // the lane edges (they have no fret to bracket).
+                // Resolve accumulated chord hits: a chord's flash frames the
+                // LANE, not its own shape. The lit lane strip spans the anchor's
+                // width (min ~4 frets), which can run a fret past the chord's
+                // outermost fret — and a bracket one wire INSIDE the lit lane
+                // reads as misaligned. So a chord lights the anchor lane's edge
+                // wires: the exact wires the lane strip spans, and the same pair
+                // open strings already use. The shape's own outer pair (wire
+                // behind the lowest fret, wire at the highest) survives only as
+                // the fallback for charts with no anchors.
                 for (const _fwE of _fwChordAcc.values()) {
-                    if (_fwE.maxF >= _fwE.minF && _fwE.a > 0) {
-                        const _w0 = Math.max(0, _fwE.minF - 1);
-                        const _w1 = Math.min(NFRETS, _fwE.maxF);
-                        if (_fwE.a > _fwHitIn[_w0]) _fwHitIn[_w0] = _fwE.a;
-                        if (_fwE.a > _fwHitIn[_w1]) _fwHitIn[_w1] = _fwE.a;
+                    const _fwA = Math.max(_fwE.a, _fwE.openA);
+                    if (_fwA <= 0) continue;
+                    let _w0 = -1, _w1 = -1;
+                    const _fwB = anchorLaneBoundsAt(_drawAnchors, _fwE.t);
+                    if (_fwB) {
+                        _w0 = _fwB.dMin;
+                        _w1 = _fwB.dMax;
+                    } else if (_fwE.maxF >= _fwE.minF) {
+                        _w0 = Math.max(0, _fwE.minF - 1);
+                        _w1 = Math.min(NFRETS, _fwE.maxF);
                     }
-                    if (_fwE.openA > 0) {
-                        const _fwB = anchorLaneBoundsAt(_drawAnchors, _fwE.t);
-                        if (_fwB) {
-                            if (_fwE.openA > _fwHitIn[_fwB.dMin]) _fwHitIn[_fwB.dMin] = _fwE.openA;
-                            if (_fwE.openA > _fwHitIn[_fwB.dMax]) _fwHitIn[_fwB.dMax] = _fwE.openA;
-                        }
-                    }
+                    if (_w0 < 0) continue; // all-open chord on an anchor-less chart
+                    if (_fwA > _fwHitIn[_w0]) _fwHitIn[_w0] = _fwA;
+                    if (_fwA > _fwHitIn[_w1]) _fwHitIn[_w1] = _fwA;
                 }
 
                 const _fwDt = now - _fwHitPrevTime;
