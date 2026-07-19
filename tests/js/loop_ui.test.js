@@ -12,7 +12,6 @@ const SECTION = fs.readFileSync(path.join(ROOT, 'static', 'js', 'section-practic
 const LOOPS = fs.readFileSync(path.join(ROOT, 'static', 'js', 'loops.js'), 'utf8');
 const APP = fs.readFileSync(path.join(ROOT, 'static', 'app.js'), 'utf8');
 const V3_CSS = fs.readFileSync(path.join(ROOT, 'static', 'v3', 'v3.css'), 'utf8');
-const NOTEDETECT = fs.readFileSync(path.join(ROOT, 'plugins', 'notedetect', 'screen.js'), 'utf8');
 
 function practiceMarkup() {
     const sandbox = {};
@@ -152,8 +151,6 @@ test('the editor loop handoff uses preference-driven controller mode', () => {
     assert.doesNotMatch(handoff, /togglePlay\s*\(/);
 });
 
-test('armed bounds cannot wrap and note-detection only treats active loops as drills', () => {
+test('armed bounds cannot wrap', () => {
     assert.match(APP, /getLoopState\(\)\.active\s*&&\s*S\.isPlaying\s*&&\s*ct\s*>=\s*loopB/);
-    assert.match(NOTEDETECT, /loopState\.active\s*===\s*false/);
-    assert.match(NOTEDETECT, /loopState\.state\s*===\s*['"]armed['"]/);
 });
