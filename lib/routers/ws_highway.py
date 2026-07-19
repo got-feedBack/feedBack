@@ -368,7 +368,9 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
             q_fn = quote(filename, safe="")
             for s in loaded_slop.stems:
                 url = f"/api/sloppak/{q_fn}/file/{quote(s['file'])}"
-                stems_payload.append({"id": s["id"], "url": url, "default": s["default"]})
+                stems_payload.append(
+                    {"id": s["id"], "url": url, "default": s["default"],
+                     **{k: s[k] for k in ("name", "description") if k in s}})
             # Full-mix URL (served by the same /api/sloppak/.../file/ endpoint).
             if loaded_slop is not None and loaded_slop.full_mix:
                 full_mix_url = (
