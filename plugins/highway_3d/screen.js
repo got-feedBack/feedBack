@@ -921,13 +921,7 @@
     // The provider already fades its own `alpha` on a struck note; this tail
     // just keeps the hand-off from popping, and smooths the frame-to-frame
     // jitter of a held sustain (whose alpha tracks live input level).
-    // The flash is a one-shot "lightning strike" pulse, not a lingering glow:
-    // a near-instant crack up, then a fast shocked fall with an electric
-    // flicker, then HARD ZERO — a held sustain does not keep the wires lit.
-    const FRET_WIRE_HIT_RISE = 0.025;         // s, the crack — near-instant fade-in
-    const FRET_WIRE_HIT_FALL = 0.16;          // s, the shock dying out; dark after
-    const FRET_WIRE_HIT_FLICKER_HZ = 26;      // shudder rate during the fall
-    const FRET_WIRE_HIT_FLICKER_DEPTH = 0.35; // how deep the shudder bites (0..1)
+    const FRET_WIRE_HIT_DECAY = 0.32;
 
     const S_BASE = 3 * K;
     const S_GAP = 4 * K;
@@ -4789,21 +4783,12 @@
         const _scrStringSustain      = new Array(MAX_RENDER_STRINGS).fill(false);
         const _scrStringAnticipation = new Array(MAX_RENDER_STRINGS).fill(0);
         const _scrFretHeat           = new Array(NFRETS + 1).fill(0);
-        // Fret-wire hit flash. ONE strike per judged hit-zone event: the first
-        // frame a note (or strummed chord) gets a good verdict, its identity
-        // lands in _fwStruck and its wires get a strike request via _fwHitIn —
-        // and never again for that event, no matter how long the verdict stays
-        // live (a held sustain rings on with dark wires) and no matter what the
-        // per-wire input did between events (two consecutive correct notes on
-        // the SAME fret are two events → two strikes; an edge detector on the
-        // wire would have merged them). Same seen-map pattern as _sparkSeen.
-        // _fwPulseT0/_fwPulseAmp carry each wire's active pulse; _fwHitGlow is
-        // the evaluated envelope this frame, for the outer-pair selection.
+        // Fret-wire hit flash. _fwHitIn is per-frame (cleared with the rest of
+        // the frame state, written by drawNote when a provider confirms a note);
+        // _fwHitGlow persists across frames so the flash can decay smoothly
+        // rather than snapping off the frame the provider goes quiet.
         const _fwHitIn               = new Float32Array(NFRETS + 1);
         const _fwHitGlow             = new Float32Array(NFRETS + 1);
-        const _fwPulseT0             = new Float32Array(NFRETS + 1).fill(-Infinity);
-        const _fwPulseAmp            = new Float32Array(NFRETS + 1);
-        const _fwStruck              = new Map();
         // Per-frame chord accumulator. A chord flashes only the OUTERMOST wires
         // of its shape, but drawNote() sees one chord note at a time and can't
         // know the span — so hits accumulate here keyed by chord, and the flash
@@ -12697,14 +12682,9 @@
                 // open strings already use. The shape's own outer pair (wire
                 // behind the lowest fret, wire at the highest) survives only as
                 // the fallback for charts with no anchors.
-                for (const [_fwEK, _fwE] of _fwChordAcc) {
+                for (const _fwE of _fwChordAcc.values()) {
                     const _fwA = Math.max(_fwE.a, _fwE.openA);
                     if (_fwA <= 0) continue;
-                    // The strum is ONE event: strike its wires once, on the
-                    // first frame any member gets a good verdict.
-                    const _fwCK = 'c|' + _fwEK;
-                    if (_fwStruck.has(_fwCK)) continue;
-                    _fwStruck.set(_fwCK, now);
                     let _w0 = -1, _w1 = -1;
                     const _fwB = anchorLaneBoundsAt(_drawAnchors, _fwE.t);
                     if (_fwB) {
@@ -12720,51 +12700,23 @@
                 }
 
                 const _fwDt = now - _fwHitPrevTime;
-                if (!(_fwDt >= 0) || _fwDt > 1) {   // first frame, seek, or long stall
-                    _fwHitGlow.fill(0);
-                    _fwPulseT0.fill(-Infinity);
-                    _fwPulseAmp.fill(0);
-                    _fwStruck.clear();  // replayed notes strike again after a seek
-                }
-                if (_fwStruck.size > 900) _fwStruck.clear(); // bounded, same as _sparkSeen
+                if (!(_fwDt >= 0) || _fwDt > 1) _fwHitGlow.fill(0); // first frame, seek, or long stall
+                const _fwDecay = (_fwDt > 0 && _fwDt <= 1)
+                    ? Math.exp(-_fwDt / FRET_WIRE_HIT_DECAY)
+                    : 0;
                 _fwHitPrevTime = now;
-                // Evaluate every wire's pulse, but flash only the OUTERMOST pair
-                // of lit wires (one bracket, never a picket fence — the chord
-                // rule applied across everything currently pulsing). The pulse
-                // itself is the lightning strike: a rising edge on the input
-                // triggers it, it cracks up over RISE, falls over FALL with a
-                // high-rate flicker biting into it (the shock), and is then
-                // hard-zero — a held sustain keeps the input high but triggers
-                // nothing new, so the wires go dark while the note rings.
-                const _fwSpan = FRET_WIRE_HIT_RISE + FRET_WIRE_HIT_FALL;
+                // Decay EVERY wire's glow state, but flash only the OUTERMOST
+                // pair of lit wires. Fast passages overlap their decay tails, so
+                // without this a run of consecutive notes lights a picket fence
+                // of wires at once; collapsing to the outer pair keeps the whole
+                // lit span reading as ONE bracket — the same rule chords already
+                // follow, applied across everything currently glowing. Interior
+                // wires keep decaying invisibly (the base tier loop re-seeds
+                // their materials each frame), so the bracket tightens naturally
+                // as outer tails expire.
                 let _fwLo = -1, _fwHi = -1;
                 for (let _f = 0; _f <= NFRETS; _f++) {
-                    // _fwHitIn is nonzero ONLY on the frame an event first lands
-                    // (the seen-map gates every producer), so any input is a
-                    // fresh strike — and it restarts a pulse already in flight,
-                    // which is what a rapid re-hit on the same wire should do.
-                    const _in = _fwHitIn[_f];
-                    if (_in > 0.004) {
-                        _fwPulseT0[_f] = now;    // strike
-                        _fwPulseAmp[_f] = _in;
-                    }
-                    let _g = 0;
-                    const _pt = now - _fwPulseT0[_f];
-                    if (_pt >= 0 && _pt < _fwSpan) {
-                        if (_pt < FRET_WIRE_HIT_RISE) {
-                            _g = _pt / FRET_WIRE_HIT_RISE;
-                        } else {
-                            const _u = (_pt - FRET_WIRE_HIT_RISE) / FRET_WIRE_HIT_FALL;
-                            _g = (1 - _u) * (1 - _u);   // fast drop, easing out
-                            // Electric shudder during the fall only — the crack
-                            // itself stays clean.
-                            _g *= 1 - FRET_WIRE_HIT_FLICKER_DEPTH
-                                * (0.5 + 0.5 * Math.sin(_pt * 6.2832 * FRET_WIRE_HIT_FLICKER_HZ));
-                        }
-                        _g *= _fwPulseAmp[_f];
-                    } else if (_pt < 0) {
-                        _fwPulseT0[_f] = -Infinity; // seek landed before the strike
-                    }
+                    const _g = Math.max(_fwHitIn[_f], _fwHitGlow[_f] * _fwDecay);
                     _fwHitGlow[_f] = _g;
                     if (_g < 0.004) continue;   // below perceptible
                     if (_fwLo < 0) _fwLo = _f;
@@ -14032,25 +13984,17 @@
                         _fwE.openA = _fwA;   // open strings in the chord → lane edges
                     }
                 } else if (n.f > 0 && n.f <= NFRETS) {
-                    const _fwK = 'n|' + s + '|' + n.f + '|' + n.t;
-                    if (!_fwStruck.has(_fwK)) {
-                        _fwStruck.set(_fwK, now);
-                        if (_fwA > _fwHitIn[n.f - 1]) _fwHitIn[n.f - 1] = _fwA;
-                        if (_fwA > _fwHitIn[n.f]) _fwHitIn[n.f] = _fwA;
-                    }
+                    if (_fwA > _fwHitIn[n.f - 1]) _fwHitIn[n.f - 1] = _fwA;
+                    if (_fwA > _fwHitIn[n.f]) _fwHitIn[n.f] = _fwA;
                 } else if (n.f === 0) {
                     // Sampled at the note's own time, matching how the open
                     // slab's width is derived (openNoteLaneBoxW(n.t)) — so the
                     // flashed wires are the ones the slab is actually drawn
                     // between, even if the lane has since moved.
-                    const _fwK = 'n|' + s + '|0|' + n.t;
-                    if (!_fwStruck.has(_fwK)) {
-                        _fwStruck.set(_fwK, now);
-                        const _fwB = anchorLaneBoundsAt(_drawAnchors, n.t);
-                        if (_fwB) {
-                            if (_fwA > _fwHitIn[_fwB.dMin]) _fwHitIn[_fwB.dMin] = _fwA;
-                            if (_fwA > _fwHitIn[_fwB.dMax]) _fwHitIn[_fwB.dMax] = _fwA;
-                        }
+                    const _fwB = anchorLaneBoundsAt(_drawAnchors, n.t);
+                    if (_fwB) {
+                        if (_fwA > _fwHitIn[_fwB.dMin]) _fwHitIn[_fwB.dMin] = _fwA;
+                        if (_fwA > _fwHitIn[_fwB.dMax]) _fwHitIn[_fwB.dMax] = _fwA;
                     }
                 }
             }
