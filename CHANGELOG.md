@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`chart-transform` capability domain (#952)** — plugins can now remap the
+  chart before rendering and scoring through a core-owned provider
+  coordinator. Synchronous transforms run after difficulty filtering; host
+  data is isolated from providers, accepted timelines are time-sorted, and
+  failures fall back to the original chart with a fixed public reason.
+  Effective chart arrays and metadata are available to 2D/custom renderers
+  and highway getters, while `getSongInfo()` retains the original metadata.
+  Provider selection persists and applies to primary and splitscreen highways.
+- **Library filter: one-click "Not split" + a piano stem pill.** The v3 Filters drawer's
+  stems section gains a **Not split** shortcut that selects "lacks every instrument stem"
+  in one tap — the same query Stem Splitter's missing-stems view runs — instead of
+  cycling five pills to ✕ by hand. The pill row also gains `piano` (the drawer offered
+  five of the canonical six stems, so a piano-only song wrongly matched a hand-built
+  "lacks all" filter). "No lyrics" already existed in the Lyrics section.
 - **Gold tier (career passports)** — an earned badge turns **gold** when
   Virtuoso verifies an improvised jam in the passport's style (the
   `gold_improv` artifact relays with the drill snapshot; a genre inherits its
@@ -237,6 +251,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine (`app.js`, `highway.js`, `playSong`, `showScreen`, the capability registry).
 
 ### Fixed
+- **GP8 asset resolution honours the directory the registry named.**
+  `<EmbeddedFilePath>` is matched on filename stem so a format variant of the
+  same recording can win (an `.ogg` beside the declared `.mp3` is copied out
+  losslessly instead of transcoded) — but the search was not restricted to the
+  declared directory, so an unrelated file elsewhere in the archive that merely
+  shared the stem could stand in for the declared asset. That is the exact
+  substitution the registry lookup exists to prevent. Candidates are now
+  confined to the registry path's own directory; a genuinely absent asset
+  falls through as documented.
+- **Guitar Pro 8: the right backing track is extracted when a file carries more than one.**
+  `BackingTrack/AssetId` is a key into the GPIF's `<Assets>` registry — `<Asset
+  id="0"><EmbeddedFilePath>` names the exact path inside the archive — but it
+  was being matched against embedded *filename stems*. GP8 names embedded audio
+  by hash while ids are small integers, so that match essentially never hit: every
+  such file warned and fell through to "first audio asset". That was silently
+  correct while a file carried exactly one recording — with two, a backing track
+  declaring id 1 resolved to asset 0, i.e. the wrong take. Resolution now reads
+  the registry first (verifying the path is really in the archive, so a stale
+  entry falls through rather than resolving to nothing), then the legacy stem
+  match, then the first asset.
+- **Guitar Pro import no longer fails on non-ASCII song metadata (Windows).**
+  The GP→arrangement-XML writers wrote their output with `Path.write_text()`
+  and no explicit encoding, so on Windows (cp1252 default) a metadata
+  character like the © in an album name ("Chrysalis©1982") was written as a
+  lone `0xA9` byte — invalid UTF-8 — and import died with
+  `not well-formed (invalid token): line N, column 22`. All three arrangement
+  XML writes now pin `encoding="utf-8"`.
 - **3D Highway: the lane stops at the hit line** (#991) — the highway lane, its
   dividers, and the fret boundary extension lines ran `BEHIND` seconds *past* the
   hit line toward the player. Nothing is ever drawn in that strip (notes and chord
