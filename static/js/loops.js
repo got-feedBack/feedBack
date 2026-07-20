@@ -1,101 +1,170 @@
-// The A–B loop — set / clear / persist, and the saved-loops list.
+// Unified A-B loop controller. Bounds, armed/active lifecycle, activation
+// policy, first-pass policy, and repeat policy all live here. UI entry points
+// (manual A/B, saved loops, and Practice Section) configure this controller;
+// none of them owns playback behavior.
 //
-// The second slice out of app.js's strongly-connected core, and it owns the loop
-// state: loopA, loopB, _loopMutationGen. Nothing outside this module writes them
-// (restartCurrentSong() looked like it did, but it declares its own local shadows).
-//
-// DIRECTION MATTERS HERE. loops and section-practice are mutually dependent — the
-// SCC in miniature. clearLoop() has to drop section-practice's selection, and
-// practiceSection() has to call setLoop(). Both directions cannot be imports or the
-// no-cycle gate (rightly) rejects it. So the edge is oriented:
-//
-//     section-practice  ->  reaches loops through the HOST SEAM (host.setLoop, …)
-//     loops             ->  imports section-practice DIRECTLY
-//
-// section-practice is the higher-level feature — it is a consumer of loops, not the
-// other way round — so it is the one that gets the indirection. app.js wires this
-// module's exports into the seam for it.
-//
-// See ./host.js: reading an unwired hook THROWS, and tests/js/host_contract.test.js
-// fails CI if the hooks used here and the hooks app.js wires ever drift apart.
-import { esc, uiPrompt } from './dom.js';
-import { _audioSeek, _audioTime } from './transport.js';
+// The long-standing plugin-facing setLoop(a, b) contract remains compatible:
+// it seeks to A and activates the loop. Built-in UI paths opt into the new
+// preference-driven behavior with { activation: 'preference' }.
+import { uiPrompt } from './dom.js';
+import { _audioSeek, _audioTime, audioSeekGen, togglePlay } from './transport.js';
+import {
+    _cancelCountIn,
+    isCountingIn,
+    pauseBackingForCountIn,
+    startCountIn,
+} from './count-in.js';
+import { S } from './player-state.js';
+import {
+    loadLoopPreferences,
+    normalizeLoopPreferences,
+    saveLoopPreferences,
+} from './loop-preferences.js';
 import { formatTime } from './format.js';
 import { host } from './host.js';
 import {
     _setSectionPracticeMode,
     _syncSectionPracticeFromLoop,
     _updateSectionPracticeHighlight,
-    practiceSection,
     resetSelection,
 } from './section-practice.js';
 
-// ── A-B Loop ────────────────────────────────────────────────────────────
 export let loopA = null;
 export let loopB = null;
-// Bumped on every NON-practiceSection loop mutation (direct setLoop from Saved
-// Loops / the plugin API, and clearLoop). practiceSection() captures it and bails
-// if it changes mid-retry, so a stale section retry can't overwrite a loop the
-// user just set/cleared by another path. practiceSection's own setLoop calls pass
-// skipSectionSync and do NOT bump it (they must not supersede themselves).
 export let _loopMutationGen = 0;
 
-export function setLoopStart() {
-    loopA = _audioTime();
-    document.getElementById('btn-loop-a').className = 'px-3 py-1.5 bg-green-900/50 rounded-lg text-xs text-green-300 transition';
-    updateLoopUI();
+let _loopPhase = 'inactive'; // inactive | partial | armed | starting | active
+let _loopSource = null;
+let _loopOperationGen = 0;
+let _loopWrapInFlight = false;
+let _loopPreferences = loadLoopPreferences();
+let _savedLoopsLoadGen = 0;
+let _savedLoopsRetryTimer = null;
+let _loopIndicatorPulseTimer = null;
+
+function _validLoopBounds(a = loopA, b = loopB) {
+    return Number.isFinite(a) && Number.isFinite(b) && b > a;
 }
 
-export function setLoopEnd() {
-    if (loopA === null) return;
-    loopB = _audioTime();
-    if (loopB <= loopA) { loopB = null; return; }
-    document.getElementById('btn-loop-b').className = 'px-3 py-1.5 bg-green-900/50 rounded-lg text-xs text-green-300 transition';
+function _loopTransportSnapshot() {
+    const valid = _validLoopBounds();
+    return {
+        startTime: valid ? loopA : null,
+        endTime: valid ? loopB : null,
+        enabled: valid && _loopPhase === 'active',
+        state: valid ? _loopPhase : (_loopPhase === 'partial' ? 'partial' : 'inactive'),
+    };
+}
+
+export function getLoopState() {
+    return {
+        loopA,
+        loopB,
+        active: _loopPhase === 'active',
+        configured: _validLoopBounds(),
+        state: _loopPhase,
+        source: _loopSource,
+        preferences: { ..._loopPreferences },
+    };
+}
+
+export function isLoopActive() {
+    return _loopPhase === 'active' && _validLoopBounds();
+}
+
+function _emitLoopSet(emitTransportEvent = true) {
+    if (!emitTransportEvent || typeof window === 'undefined') return;
+    window.feedBack?.playback?.transportEvent?.('loop-set', {
+        requesterId: 'core.loop',
+        loopA,
+        loopB,
+        loop: _loopTransportSnapshot(),
+    });
+}
+
+function _emitLoopCleared(reason, emitTransportEvent = true) {
+    if (!emitTransportEvent || typeof window === 'undefined') return;
+    window.feedBack?.playback?.transportEvent?.('loop-cleared', {
+        requesterId: 'core.loop',
+        reason: reason || 'app loop cleared',
+        loop: { enabled: false, state: 'inactive' },
+    });
+}
+
+function _setPointButtonState(id, selected) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.classList.toggle('loop-point-set', !!selected);
+    el.setAttribute('aria-pressed', selected ? 'true' : 'false');
+}
+
+export function cancelLoopOperations(options = {}) {
+    const { deactivate = false } = options;
+    _loopOperationGen++;
+    _loopWrapInFlight = false;
+    _cancelCountIn();
+    if (_loopPhase === 'starting' || (deactivate && _loopPhase === 'active')) {
+        _loopPhase = _validLoopBounds() ? 'armed' : (loopA !== null ? 'partial' : 'inactive');
+    }
     updateLoopUI();
-    // Manual A/B arming is a loop mutation like setLoop()'s — emit the same
-    // transport event so event-driven consumers (note_detect drill sync) see
-    // button-armed loops without having to poll getLoop().
-    window.feedBack?.playback?.transportEvent?.('loop-set', { requesterId: 'core.loop', loopA, loopB, loop: { startTime: loopA, endTime: loopB, enabled: true, state: 'active' } });
+    return _loopOperationGen;
+}
+
+export function setLoopStart() {
+    const hadConfiguredLoop = _validLoopBounds();
+    cancelLoopOperations({ deactivate: true });
+    loopA = _audioTime();
+    loopB = null;
+    _loopPhase = Number.isFinite(loopA) ? 'partial' : 'inactive';
+    _loopSource = 'manual';
+    _loopMutationGen++;
+    _setSectionPracticeMode(false, { skipClearLoop: true });
+    resetSelection();
+    updateLoopUI();
+    _syncSavedLoopSelection();
+    if (hadConfiguredLoop) _emitLoopCleared('loop bounds changed');
+}
+
+export async function setLoopEnd() {
+    if (!Number.isFinite(loopA)) return false;
+    const end = _audioTime();
+    if (!Number.isFinite(end) || end <= loopA) {
+        loopB = null;
+        _loopPhase = 'partial';
+        updateLoopUI();
+        return false;
+    }
+    return setLoop(loopA, end, {
+        activation: 'preference',
+        source: 'manual',
+    });
 }
 
 export function clearLoop(options) {
     const { emitTransportEvent = true } = options || {};
-    // playSong() clears the loop on every song load, so only signal a
-    // loop-cleared transport event when a loop was actually active —
-    // otherwise every song switch emits a spurious playback:loop-cleared.
     const hadLoop = loopA !== null || loopB !== null;
+    cancelLoopOperations({ deactivate: true });
     _setSectionPracticeMode(false, { skipClearLoop: true });
     loopA = null;
     loopB = null;
-    document.getElementById('btn-loop-a').className = 'px-3 py-1.5 bg-dark-600 hover:bg-dark-500 rounded-lg text-xs text-gray-300 transition';
-    document.getElementById('btn-loop-b').className = 'px-3 py-1.5 bg-dark-600 hover:bg-dark-500 rounded-lg text-xs text-gray-300 transition';
-    document.getElementById('btn-loop-clear').classList.add('hidden');
-    document.getElementById('btn-loop-save').classList.add('hidden');
-    document.getElementById('loop-label').textContent = '';
-    document.getElementById('saved-loops').value = '';
+    _loopPhase = 'inactive';
+    _loopSource = null;
+    if (hadLoop) _loopMutationGen++;
+    const saved = document.getElementById('saved-loops');
+    if (saved) saved.value = '';
     resetSelection();
     _updateSectionPracticeHighlight(_audioTime());
-    if (hadLoop && emitTransportEvent && typeof window !== 'undefined') {
-        window.feedBack?.playback?.transportEvent?.('loop-cleared', {
-            requesterId: 'core.loop',
-            reason: 'app loop cleared',
-            loop: { enabled: false, state: 'inactive' },
-        });
-    }
+    updateLoopUI();
+    _syncSavedLoopSelection();
+    if (hadLoop) _emitLoopCleared('app loop cleared', emitTransportEvent);
 }
 
-// Resync #saved-loops + #btn-loop-delete with the currently-active
-// loopA/loopB. Used by both setLoop's success path (so plugin-driven
-// loops show up correctly in the dropdown) and loadSavedLoop's
-// failure path (so a cancelled selection reverts to the still-active
-// loop). Without this sync, deleteSelectedLoop could target a stale
-// option that doesn't match the active loop.
 function _syncSavedLoopSelection() {
     const sel = document.getElementById('saved-loops');
     const delBtn = document.getElementById('btn-loop-delete');
-    if (!sel || !delBtn) return;
+    if (!sel) return;
     let selected = '';
-    if (loopA !== null && loopB !== null) {
+    if (_validLoopBounds()) {
         for (const opt of sel.options) {
             if (Number(opt.dataset.start) === loopA && Number(opt.dataset.end) === loopB) {
                 selected = opt.value;
@@ -104,141 +173,420 @@ function _syncSavedLoopSelection() {
         }
     }
     sel.value = selected;
-    delBtn.classList.toggle('hidden', !selected);
+    if (delBtn) delBtn.disabled = !selected;
 }
 
-// Programmatically set both loop endpoints and seek to A. The dropdown
-// path (loadSavedLoop) and the plugin-API path (window.feedBack.setLoop)
-// both funnel through here so the UI state stays canonical regardless of
-// who triggered the loop.
+async function _configureLoop(aNum, bNum, options) {
+    const {
+        emitTransportEvent = true,
+        skipSectionSync = false,
+        commitGuard = null,
+        source = 'ui',
+    } = options;
+    if (typeof commitGuard === 'function' && !commitGuard()) return false;
+
+    cancelLoopOperations({ deactivate: true });
+    if (typeof commitGuard === 'function' && !commitGuard()) return false;
+    loopA = aNum;
+    loopB = bNum;
+    _loopPhase = 'armed';
+    _loopSource = source;
+    if (!skipSectionSync) _loopMutationGen++;
+    updateLoopUI();
+    _syncSavedLoopSelection();
+    if (!skipSectionSync) _syncSectionPracticeFromLoop();
+    _emitLoopSet(emitTransportEvent);
+
+    if (_loopPreferences.activation === 'auto') {
+        // A failed/cancelled auto-start leaves the valid loop visibly armed so
+        // the user can retry with Start Loop once the transport is ready.
+        await startLoop({ source });
+    }
+    return true;
+}
+
+// Backward-compatible public API plus a preference-driven built-in mode.
 //
-// Returns true if the seek landed at A and the loop is now active;
-// returns false if the seek was cancelled by teardown or landed off-target
-// (JUCE clamp / HTML5 snap > 50ms from A). On false, loopA/loopB are NOT
-// committed and the UI is not painted — the prior loop (if any) stays
-// active. Throws on invalid inputs.
+// Default/legacy: seek to A, then commit an active loop. This preserves plugin
+// callers such as note-detection drill mode and the playback capability adapter.
+//
+// { activation: 'preference' }: configure without disturbing playback, then
+// start only when the persisted activation preference says "automatic".
 export async function setLoop(a, b, options) {
-    const { emitTransportEvent = true, skipSectionSync = false, commitGuard = null } = options || {};
+    const opts = options || {};
+    const {
+        activation = 'legacy',
+        emitTransportEvent = true,
+        skipSectionSync = false,
+        commitGuard = null,
+        source = 'plugin',
+    } = opts;
     const aNum = Number(a);
     const bNum = Number(b);
     if (!Number.isFinite(aNum) || !Number.isFinite(bNum) || bNum <= aNum) {
         throw new Error(`setLoop: requires finite a and b with b > a (got a=${a}, b=${b})`);
     }
-    // Don't arm loopA/loopB before the seek lands — the 60Hz tick's wrap
-    // detector (`ct >= loopB`) would trigger startCountIn against
-    // half-applied state.
-    const r = await _audioSeek(aNum, 'loop-set');
-    if (!r.completed || Math.abs(r.to - aNum) > 0.05) return false;
-    // Caller-owned staleness gate, re-checked after the awaited seek and before
-    // we commit loopA/loopB. practiceSection() passes this so a superseded retry
-    // (newer section click, mode turned off, or song/arrangement teardown that
-    // happened during the seek) does not arm a stale loop. Returning false here
-    // leaves the prior loop (if any) untouched, same as the off-target path.
+    if (activation === 'preference') {
+        return _configureLoop(aNum, bNum, {
+            emitTransportEvent,
+            skipSectionSync,
+            commitGuard,
+            source,
+        });
+    }
+
     if (typeof commitGuard === 'function' && !commitGuard()) return false;
+    const priorPhase = _loopPhase;
+    const operation = ++_loopOperationGen;
+    _loopWrapInFlight = false;
+    _cancelCountIn();
+    _loopPhase = 'starting';
+    updateLoopUI();
+    const seekGeneration = audioSeekGen();
+    const r = await _audioSeek(aNum, 'loop-set', {
+        guard: () => operation === _loopOperationGen
+            && seekGeneration === audioSeekGen()
+            && (typeof commitGuard !== 'function' || commitGuard()),
+    });
+    if (operation !== _loopOperationGen
+        || seekGeneration !== audioSeekGen()
+        || !r.completed
+        || Math.abs(r.to - aNum) > 0.05
+        || (typeof commitGuard === 'function' && !commitGuard())) {
+        if (operation === _loopOperationGen) {
+            _loopPhase = priorPhase;
+            updateLoopUI();
+        }
+        return false;
+    }
     loopA = aNum;
     loopB = bNum;
-    // A direct (non-practice) loop set supersedes any in-flight practiceSection
-    // retry; practiceSection passes skipSectionSync and is exempt so it doesn't
-    // cancel itself.
+    _loopPhase = 'active';
+    _loopSource = source;
     if (!skipSectionSync) _loopMutationGen++;
-    document.getElementById('btn-loop-a').className = 'px-3 py-1.5 bg-green-900/50 rounded-lg text-xs text-green-300 transition';
-    document.getElementById('btn-loop-b').className = 'px-3 py-1.5 bg-green-900/50 rounded-lg text-xs text-green-300 transition';
     updateLoopUI();
-    // Sync the saved-loops dropdown so a plugin-driven setLoop call
-    // surfaces the matching saved option (and Delete button) — otherwise
-    // the dropdown can stay on a stale selection and deleteSelectedLoop
-    // would target the wrong record.
     _syncSavedLoopSelection();
-    // practiceSection() passes skipSectionSync: it sets its own section state
-    // under a request-gen guard, so the shared setLoop path must NOT re-sync
-    // here — otherwise a stale (superseded / mode-off) practiceSection retry
-    // that lands inside setLoop would re-arm the loop and flip the mode back on
-    // before the caller's gen check can bail. Direct callers (Saved Loops,
-    // window.feedBack.setLoop) still sync so their chip selection tracks.
-    if (!skipSectionSync && typeof _syncSectionPracticeFromLoop === 'function') {
-        _syncSectionPracticeFromLoop();
+    if (!skipSectionSync) _syncSectionPracticeFromLoop();
+    _emitLoopSet(emitTransportEvent);
+    return true;
+}
+
+export async function startLoop(options = {}) {
+    if (!_validLoopBounds()) return false;
+    const bounds = { a: loopA, b: loopB };
+    const operation = cancelLoopOperations({ deactivate: true });
+    const seekGeneration = audioSeekGen();
+    _loopPhase = 'starting';
+    _loopSource = options.source || _loopSource || 'ui';
+    updateLoopUI();
+
+    const currentBoundsStillMatch = () => operation === _loopOperationGen
+        && seekGeneration === audioSeekGen()
+        && loopA === bounds.a
+        && loopB === bounds.b;
+    const countInFirstPass = _loopPreferences.firstPass === 'count-in';
+    if (countInFirstPass) {
+        // On an initial start/restart, stop the native backing engine before
+        // repositioning it. Seeking a still-running JUCE transport can leak a
+        // short false start from A before the count-in owns playback.
+        await pauseBackingForCountIn();
+        if (!currentBoundsStillMatch()) return false;
     }
-    if (emitTransportEvent && typeof window !== 'undefined') {
-        window.feedBack?.playback?.transportEvent?.('loop-set', { requesterId: 'core.loop', loopA, loopB, loop: { startTime: loopA, endTime: loopB, enabled: true, state: 'active' } });
+    const r = await _audioSeek(bounds.a, 'loop-start', { guard: currentBoundsStillMatch });
+    if (!currentBoundsStillMatch() || !r.completed || Math.abs(r.to - bounds.a) > 0.05) {
+        if (operation === _loopOperationGen) {
+            _loopPhase = _validLoopBounds() ? 'armed' : 'inactive';
+            updateLoopUI();
+        }
+        return false;
+    }
+
+    _loopPhase = 'active';
+    updateLoopUI();
+    if (countInFirstPass) {
+        const started = await startCountIn({
+            immediate: true,
+            bounds,
+            backingAlreadyPaused: true,
+        });
+        if (!started && currentBoundsStillMatch()) {
+            _loopPhase = 'armed';
+            updateLoopUI();
+            return false;
+        }
+        return started;
+    }
+
+    if (window.feedBack) {
+        window.feedBack.emit('loop:restart', {
+            loopA: bounds.a,
+            loopB: bounds.b,
+            time: bounds.a,
+        });
+    }
+    if (!S.isPlaying) await togglePlay();
+    if (!currentBoundsStillMatch()) return false;
+    if (!S.isPlaying) {
+        _loopPhase = 'armed';
+        updateLoopUI();
+        return false;
     }
     return true;
 }
 
-export function updateLoopUI() {
-    const label = document.getElementById('loop-label');
-    const hasLoop = loopA !== null && loopB !== null;
-    if (hasLoop) {
-        label.textContent = `${formatTime(loopA)} → ${formatTime(loopB)}`;
-        document.getElementById('btn-loop-clear').classList.remove('hidden');
-        document.getElementById('btn-loop-save').classList.remove('hidden');
-    } else if (loopA !== null) {
-        label.textContent = `${formatTime(loopA)} → ?`;
-        document.getElementById('btn-loop-clear').classList.add('hidden');
-        document.getElementById('btn-loop-save').classList.add('hidden');
-    } else {
-        label.textContent = '';
+export async function handleLoopBoundary(currentTime) {
+    if (!isLoopActive()
+        || !S.isPlaying
+        || !Number.isFinite(currentTime)
+        || currentTime < loopB
+        || _loopWrapInFlight
+        || isCountingIn()) {
+        return false;
     }
+    const bounds = { a: loopA, b: loopB };
+    const operation = _loopOperationGen;
+    _loopWrapInFlight = true;
+
+    // Note-detection conductor loops already provide their own audible lead-in
+    // and historically request a delay-free host wrap.
+    const repeatMode = window._ndAnyDrillActive ? 'continuous' : _loopPreferences.repeat;
+    if (repeatMode === 'count-in') {
+        const started = await startCountIn({ bounds });
+        _loopWrapInFlight = false;
+        return started;
+    }
+
+    const stillCurrent = () => operation === _loopOperationGen
+        && _loopPhase === 'active'
+        && loopA === bounds.a
+        && loopB === bounds.b;
+    const r = await _audioSeek(bounds.a, 'loop-wrap-continuous', { guard: stillCurrent });
+    _loopWrapInFlight = false;
+    if (!stillCurrent() || !r.completed || Math.abs(r.to - bounds.a) > 0.05) return false;
+    S.lastAudioTime = r.to;
+    if (window.feedBack) {
+        window.feedBack.emit('loop:restart', {
+            loopA: bounds.a,
+            loopB: bounds.b,
+            time: bounds.a,
+        });
+    }
+    return true;
+}
+
+export function updateLoopPreference(name, value) {
+    if (!Object.prototype.hasOwnProperty.call(_loopPreferences, name)) {
+        return { ..._loopPreferences };
+    }
+    _loopPreferences = saveLoopPreferences(normalizeLoopPreferences({
+        ..._loopPreferences,
+        [name]: value,
+    }));
+    updateLoopUI();
+    return { ..._loopPreferences };
+}
+
+function _loopTimelineDuration() {
+    const highwayDuration = Number(window.highway?.getSongInfo?.()?.duration);
+    if (Number.isFinite(highwayDuration) && highwayDuration > 0) return highwayDuration;
+    const songDuration = Number(window.feedBack?.currentSong?.duration);
+    return Number.isFinite(songDuration) && songDuration > 0 ? songDuration : null;
+}
+
+function _updateLoopTimeline(valid) {
+    const timeline = document.getElementById('v3-loop-timeline');
+    if (!timeline) return;
+    const hasStart = Number.isFinite(loopA);
+    const duration = hasStart ? _loopTimelineDuration() : null;
+    const visible = hasStart && Number.isFinite(duration) && duration > 0;
+    timeline.hidden = !visible;
+    timeline.dataset.state = visible ? (valid ? _loopPhase : 'partial') : 'inactive';
+    if (!visible) return;
+
+    const region = document.getElementById('v3-loop-timeline-region');
+    if (!region) return;
+    const startPercent = Math.max(0, Math.min(100, (loopA / duration) * 100));
+    const endPercent = valid
+        ? Math.max(startPercent, Math.min(100, (loopB / duration) * 100))
+        : startPercent;
+    region.style.left = `${startPercent}%`;
+    region.style.width = `${endPercent - startPercent}%`;
+}
+
+export function pulseLoopIndicator() {
+    const indicator = document.getElementById('v3-loop-indicator');
+    if (!indicator || indicator.hidden) return;
+    indicator.classList.remove('is-returning');
+    // Restart the single, short animation even when two restart events arrive
+    // close together (for example an outside seek immediately followed by A).
+    void indicator.offsetWidth;
+    indicator.classList.add('is-returning');
+    if (_loopIndicatorPulseTimer !== null) clearTimeout(_loopIndicatorPulseTimer);
+    _loopIndicatorPulseTimer = setTimeout(() => {
+        indicator.classList.remove('is-returning');
+        _loopIndicatorPulseTimer = null;
+    }, 700);
+}
+
+export function updateLoopUI() {
+    const valid = _validLoopBounds();
+    const active = valid && _loopPhase === 'active';
+    const label = document.getElementById('loop-label');
+    if (label) {
+        label.textContent = valid
+            ? `${formatTime(loopA)} → ${formatTime(loopB)}`
+            : (Number.isFinite(loopA) ? `${formatTime(loopA)} → ?` : '');
+    }
+
+    const status = document.getElementById('loop-status');
+    if (status) {
+        status.textContent = _loopPhase === 'active'
+            ? 'Loop active'
+            : (_loopPhase === 'starting'
+                ? 'Starting loop…'
+                : (_loopPhase === 'armed'
+                    ? 'Loop configured — armed'
+                    : (_loopPhase === 'partial' ? 'Set B to finish the loop' : 'No loop configured')));
+        status.dataset.state = _loopPhase;
+    }
+
+    _setPointButtonState('btn-loop-a', Number.isFinite(loopA));
+    _setPointButtonState('btn-loop-b', valid);
+    const setB = document.getElementById('btn-loop-b');
+    if (setB) setB.disabled = !Number.isFinite(loopA);
+    const clear = document.getElementById('btn-loop-clear');
+    if (clear) clear.disabled = loopA === null && loopB === null;
+    const save = document.getElementById('btn-loop-save');
+    if (save) save.disabled = !valid;
+    const start = document.getElementById('btn-loop-start');
+    if (start) {
+        start.disabled = !valid || _loopPhase === 'starting';
+        start.textContent = _loopPhase === 'active' ? 'Restart Loop' : 'Start Loop';
+        start.setAttribute('aria-describedby', 'loop-status');
+    }
+
+    const activation = document.getElementById('loop-activation-preference');
+    if (activation) activation.value = _loopPreferences.activation;
+    const firstPass = document.getElementById('loop-first-pass-preference');
+    if (firstPass) firstPass.value = _loopPreferences.firstPass;
+    const repeat = document.getElementById('loop-repeat-preference');
+    if (repeat) repeat.value = _loopPreferences.repeat;
+
+    const pill = document.getElementById('section-practice-pill');
+    if (pill) {
+        pill.classList.toggle('section-practice-pill--active', active);
+        pill.classList.toggle('section-practice-pill--armed', _loopPhase === 'armed' || _loopPhase === 'partial');
+    }
+
+    // Persistent, low-key feedback in the regular game HUD. The Practice &
+    // Loops rail can auto-hide, so it cannot be the only explanation for why
+    // playback keeps returning to the same region.
+    const hudIndicator = document.getElementById('v3-loop-indicator');
+    if (hudIndicator) {
+        const hudLabel = document.getElementById('v3-loop-indicator-label');
+        const range = document.getElementById('v3-loop-indicator-range');
+        const openButton = document.getElementById('v3-loop-indicator-open');
+        const announcement = document.getElementById('v3-loop-announcement');
+        const rangeText = valid ? `${formatTime(loopA)} – ${formatTime(loopB)}` : '';
+        const hudState = active ? 'active' : (_loopPhase === 'starting' ? 'starting' : 'armed');
+        const stateText = active
+            ? 'Loop on'
+            : (_loopPhase === 'starting' ? 'Loop starting' : 'Loop ready');
+        if (hudLabel) hudLabel.textContent = stateText;
+        if (range) range.textContent = rangeText;
+        hudIndicator.hidden = !valid;
+        hudIndicator.dataset.state = valid ? hudState : 'inactive';
+        if (openButton) {
+            openButton.setAttribute(
+                'aria-label',
+                valid ? `${stateText}, ${rangeText}. Open Practice and Loops` : 'Open Practice and Loops',
+            );
+        }
+        if (announcement) {
+            announcement.textContent = valid ? `${stateText}, ${rangeText}` : 'Loop disabled';
+        }
+    }
+    _updateLoopTimeline(valid);
     host._updateEditRegionBtn();
 }
 
 export async function loadSavedLoops() {
+    const request = ++_savedLoopsLoadGen;
     const sel = document.getElementById('saved-loops');
     const delBtn = document.getElementById('btn-loop-delete');
-    if (!host.currentFilename()) { sel.classList.add('hidden'); delBtn.classList.add('hidden'); return; }
-
-    const resp = await fetch(`/api/loops?filename=${encodeURIComponent(decodeURIComponent(host.currentFilename()))}`);
-    const loops = await resp.json();
-
-    sel.innerHTML = '<option value="">Saved Loops</option>';
-    for (const l of loops) {
-        sel.innerHTML += `<option value="${l.id}" data-start="${l.start}" data-end="${l.end}">${esc(l.name)} (${formatTime(l.start)}→${formatTime(l.end)})</option>`;
+    if (!sel) {
+        if (_savedLoopsRetryTimer !== null) clearTimeout(_savedLoopsRetryTimer);
+        _savedLoopsRetryTimer = setTimeout(() => {
+            _savedLoopsRetryTimer = null;
+            loadSavedLoops();
+        }, 100);
+        return;
     }
-    if (loops.length > 0) {
-        sel.classList.remove('hidden');
-    } else {
-        sel.classList.add('hidden');
+    const filename = host.currentFilename();
+    if (!filename) {
+        sel.innerHTML = '<option value="">Saved Loops</option>';
+        sel.disabled = true;
+        if (delBtn) delBtn.disabled = true;
+        return;
     }
-    delBtn.classList.add('hidden');
+
+    try {
+        const resp = await fetch(`/api/loops?filename=${encodeURIComponent(decodeURIComponent(filename))}`);
+        const loops = await resp.json();
+        if (request !== _savedLoopsLoadGen || filename !== host.currentFilename()) return;
+        sel.innerHTML = loops.length
+            ? '<option value="">Saved Loops</option>'
+            : '<option value="">No saved loops</option>';
+        for (const savedLoop of loops) {
+            const option = document.createElement('option');
+            option.value = String(savedLoop.id);
+            option.dataset.start = String(savedLoop.start);
+            option.dataset.end = String(savedLoop.end);
+            option.textContent = `${savedLoop.name} (${formatTime(savedLoop.start)}→${formatTime(savedLoop.end)})`;
+            sel.appendChild(option);
+        }
+        sel.disabled = loops.length === 0;
+        _syncSavedLoopSelection();
+    } catch (err) {
+        if (request !== _savedLoopsLoadGen) return;
+        console.warn('[loadSavedLoops] failed:', err);
+        sel.innerHTML = '<option value="">Saved loops unavailable</option>';
+        sel.disabled = true;
+        if (delBtn) delBtn.disabled = true;
+    }
 }
 
 export async function loadSavedLoop(loopId) {
     const sel = document.getElementById('saved-loops');
+    if (!sel) return false;
     const opt = sel.selectedOptions[0];
-    const delBtn = document.getElementById('btn-loop-delete');
     if (!loopId || !opt?.dataset.start) {
-        delBtn.classList.add('hidden');
-        return;
+        _syncSavedLoopSelection();
+        return false;
     }
     let ok = false;
     try {
-        // Pass raw strings — setLoop's Number() coercion is stricter than
-        // parseFloat (rejects "12abc") so malformed dataset values throw
-        // and fall into the catch instead of silently truncating.
-        ok = await setLoop(opt.dataset.start, opt.dataset.end);
+        ok = await setLoop(opt.dataset.start, opt.dataset.end, {
+            activation: 'preference',
+            source: 'saved',
+        });
     } catch (err) {
-        // Malformed dataset (server returned bad data): treat the same as
-        // a failed seek so the dropdown resyncs and we don't propagate an
-        // uncaught rejection out of the onchange handler.
         console.warn('[loadSavedLoop] setLoop threw:', err);
-        ok = false;
     }
-    if (!ok) {
-        // Seek aborted, landed off-target, or input was malformed.
-        // Resync the dropdown with the still-active loop so the UI
-        // doesn't lie about which loop is loaded.
-        _syncSavedLoopSelection();
-        return;
-    }
-    // Success path: setLoop already called _syncSavedLoopSelection,
-    // which surfaces the delete button when the new loop matches a
-    // saved option (which the dropdown selection guarantees here).
+    if (!ok) _syncSavedLoopSelection();
+    return ok;
 }
 
 export async function saveCurrentLoop() {
-    if (loopA === null || loopB === null || !host.currentFilename()) return;
-    const name = await uiPrompt({ title: 'Save Loop', label: 'Loop name', value: 'Loop', okLabel: 'Save' });
-    if (name === null) return;          // cancelled
-    const finalName = name.trim() || 'Loop';   // never persist an empty name
+    if (!_validLoopBounds() || !host.currentFilename()) return;
+    const name = await uiPrompt({
+        title: 'Save Loop',
+        label: 'Loop name',
+        value: 'Loop',
+        okLabel: 'Save',
+    });
+    if (name === null) return;
+    const finalName = name.trim() || 'Loop';
     await fetch('/api/loops', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -250,12 +598,11 @@ export async function saveCurrentLoop() {
         }),
     });
     await loadSavedLoops();
-    document.getElementById('btn-loop-save').classList.add('hidden');
 }
 
 export async function deleteSelectedLoop() {
     const sel = document.getElementById('saved-loops');
-    const loopId = sel.value;
+    const loopId = sel && sel.value;
     if (!loopId) return;
     await fetch(`/api/loops/${loopId}`, { method: 'DELETE' });
     clearLoop();

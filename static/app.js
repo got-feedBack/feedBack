@@ -79,22 +79,27 @@ import {
     scheduleCreditsHide,
     showCountOverlay,
     showSongCreditsOverlay,
-    startCountIn,
     startSongCountIn,
 } from './js/count-in.js';
 
 import {
     _loopMutationGen,
+    cancelLoopOperations,
     clearLoop,
     deleteSelectedLoop,
+    getLoopState,
+    handleLoopBoundary,
     loadSavedLoop,
     loadSavedLoops,
     loopA,
     loopB,
+    pulseLoopIndicator,
     saveCurrentLoop,
     setLoop,
     setLoopEnd,
     setLoopStart,
+    startLoop,
+    updateLoopPreference,
     updateLoopUI,
 } from './js/loops.js';
 
@@ -286,7 +291,39 @@ import {
     setPlayButtonState, jucePlayer, _audioTime, _audioDuration, _songEventPayload,
     _markPlaybackPaused, _markPlaybackResumed, _emitPlaybackStopped, _emitSongPositionChanged,
     _waitForSongReady, _resetAudioSeekState, _audioSeek, togglePlay, seekBy, audioSeekGen,
+    setLoopPlayStartTargetResolver, setLoopRestartHandler,
 } from './js/transport.js';
+
+// Timeline navigation stays free while paused. When Play is pressed with an
+// active loop, the transport consults this hook and starts from A.
+setLoopPlayStartTargetResolver((requestedTime) => {
+    const state = getLoopState();
+    if (!state.active
+        || !Number.isFinite(state.loopA)
+        || !Number.isFinite(state.loopB)
+        || !Number.isFinite(requestedTime)) {
+        return requestedTime;
+    }
+    return requestedTime >= state.loopA && requestedTime < state.loopB
+        ? requestedTime
+        : state.loopA;
+});
+
+// Returning to A because the user tried to play/seek outside an active loop
+// is a real loop restart. Route it through the controller so the selected
+// first-pass policy is honored: count-in restarts with four beats, while
+// immediate starts without one.
+setLoopRestartHandler(async ({ trigger }) => {
+    const from = _audioTime();
+    const completed = await startLoop({
+        source: trigger === 'play' ? 'outside-play' : 'outside-seek',
+    });
+    return {
+        completed: !!completed,
+        from,
+        to: completed ? _audioTime() : NaN,
+    };
+});
 
 
 // Demo analytics — real impl set by demo.js; no-op in normal builds
@@ -779,7 +816,10 @@ window.feedBack = Object.assign(_feedBackBus, {
     // loopA/loopB bindings at call time.
     seek(seconds, reason, options) {
         _recordPlaybackBridge('playback.window-feedBack-transport', 'window.feedBack.seek', reason || 'plugin-command');
-        return _audioSeek(seconds, reason || 'plugin-command');
+        return _audioSeek(seconds, reason || 'plugin-command', {
+            ...(options || {}),
+            restartActiveLoopWhilePlaying: true,
+        });
     },
     setLoop(a, b, options) {
         _recordPlaybackBridge('playback.loop-api', 'window.feedBack.setLoop', options && options.reason || 'plugin-command');
@@ -789,9 +829,13 @@ window.feedBack = Object.assign(_feedBackBus, {
         _recordPlaybackBridge('playback.loop-api', 'window.feedBack.clearLoop', options && options.reason || 'plugin-command');
         clearLoop(options);
     },
+    startLoop(options) {
+        _recordPlaybackBridge('playback.loop-api', 'window.feedBack.startLoop', options && options.reason || 'plugin-command');
+        return startLoop(options);
+    },
     getLoop(options) {
         _recordPlaybackBridge('playback.loop-api', 'window.feedBack.getLoop', options && options.reason || 'plugin-command');
-        return { loopA, loopB };
+        return getLoopState();
     },
 });
 if (_feedBackExisting && _feedBackExisting !== window.feedBack) {
@@ -803,10 +847,12 @@ if (_feedBackExisting && _feedBackExisting !== window.feedBack) {
 }
 window.feedback = window.feedBack;
 window.slopsmith = window.feedback;
+window.feedBack.on('loop:restart', pulseLoopIndicator);
 
 function _currentPlaybackSnapshot() {
     const song = window.feedBack && window.feedBack.currentSong || null;
     const time = _audioTime();
+    const appLoop = getLoopState();
     return {
         currentTime: Number.isFinite(time) ? time : null,
         mediaTime: Number.isFinite(time) ? time : null,
@@ -819,7 +865,12 @@ function _currentPlaybackSnapshot() {
         routeState: song || audio.src || window._juceAudioUrl ? 'active' : 'unavailable',
         loopA,
         loopB,
-        loop: loopA !== null && loopB !== null ? { startTime: loopA, endTime: loopB, enabled: true, state: 'active' } : { enabled: false, state: 'inactive' },
+        loop: {
+            startTime: appLoop.configured ? loopA : null,
+            endTime: appLoop.configured ? loopB : null,
+            enabled: appLoop.active,
+            state: appLoop.state,
+        },
         currentSong: song ? {
             targetId: song.filename ? `target-${String(song.filename).length}-${String(song.arrangementIndex ?? song.arrangement ?? '').length}` : undefined,
             sourceKind: song.format || 'local',
@@ -920,7 +971,9 @@ function _installPlaybackTransportAdapter() {
             if (!Number.isFinite(seconds) || seconds < 0) {
                 throw new Error(`Invalid seek time: ${time}`);
             }
-            return _audioSeek(seconds, reason || 'playback-command');
+            return _audioSeek(seconds, reason || 'playback-command', {
+                restartActiveLoopWhilePlaying: true,
+            });
         },
         setLoop({ startTime, endTime }) {
             return setLoop(startTime, endTime, { emitTransportEvent: false });
@@ -1125,8 +1178,8 @@ if (document.readyState !== 'complete') {
 // Editor → Highway handoff (Editor ⇄ 3D Highway region round-trip). The
 // editor's "Loop in 3D" button stashes a pending loop + return context, then
 // calls playSong(). Once the chart is ready (playSong's own clearLoop() has
-// already run, so the loop won't be wiped), arm the loop over the selected
-// region and start playback so the user lands inside the loop directly.
+// already run, so the loop won't be wiped), configure the selected region
+// through the same preference-aware controller used by Practice & Loops.
 window.feedBack.on('song:ready', () => {
     _updateEditRegionBtn();
     const pend = window._pendingHighwayLoop;
@@ -1137,8 +1190,10 @@ window.feedBack.on('song:ready', () => {
     if (want && currentFilename && want !== currentFilename) return;
     window._pendingHighwayLoop = null;
     window._highwayReturnCtx = pend.returnCtx || null;
-    Promise.resolve(setLoop(pend.a, pend.b))
-        .then((ok) => { if (ok && !S.isPlaying) return togglePlay(); })
+    Promise.resolve(setLoop(pend.a, pend.b, {
+        activation: 'preference',
+        source: 'editor',
+    }))
         .catch((err) => console.warn('[app] loop-in-3d apply failed:', err));
     _updateEditRegionBtn();
 });
@@ -1152,6 +1207,10 @@ let _arrBusyTimeout = null;
 
 async function changeArrangement(index) {
     if (currentFilename) {
+        // Invalidate a pending loop start/wrap before the arrangement's own
+        // pause/reconnect/restore sequence begins. An already-active loop keeps
+        // its time-based bounds, matching the existing arrangement contract.
+        cancelLoopOperations();
         // Tear down any pending fresh-load credits before switching: the
         // no-count-in hold timer would otherwise fire togglePlay() against the
         // incoming (still-loading) arrangement. hideSongCreditsOverlay() clears
@@ -1298,21 +1357,11 @@ async function restartCurrentSong() {
         } catch (_) { /* host misbehaviour — treat as no loop */ }
     }
     const hasLoop = loopA != null && loopB != null;
-    const target = hasLoop ? loopA : 0;
-    const r = await _audioSeek(target, 'song-restart');
-    if (!r.completed) return false;
     if (hasLoop) {
-        // Verify the seek actually landed at loop A (JUCE may clamp / HTML5 may
-        // snap) before the count-in fixes the visuals there — otherwise the
-        // count-in would start from loopA while the audio backend sits
-        // elsewhere. ~50 ms tolerance, matching the loop paths.
-        if (Number.isFinite(r.to) && Math.abs(r.to - target) > 0.05) {
-            console.warn('[restart] seek landed at', r.to, 'but loop A is', target, '— skipping count-in');
-            return false;
-        }
-        await startCountIn({ immediate: true });
-        return true;
+        return startLoop({ source: 'song-restart' });
     }
+    const r = await _audioSeek(0, 'song-restart');
+    if (!r.completed) return false;
     if (!S.isPlaying) await togglePlay();
     return true;
 }
@@ -1794,10 +1843,11 @@ setInterval(() => {
             window.feedBack.emit('song:ended', _songEventPayload());
             jucePlayer.pause().catch((err) => console.warn('[app] end-of-track pause error:', err));
         }
-        // A-B loop: count-in then seek back to A
-        else if (loopA !== null && loopB !== null && ct >= loopB) {
+        // The unified controller distinguishes configured/armed bounds from an
+        // active loop and applies the selected repeat policy.
+        else if (getLoopState().active && S.isPlaying && ct >= loopB) {
             S.lastAudioTime = loopB;
-            startCountIn();
+            handleLoopBoundary(ct).catch((err) => console.warn('[loop] wrap failed:', err));
         }
         // Detect and fix audio time jumps (browser seeking bug; skip for JUCE — position is polled)
         else if (!window._juceMode && S.isPlaying && Math.abs(ct - S.lastAudioTime) > 30 && S.lastAudioTime > 0) {
@@ -2298,11 +2348,11 @@ configureHost({
     syncLibrarySong,
     handleSliderInput,
     playSong,
-    // count-in is a module now, so section-practice reaches it through the seam too —
-    // these are simply count-in's own exports, handed across.
-    startCountIn,
+    // Section-practice teardown cancels an in-flight controller count-in
+    // through the seam without importing the controller back into itself.
     _cancelCountIn,
     _updateEditRegionBtn,
+    updateLoopUI,
     // section-practice reaches the loop module through the seam, not by importing it:
     // loops imports section-practice (clearLoop drops its selection), so the reverse
     // edge has to be indirection or the graph cycles. These are simply the loop
@@ -2335,10 +2385,10 @@ Object.assign(window, {
     retuneSong, saveCurrentLoop, saveSettings, seekBy,
     setAvOffsetMs, setFavView, setInstrumentPathway, setLibView,
     setLibraryProvider, setLoopEnd, setLoopStart, setMastery,
-    setSpeed, setViz, showScreen, sortFavorites,
+    setSpeed, setViz, showScreen, sortFavorites, startLoop,
     sortLibrary, syncLibrarySong, toggleAllArtists, toggleAllFavoriteArtists,
     toggleLibFilters, togglePlay, toggleSectionPracticePopover, uiPrompt,
-    updatePlugin, uploadSongs,
+    updateLoopPreference, updatePlugin, uploadSongs,
 
     // These four are invisible to every static scan. app.js:2156-2157 picks the
     // handler NAME at runtime —

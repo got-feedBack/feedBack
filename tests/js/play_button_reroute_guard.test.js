@@ -36,6 +36,7 @@ async function runTogglePlayRejecting({ rerouteInProgress }) {
         S: { isPlaying: false, lastAudioTime: 0 },
         _audioSeekGen: 0,
         _playAttemptGen: 0,
+        _prepareLoopPlayStart: () => Promise.resolve(true),
         setPlayButtonState(v) { buttonStates.push(v); },
         audio: {
             // Reject like the browser does when a pending play() is interrupted

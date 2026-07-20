@@ -31,8 +31,8 @@ function extractBlock(src, signature) {
     return src.slice(start, i);
 }
 
-// Build a sandbox with the chart-clock state and the extracted setTime
-// + getTime methods so behavioral tests can exercise the real
+// Build a sandbox with the chart-clock state and the extracted setTime,
+// freezeTime, and getTime methods so behavioral tests can exercise the real
 // implementation in isolation.
 function buildClockSandbox(perfNowImpl) {
     // The lifted per-instance state now lives on `hwState` (the R3c H lift);
@@ -62,11 +62,13 @@ function buildClockSandbox(perfNowImpl) {
     vm.createContext(sandbox);
     const src = highwaySources();
     const setTimeBody = extractBlock(src, 'setTime(t) {');
+    const freezeTimeBody = extractBlock(src, 'freezeTime(t) {');
     const getTimeBody = extractBlock(src, 'getTime() {');
     // Strip trailing comma if present (object-literal method declarations).
     const cleanup = (s) => s.replace(/,?\s*$/, '');
     vm.runInContext(`
         globalThis.setTime = function ${cleanup(setTimeBody)};
+        globalThis.freezeTime = function ${cleanup(freezeTimeBody)};
         globalThis.getTime = function ${cleanup(getTimeBody)};
     `, sandbox);
     return sandbox;
@@ -195,6 +197,31 @@ test('behavior: getTime returns chartTime when audio has stalled (paused)', () =
     now = 200;
     const t = sb.getTime();
     assert.equal(t, 10, `paused getTime must be chartTime (10), got ${t}`);
+});
+
+test('behavior: freezeTime prevents count-in drift until audio genuinely advances', () => {
+    let now = 0;
+    const sb = buildClockSandbox(() => now);
+    sb.setTime(10);
+    now = 40;
+    assert.ok(sb.getTime() > 10, 'live clock should interpolate before the freeze');
+
+    sb.freezeTime(10);
+    now = 80;
+    assert.equal(sb.getTime(), 10, 'frozen count-in clock must stay exactly at A');
+    assert.ok(Number.isNaN(sb.hwState._chartAnchorPerfNow), 'freeze must disable the live interpolation anchor');
+
+    // A same-position tick before the backing engine starts must not unfreeze.
+    sb.setTime(10);
+    now = 120;
+    assert.equal(sb.getTime(), 10, 'same-position transport samples must preserve the freeze');
+
+    // The first real audio advance restores the normal smooth clock.
+    sb.setTime(10.02);
+    assert.equal(sb.hwState._chartAnchorAudioT, 10.02);
+    assert.equal(sb.hwState._chartAnchorPerfNow, 120);
+    now = 140;
+    assert.ok(sb.getTime() > 10.02, 'advancing audio must resume interpolation');
 });
 
 test('behavior: getTime adjusts for non-1x playback rate (observed)', () => {

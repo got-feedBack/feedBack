@@ -81,7 +81,10 @@ test('playback adapter scopes startTime readiness and validates seek targets', (
     assert.match(fn, /const seconds\s*=\s*Number\(time\);/);
     assert.match(fn, /!Number\.isFinite\(seconds\)\s*\|\|\s*seconds\s*<\s*0/);
     assert.match(fn, /throw new Error\(`Invalid seek time:/);
-    assert.match(fn, /return _audioSeek\(seconds, reason \|\| 'playback-command'\);/);
+    assert.match(
+        fn,
+        /return _audioSeek\(seconds, reason \|\| 'playback-command', \{\s*restartActiveLoopWhilePlaying: true,\s*\}\);/,
+    );
 });
 
 test('playback adapter suppresses duplicate HTML5 pause events before emitting canonical pause', () => {

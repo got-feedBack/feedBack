@@ -1,5 +1,5 @@
 // Verify restartCurrentSong() uses the canonical _audioSeek / togglePlay /
-// startCountIn paths without clearing loops or reloading the song.
+// unified startLoop path without clearing loops or reloading the song.
 //
 // Same isolation strategy as song_seek.test.js — extract the function from
 // app.js by brace-matching and run it in a vm sandbox with stubbed deps.
@@ -25,6 +25,7 @@ function buildSandbox({ loopA = null, loopB = null, isPlaying = false } = {}) {
         __cancelCountInCalls: 0,
         __seekCalls: [],
         __startCountInCalls: [],
+        __startLoopCalls: [],
         __togglePlayCalls: 0,
         __clearLoopCalls: 0,
         window: {
@@ -41,6 +42,10 @@ function buildSandbox({ loopA = null, loopB = null, isPlaying = false } = {}) {
         __startCountIn(opts) {
             sandbox.__startCountInCalls.push(opts);
             return Promise.resolve();
+        },
+        __startLoop(opts) {
+            sandbox.__startLoopCalls.push(opts);
+            return Promise.resolve(true);
         },
         __togglePlay() {
             sandbox.__togglePlayCalls++;
@@ -61,6 +66,7 @@ function loadRestart(sandbox, src, { audioSeekImpl } = {}) {
             return (${audioSeekImpl || '__audioSeek'})(s, reason);
         }
         async function startCountIn(opts) { return __startCountIn(opts); }
+        async function startLoop(opts) { return __startLoop(opts); }
         async function togglePlay() { return __togglePlay(); }
         function clearLoop() { __clearLoopCalls++; }
         ${restartSrc}
@@ -103,18 +109,17 @@ test('already playing, no loop: seeks to 0 and does not toggle play', async () =
     assert.equal(sandbox.__clearLoopCalls, 0);
 });
 
-test('loop armed: seeks to loopA, preserves loop, re-enters via startCountIn immediate', async () => {
+test('configured loop: delegates restart to the unified loop session controller', async () => {
     const src = fs.readFileSync(APP_JS, 'utf8');
     const sandbox = buildSandbox({ loopA: 12.5, loopB: 48, isPlaying: false });
     loadRestart(sandbox, src);
 
     const ok = await sandbox.__restartCurrentSong();
     assert.equal(ok, true);
-    assert.equal(sandbox.__seekCalls.length, 1);
-    assert.equal(sandbox.__seekCalls[0].s, 12.5);
-    assert.equal(sandbox.__seekCalls[0].reason, 'song-restart');
-    assert.equal(sandbox.__startCountInCalls.length, 1);
-    assert.equal(sandbox.__startCountInCalls[0].immediate, true);
+    assert.equal(sandbox.__seekCalls.length, 0);
+    assert.equal(sandbox.__startLoopCalls.length, 1);
+    assert.equal(sandbox.__startLoopCalls[0].source, 'song-restart');
+    assert.equal(sandbox.__startCountInCalls.length, 0);
     assert.equal(sandbox.__togglePlayCalls, 0);
     assert.equal(sandbox.__clearLoopCalls, 0);
     assert.equal(sandbox.loopB, 48, 'loopB must be preserved');

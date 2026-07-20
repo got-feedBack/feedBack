@@ -154,6 +154,37 @@ test('seek preserves pre-seek playback state and external seek events update sta
     assert.equal(diagnosticsSnapshot(window).state.state, 'playing');
 });
 
+test('a loop restart promotes an armed observer snapshot without a second loop-set event', () => {
+    const window = loadPlayback();
+    window.feedBack.playback.transportEvent('ready', {
+        requesterId: 'core.player.controls',
+        target: makeTarget(),
+        currentTime: 0,
+        duration: 120,
+    });
+
+    const loopSetEvents = captureEvents(window, 'playback:loop-set');
+    window.feedBack.playback.transportEvent('loop-set', {
+        requesterId: 'core.loop',
+        loop: { startTime: 3, endTime: 7, enabled: false, state: 'armed' },
+    });
+    assert.equal(diagnosticsSnapshot(window).state.loop.state, 'armed');
+    assert.equal(diagnosticsSnapshot(window).state.loop.enabled, false);
+
+    window.feedBack.playback.transportEvent('loop-restarted', {
+        requesterId: 'core.loop',
+        loopA: 3,
+        loopB: 7,
+        currentTime: 3,
+    });
+    const state = diagnosticsSnapshot(window).state;
+    assert.equal(state.loop.state, 'active');
+    assert.equal(state.loop.enabled, true);
+    assert.ok(state.loop.lastRestartAt);
+    assert.equal(state.media.loop.lastRestartAt, state.loop.lastRestartAt);
+    assert.equal(loopSetEvents.length, 1);
+});
+
 test('clear-loop requires an active playback session', async () => {
     const window = loadPlayback();
     window.feedBack.playback.registerTransportAdapter(makeAdapter());

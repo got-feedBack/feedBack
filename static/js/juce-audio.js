@@ -899,7 +899,9 @@ export let _resetJuceAudioShimChain = function () {};
         const seekTime = batch.seekTime;
         if (wantsPause && seekTime !== undefined) {
             enqueue(async (gen) => {
-                const r = await _audioSeek(seekTime, 'audio-element-shim');
+                const r = await _audioSeek(seekTime, 'audio-element-shim', {
+                    restartActiveLoopWhilePlaying: forUpcomingPlay,
+                });
                 if (!r.completed) return; // seek cancelled by teardown
                 if (gen !== _juceShimGen) return;
                 if (!forUpcomingPlay) {
@@ -933,7 +935,9 @@ export let _resetJuceAudioShimChain = function () {};
         }
         if (seekTime !== undefined) {
             enqueue(async (gen) => {
-                const r = await _audioSeek(seekTime, 'audio-element-shim');
+                const r = await _audioSeek(seekTime, 'audio-element-shim', {
+                    restartActiveLoopWhilePlaying: true,
+                });
                 if (!r.completed) return; // seek cancelled by teardown
                 if (gen !== _juceShimGen) return;
                 audio.dispatchEvent(new Event('seeked'));

@@ -225,6 +225,45 @@ let _audioSeekChain = Promise.resolve();
 
 let _audioSeekGen = 0;
 
+// The transport owns Play, but the loop controller owns the active A bound.
+// app.js wires the two together without introducing a transport <-> loops
+// import cycle. Timeline seeks remain unrestricted; this resolver is consulted
+// only when paused playback is about to start.
+let _loopPlayStartTargetResolver = null;
+let _loopRestartHandler = null;
+
+export function setLoopPlayStartTargetResolver(resolver) {
+    _loopPlayStartTargetResolver = typeof resolver === 'function' ? resolver : null;
+}
+
+// app.js wires this to the loop controller without introducing a
+// transport <-> loops module cycle. It is invoked only when the resolver
+// changes an outside-loop position to A, so the controller can apply the
+// configured first-pass policy instead of performing a bare seek.
+export function setLoopRestartHandler(handler) {
+    _loopRestartHandler = typeof handler === 'function' ? handler : null;
+}
+
+async function _restartLoopFromOutside(requestedTime, targetTime, trigger) {
+    if (!_loopRestartHandler) return null;
+    try {
+        const result = await _loopRestartHandler({
+            requestedTime,
+            targetTime,
+            trigger,
+        });
+        if (result && typeof result === 'object') return result;
+        return {
+            completed: result === true,
+            from: NaN,
+            to: result === true ? targetTime : NaN,
+        };
+    } catch (err) {
+        console.warn('[loop] outside-position restart failed:', err);
+        return { completed: false, from: NaN, to: NaN };
+    }
+}
+
 export function _resetAudioSeekState() {
     // Bump the generation — in-flight chain callbacks see the mismatch on
     // their next guard check and short-circuit (no emit, no further state
@@ -263,20 +302,57 @@ function _juceSeekWithTimeout(s) {
 // session. Callers that need the actual landed position (because JUCE may
 // clamp or HTML5 may snap to the seekable range) should read `to` rather
 // than re-using the requested `s`.
-export async function _audioSeek(s, reason) {
+export async function _audioSeek(s, reason, options = {}) {
     // Single funnel for every audio repositioning. Emits song:seek so
     // plugins (notedetect detection-suppression during seek transients,
     // practice-journal segment tracking) can react to any chart-time
     // jump regardless of which UI path triggered it. `reason` is a
     // free-form short string ('seek-by', 'loop-wrap', 'loop-set',
     // 'arrangement-restore', 'jump-fix') so subscribers can filter.
+    // While playing, an outside-loop timeline request is a semantic loop
+    // restart, not just a redirected seek. Let the loop controller apply its
+    // first-pass policy (count-in or immediate). The controller's own seek
+    // does not set restartActiveLoopWhilePlaying, so this cannot recurse.
+    if (options.restartActiveLoopWhilePlaying
+        && S.isPlaying
+        && _loopPlayStartTargetResolver
+        && _loopRestartHandler) {
+        let resolved = s;
+        try {
+            resolved = _loopPlayStartTargetResolver(s);
+        } catch (_) {
+            resolved = s;
+        }
+        if (Number.isFinite(resolved) && Math.abs(resolved - s) > 0.01) {
+            return _restartLoopFromOutside(s, resolved, 'seek');
+        }
+    }
+
     const gen = _audioSeekGen;
+    const guard = typeof options.guard === 'function' ? options.guard : null;
+    const permitted = () => {
+        if (!guard) return true;
+        try { return !!guard(); } catch (_) { return false; }
+    };
     _audioSeekChain = _audioSeekChain.then(async () => {
-        if (gen !== _audioSeekGen) return { completed: false, from: NaN, to: NaN };
+        if (gen !== _audioSeekGen || !permitted()) {
+            return { completed: false, from: NaN, to: NaN };
+        }
+        let target = s;
+        if (options.restartActiveLoopWhilePlaying && S.isPlaying && _loopPlayStartTargetResolver) {
+            try {
+                const resolved = _loopPlayStartTargetResolver(s);
+                if (Number.isFinite(resolved)) target = resolved;
+            } catch (_) {
+                // A UI policy hook must never poison the canonical seek queue.
+            }
+        }
         const from = _audioTime();
-        if (window._juceMode) await _juceSeekWithTimeout(s);
-        else audio.currentTime = s;
-        if (gen !== _audioSeekGen) return { completed: false, from, to: NaN };
+        if (window._juceMode) await _juceSeekWithTimeout(target);
+        else audio.currentTime = target;
+        if (gen !== _audioSeekGen || !permitted()) {
+            return { completed: false, from, to: NaN };
+        }
         // Read the verified post-seek position rather than the requested `s`
         // so plugins observe the actual clock — JUCE may clamp or roll back,
         // and HTML5 may snap to the nearest seekable range.
@@ -307,7 +383,43 @@ export async function _audioSeek(s, reason) {
 // clobber the UI of a newer attempt N+1 within the same session.
 let _playAttemptGen = 0;
 
+async function _prepareLoopPlayStart() {
+    if (!_loopPlayStartTargetResolver) return true;
+    const current = _audioTime();
+    let target = current;
+    try {
+        const resolved = _loopPlayStartTargetResolver(current);
+        if (Number.isFinite(resolved)) target = resolved;
+    } catch (_) {
+        // A UI policy hook must never block ordinary playback.
+        return true;
+    }
+    if (!Number.isFinite(target) || Math.abs(target - current) <= 0.01) return true;
+    const restarted = await _restartLoopFromOutside(current, target, 'play');
+    if (restarted !== null) {
+        const completed = !!restarted.completed
+            && Number.isFinite(restarted.to)
+            && Math.abs(restarted.to - target) <= 0.05;
+        // The loop controller owns playback after a successful restart: it
+        // either scheduled the count-in or started immediate playback itself.
+        // Signal togglePlay() to stop instead of applying the original click a
+        // second time (which would bypass the count-in or pause immediately).
+        return completed ? 'handled' : false;
+    }
+    const r = await _audioSeek(target, 'loop-play-start');
+    return r.completed && Math.abs(r.to - target) <= 0.05;
+}
+
 export async function togglePlay() {
+    // Seeking is intentionally free while paused. The active-loop rule is
+    // applied only at the transition into playback: resolve to A, verify the
+    // backend landed there, then start. Re-read S.isPlaying after the await so
+    // two rapid toggles still settle as Play -> Pause rather than double-start.
+    if (!S.isPlaying) {
+        const preparation = await _prepareLoopPlayStart();
+        if (preparation !== true) return;
+    }
+
     if (window._juceMode) {
         if (S.isPlaying) {
             await jucePlayer.pause();
@@ -366,7 +478,9 @@ export async function togglePlay() {
 }
 
 export async function seekBy(s) {
-    await _audioSeek(Math.max(0, _audioTime() + s), 'seek-by');
+    await _audioSeek(Math.max(0, _audioTime() + s), 'seek-by', {
+        restartActiveLoopWhilePlaying: true,
+    });
 }
 
 /**
