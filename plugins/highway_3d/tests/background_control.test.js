@@ -343,10 +343,9 @@ test('a non-v3 host mounts nothing (uiVersion gate)', () => {
     ctl.api._pcAcquire();
     assert.equal(ctl.api.el, null, 'must not mount when uiVersion is not v3');
     assert.equal(ctl.dom.slot.children.length, 0);
-    // Retry loop must still terminate rather than spin.
-    let guard = 0;
-    while (ctl.timers.length && guard++ < 100) ctl.timers.shift()();
-    assert.ok(guard < 100, 'retry loop did not terminate');
+    // A non-v3 shell has no slot and never will, so no retry should be scheduled
+    // at all — the loop is for a not-yet-built v3 slot, not for polling v2.
+    assert.equal(ctl.timers.length, 0, 'a non-v3 host must not schedule the retry loop');
     ctl.api._pcRelease();
 });
 

@@ -4382,6 +4382,12 @@
         _pcRefs++;
         _pcBindScreenHook();
         if (_pcMount()) return;
+        // A non-v3 shell has no slot and never will — _pcAcquire only runs once
+        // the renderer is viable inside the v3 player chrome, and player-chrome.js
+        // sets uiVersion synchronously as it builds that chrome, so a missing 'v3'
+        // here means v2, not a not-yet-ready v3. Skip the retry loop rather than
+        // spinning it out to the ~3s budget for a slot that will never appear.
+        if (!window.feedBack || window.feedBack.uiVersion !== 'v3') return;
         // The rail popover may not be built yet on a cold load. Retry a few
         // times, then give up quietly — Settings still works.
         if (_pcRetryTimer) return;
