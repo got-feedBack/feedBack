@@ -26,6 +26,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from song import (
     anchor_to_wire,
+    arrangement_is_bass,
     arrangement_string_count,
     base_open_string_midis,
     chord_template_to_wire,
@@ -261,9 +262,8 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
                 bass_idxs = [
                     i
                     for i, a in enumerate(song.arrangements)
-                    if getattr(a, "path_bass", False)
+                    if arrangement_is_bass(a)
                     or (smart_names[i] or "").lower().startswith("bass")
-                    or "bass" in (getattr(a, "name", "") or "").lower()
                 ]
                 if bass_idxs:
                     # Among the bass parts: (1) honor the saved default-arrangement
@@ -975,7 +975,7 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
         # base[string] + offset + capo + fret (matches the tuner / open-string
         # labels). arrangement_string_count is O(notes), so compute once here.
         _base = base_open_string_midis(
-            arrangement_string_count(arr), "bass" in (arr.name or "").lower())
+            arrangement_string_count(arr), arrangement_is_bass(arr))
         _capo = int(getattr(arr, "capo", 0) or 0)
 
         def _fill_scale_degree(wire: dict, n, t: float) -> None:
