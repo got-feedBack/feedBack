@@ -2298,6 +2298,31 @@ function createHighway() {
                                         sel.appendChild(opt);
                                     }
                                 }
+                                // Drum-part picker (feedpak 1.17.0 "drums as
+                                // arrangements"): a song can carry several drum
+                                // charts. Populate the picker beside the
+                                // arrangement switcher; show it only when there
+                                // are 2+ parts to choose between. `drum_parts`
+                                // is always present (empty for non-drum songs),
+                                // so a single-drum / no-drum song hides it. The
+                                // currently-streaming part is marked selected by
+                                // the `drum_tab` handler below (authoritative
+                                // `part_id`), so we don't guess here.
+                                {
+                                    const dpSel = document.getElementById('drum-part-select');
+                                    if (dpSel) {
+                                        const parts = Array.isArray(msg.drum_parts) ? msg.drum_parts : [];
+                                        dpSel.textContent = '';
+                                        for (const p of parts) {
+                                            const opt = document.createElement('option');
+                                            opt.value = p.id;
+                                            opt.textContent = p.name || p.id;
+                                            dpSel.appendChild(opt);
+                                        }
+                                        const dpRow = document.getElementById('v3-drum-part-row');
+                                        if (dpRow) dpRow.classList.toggle('hidden', parts.length <= 1);
+                                    }
+                                }
                             }
                             // Plugin context API — broadcast current song state
                             if (window.feedBack) {
@@ -2380,7 +2405,22 @@ function createHighway() {
                                 name: (typeof msg.name === 'string' && msg.name) ? msg.name : 'Drums',
                                 kit: Array.isArray(msg.kit) ? msg.kit : [],
                                 hits: [],
+                                // Which drum part this stream carries (feedpak
+                                // 1.17.0). Present only for multi-part packs;
+                                // null otherwise. Plugins can read it via
+                                // bundle.drumTab.part_id.
+                                part_id: (typeof msg.part_id === 'string' && msg.part_id) ? msg.part_id : null,
                             };
+                            // Reflect the authoritative streaming part in the
+                            // picker (the server resolves an unknown/absent
+                            // selection to the primary, so this keeps the
+                            // dropdown honest even after a fallback).
+                            if (hwState.drumTab.part_id) {
+                                const dpSel = document.getElementById('drum-part-select');
+                                if (dpSel && dpSel.value !== hwState.drumTab.part_id) {
+                                    dpSel.value = hwState.drumTab.part_id;
+                                }
+                            }
                             break;
                         case 'drum_hits':
                             if (hwState.drumTab && Array.isArray(msg.data)) {
@@ -2773,7 +2813,7 @@ function createHighway() {
             localStorage.setItem('showFingerHints', String(hwState._showFingerHints));
         },
 
-        reconnect(filename, arrangement) {
+        reconnect(filename, arrangement, drumPart) {
             // Close old WS but keep audio + animation running
             if (hwState.ws) { hwState.ws.close(); hwState.ws = null; }
             hwState.ready = false;
@@ -2799,6 +2839,11 @@ function createHighway() {
             _resetChordRenderState();
             const wsParams = new URLSearchParams();
             if (arrangement !== undefined) wsParams.set('arrangement', arrangement);
+            // Multiple drum parts (feedpak 1.17.0 "drums as arrangements"):
+            // carry the selected part id so the WS streams ITS drum tab. Empty
+            // / undefined → the primary part (server default), i.e. today's
+            // one-drum behavior for any pack the picker never touched.
+            if (drumPart) wsParams.set('drum_part', drumPart);
             let namingMode = 'smart';
             if (typeof window._getArrangementNamingMode === 'function') {
                 const v = window._getArrangementNamingMode();

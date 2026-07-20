@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Drum-part picker (feedpak 1.17.0 "drums as arrangements").** When a song
+  carries several drum charts, a **Drum part** selector appears beside the
+  arrangement switcher (advanced settings) so a player can choose which drummer
+  to play. Selecting one re-streams that part's tab over the highway WS
+  (`?drum_part=<id>`, mirroring the arrangement switch); the choice persists
+  across an arrangement change, and the picker reflects the server's
+  authoritative part (unknown/absent selection falls back to the primary). The
+  row hides for single-drum and non-drum songs, so nothing changes there. Builds
+  on the loader below; no plugin change needed — the drum renderer just draws
+  whatever tab streams.
 - **Multiple drum parts (feedpak 1.17.0 "drums as arrangements").** The sloppak
   loader now reads `type: drums` arrangement entries carrying per-arrangement
   `drum_tab` file pointers — a song can ship several drum charts (a second

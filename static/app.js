@@ -1150,7 +1150,7 @@ window.feedBack.on('song:ready', () => {
 let _arrBusyGen = 0;
 let _arrBusyTimeout = null;
 
-async function changeArrangement(index) {
+async function changeArrangement(index, drumPart) {
     if (currentFilename) {
         // Tear down any pending fresh-load credits before switching: the
         // no-count-in hold timer would otherwise fire togglePlay() against the
@@ -1276,9 +1276,36 @@ async function changeArrangement(index) {
         _resetSectionPracticeLog();
         invalidateParentCount();
 
-        window.highway.reconnect(currentFilename, index);
+        // Carry the selected drum part across the re-stream. An explicit
+        // `drumPart` (a drum-part switch, from changeDrumPart) wins; otherwise
+        // preserve the current picker selection so an ARRANGEMENT switch keeps
+        // the chosen part (drum parts are song-level, not per-arrangement).
+        const part = drumPart !== undefined
+            ? drumPart
+            : (document.getElementById('drum-part-select')?.value || '');
+        window.highway.reconnect(currentFilename, index, part);
         window.feedBack.emit('arrangement:changed', { index, filename: currentFilename });
     }
+}
+
+// Switch which drum part plays (feedpak 1.17.0 "drums as arrangements"). A part
+// switch re-streams the same song with a different drum tab — the same
+// transition as an arrangement switch — so it delegates to changeArrangement
+// with the CURRENT arrangement held and the new part applied. Wired to
+// #drum-part-select's onchange; the select is populated + shown by
+// highway.js's song_info handler only when the song has 2+ drum parts.
+async function changeDrumPart(partId) {
+    if (!currentFilename) return;
+    let index = 0;
+    const si = window.highway && typeof window.highway.getSongInfo === 'function'
+        ? window.highway.getSongInfo() : null;
+    if (si && typeof si.arrangement_index === 'number' && si.arrangement_index >= 0) {
+        index = si.arrangement_index;
+    } else {
+        const arrSel = document.getElementById('arr-select');
+        if (arrSel && arrSel.value !== '') index = Number(arrSel.value) || 0;
+    }
+    return changeArrangement(index, partId);
 }
 
 // Restart the current song from the beginning (or from loop A when an A–B
@@ -2325,7 +2352,7 @@ configureHost({
 Object.assign(window, {
     _confirmDialog, _getArrangementNamingMode, _libraryLocalFilename, _librarySongArtUrl,
     _librarySongId, _onHeaderClick, _onNamingModeChange, _trapFocusInModal,
-    changeArrangement, checkPluginUpdates, clearLibFilters, clearLoop,
+    changeArrangement, changeDrumPart, checkPluginUpdates, clearLibFilters, clearLoop,
     deleteSelectedLoop, esc, exportDiagnostics, exportSettings, filterFavorites,
     filterLibrary, fullRescanLibrary, goFavPage, handleSliderInput,
     hideScanBanner, importSettings, loadPlugins, loadSavedLoop,
