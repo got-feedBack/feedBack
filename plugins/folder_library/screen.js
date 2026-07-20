@@ -50,6 +50,10 @@ function createFolderSurface(cfg) {
     let _sortDir          = _store('sortDir') || 'asc';
     let _toolbarDone      = false;
     let _hoveredFolder    = null;             // { wrap, hdr, btnGroup } — only innermost folder is active
+    let _previewHover     = _store('previewHover') === 'true';  // opt-in: preview a song's audio on hover
+    let _previewTimer     = null;
+    let _previewAudio     = null;   // dedicated element — never touches the main player's <audio>
+    let _previewSeq       = 0;      // invalidates in-flight loads when the hover moves or stops
 
     // ── Core arrangement order (pinned to top of filter panel) ──────────
     const _CORE_ARRANGEMENTS = ['Lead', 'Rhythm', 'Bass', 'Combo'];
@@ -731,6 +735,112 @@ function createFolderSurface(cfg) {
     function _prompt(msg, def) { return _showModal(msg, true,  def || ''); }
 
     // ── Song card (grid view) ───────────────────────────────────────────
+    // ── Preview on hover (opt-in; toggled from the toolbar) ─────────────
+    // Streams the song's own audio into a dedicated <audio> element after the
+    // pointer dwells briefly (so skimming doesn't blast audio), stopping on
+    // leave. Shows an equalizer "now playing" indicator over the art. Never
+    // calls playSong or touches the main player's <audio> element.
+    var _HOVER_PREVIEW_DELAY_MS = 500;
+    var _previewIndHost = null;             // art element currently showing the indicator
+
+    // Pack audio layout varies: a dedicated preview.ogg (most songs), a single
+    // stems/full.ogg mix, or tutorials' stems/audio.mp3 — try in that order.
+    function _previewCandidates(song) {
+        var base = '/api/sloppak/' + song.filename.split('/').map(encodeURIComponent).join('/') + '/file/';
+        return [base + 'preview.ogg', base + 'stems/full.ogg', base + 'stems/audio.mp3'];
+    }
+
+    function _ensurePreviewStyle() {
+        if (document.getElementById('fl-preview-style')) return;
+        var st = document.createElement('style');
+        st.id = 'fl-preview-style';
+        st.textContent =
+            '.fl-preview-ind{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.5);z-index:4;pointer-events:none;}' +
+            '.fl-eq{display:flex;align-items:flex-end;gap:2px;height:45%;max-height:22px;opacity:.55;}' +
+            '.fl-preview-ind.playing .fl-eq{opacity:1;}' +
+            '.fl-eq i{display:block;width:3px;height:25%;background:#60a5fa;border-radius:1px;}' +
+            '.fl-preview-ind.playing .fl-eq i{animation:fl-eq-b .8s ease-in-out infinite;}' +
+            '.fl-eq i:nth-child(2){animation-delay:.15s;}.fl-eq i:nth-child(3){animation-delay:.3s;}.fl-eq i:nth-child(4){animation-delay:.45s;}' +
+            '@keyframes fl-eq-b{0%,100%{height:25%}50%{height:100%}}';
+        document.head.appendChild(st);
+    }
+    function _showIndicator(host) {
+        _clearIndicator();
+        if (!host) return;
+        _ensurePreviewStyle();
+        var ind = document.createElement('div');
+        ind.className = 'fl-preview-ind';
+        ind.innerHTML = '<span class="fl-eq"><i></i><i></i><i></i><i></i></span>';
+        host.appendChild(ind);
+        _previewIndHost = host;
+    }
+    function _markIndicatorPlaying() {
+        var ind = _previewIndHost && _previewIndHost.querySelector('.fl-preview-ind');
+        if (ind) ind.classList.add('playing');
+    }
+    function _clearIndicator() {
+        if (!_previewIndHost) return;
+        var ind = _previewIndHost.querySelector('.fl-preview-ind');
+        if (ind) ind.remove();
+        _previewIndHost = null;
+    }
+
+    function _previewEl() {
+        if (_previewAudio) return _previewAudio;
+        var a = document.createElement('audio');
+        a.preload = 'none';
+        a.volume  = 0.7;
+        _previewAudio = a;
+        return a;
+    }
+    function _stopPreview() {
+        _previewSeq++;                       // any pending load/error/playing handler is now stale
+        _clearIndicator();
+        if (_previewAudio) {
+            _previewAudio.onerror = _previewAudio.onloadedmetadata = _previewAudio.onplaying = null;
+            try { _previewAudio.pause(); } catch (_) {}
+            _previewAudio.removeAttribute('src');
+            try { _previewAudio.load(); } catch (_) {}
+        }
+    }
+    function _startPreview(song, host) {
+        // Play from 0 — preview.ogg is already a short curated clip, and the
+        // full-track fallbacks are fine from the start. (Seeking by a fraction
+        // of song.duration broke playback whenever the offset landed past the
+        // end of a short preview clip.)
+        var urls = _previewCandidates(song);
+        var a    = _previewEl();
+        var seq  = ++_previewSeq;
+        var idx  = 0;
+        _showIndicator(host);
+        function _tryNext() {
+            if (seq !== _previewSeq) return;
+            if (idx >= urls.length) { _clearIndicator(); return; }  // no playable member
+            a.src = urls[idx++];
+            a.load();
+        }
+        a.onerror = function () { if (seq === _previewSeq) _tryNext(); };   // candidate 404/decode → next
+        a.onloadedmetadata = function () {
+            if (seq !== _previewSeq) return;
+            a.play().catch(function () {});
+        };
+        a.onplaying = function () { if (seq === _previewSeq) _markIndicatorPlaying(); };
+        _tryNext();
+    }
+    function _armHoverPreview(el, song, host) {
+        el.addEventListener('mouseenter', function () {
+            if (!_previewHover) return;
+            clearTimeout(_previewTimer);
+            _previewTimer = setTimeout(function () {
+                if (_previewHover) _startPreview(song, host);
+            }, _HOVER_PREVIEW_DELAY_MS);
+        });
+        el.addEventListener('mouseleave', function () {
+            clearTimeout(_previewTimer);
+            _stopPreview();
+        });
+    }
+
     function _songCard(song, folderName) {
         var card = document.createElement('div');
         card.className = 'flex flex-col rounded-lg overflow-hidden cursor-pointer group transition-transform duration-100 hover:scale-105';
@@ -797,6 +907,7 @@ function createFolderSurface(cfg) {
             if (typeof window.playSong === 'function') window.playSong(song.filename);
         });
         _makeDraggable(card, song, folderName);
+        _armHoverPreview(card, song, artWrap);
         return card;
     }
 
@@ -867,6 +978,7 @@ function createFolderSurface(cfg) {
             if (typeof window.playSong === 'function') window.playSong(song.filename);
         });
         _makeDraggable(row, song, folderName);
+        _armHoverPreview(row, song, thumb);
         return row;
     }
 
@@ -1584,10 +1696,29 @@ function createFolderSurface(cfg) {
         );
         colBtn.addEventListener('click', _collapseAll);
 
+        // Preview-on-hover toggle (persisted per surface via cfg.storePrefix)
+        var previewBtn = document.createElement('button');
+        previewBtn.style.cssText = 'display:flex; align-items:center; gap:6px; padding:7px 12px; border:1px solid #374151; border-radius:10px; cursor:pointer; font-size:13px; white-space:nowrap; transition:color 0.1s, background 0.1s, border-color 0.1s;';
+        previewBtn.innerHTML = '<svg viewBox="0 0 20 20" fill="currentColor" style="width:14px;height:14px"><path d="M6 4l10 6-10 6V4z"/></svg>';
+        function _applyPreviewBtn() {
+            previewBtn.style.background  = _previewHover ? '#1d4ed8' : '#1f2937';
+            previewBtn.style.color       = _previewHover ? '#ffffff' : '#9ca3af';
+            previewBtn.style.borderColor = _previewHover ? '#3b82f6' : '#374151';
+            previewBtn.title = 'Preview on hover: ' + (_previewHover ? 'on' : 'off');
+        }
+        _applyPreviewBtn();
+        previewBtn.addEventListener('click', function () {
+            _previewHover = !_previewHover;
+            _store('previewHover', _previewHover ? 'true' : 'false');
+            if (!_previewHover) { clearTimeout(_previewTimer); _stopPreview(); }
+            _applyPreviewBtn();
+        });
+
         ctrl.appendChild(viewGroup);
         ctrl.appendChild(newBtn);
         ctrl.appendChild(expBtn);
         ctrl.appendChild(colBtn);
+        ctrl.appendChild(previewBtn);
 
         _toolbarDone = true;
     }
@@ -1604,6 +1735,7 @@ function createFolderSurface(cfg) {
     // ── Unload (lib surface) ────────────────────────────────────────────
     function _unload() {
         _clearVirtualLists();   // don't leave scroll listeners behind on teardown
+        _stopPreview();         // silence any in-progress hover preview
         if (!cfg.searchInputId) return;
         var el = _el(cfg.searchInputId);
         if (el) el.style.maxWidth = '';
