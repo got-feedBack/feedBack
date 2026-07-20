@@ -730,6 +730,50 @@ class LoadedSloppak:
     # separated stems the moment one drops below 100% — demucs recombination is
     # lossy, so the mixdown is strictly the better audio when nothing is muted.
     full_mix: str | None = None
+    # The song's DRUM PARTS (feedpak 1.17.0 "drums as arrangements"): one dict
+    # {"id", "name", "drum_tab"} per part, primary FIRST. A part comes from a
+    # `type: drums` arrangement entry carrying a per-arrangement `drum_tab`
+    # file pointer and NO note `file` — entries this loader deliberately never
+    # turns into fretted Arrangements (see the file/notation gate in
+    # load_song; that skip IS the grading invariant). The primary part's
+    # payload is the SAME object as `drum_tab` above (the song-level key is
+    # its back-compat alias). None when the pack has no drums at all; a
+    # single-part list for a legacy pack with only the song-level key.
+    drum_parts: list[dict] | None = None
+
+
+def _load_drum_tab_file(source_dir: Path, rel: str, label: str) -> dict | None:
+    """Load + schema-validate one drum-tab JSON named by a manifest-relative
+    path. Shared by the song-level `drum_tab:` key and the per-arrangement
+    drum-part pointers (feedpak 1.17.0), so every tab gets the same posture:
+    permissive — a missing file disables that part silently; a traversal,
+    parse, or validation failure disables it with a warning, never aborting
+    the load."""
+    # Constrain to source_dir to prevent a crafted manifest from reading
+    # files outside the sloppak directory via path traversal (e.g. ../../etc).
+    # Wrap both resolve() calls in a broad handler: symlink loops and
+    # permission errors on .resolve() should disable drums, not abort load.
+    try:
+        dt_path = (source_dir / rel).resolve()
+        dt_path.relative_to(source_dir.resolve())
+    except ValueError:
+        log.warning("sloppak: %s path %r escapes source_dir — skipped", label, rel)
+        return None
+    except OSError as e:
+        log.warning("sloppak: %s path resolution failed (%s) — skipped", label, e)
+        return None
+    if not dt_path.exists():
+        return None
+    try:
+        raw = load_json(dt_path)
+    except Exception as e:
+        log.warning("sloppak: failed to parse %s %r: %s", label, rel, e)
+        return None
+    ok, reason = drums_mod.validate_drum_tab(raw)
+    if not ok:
+        log.warning("sloppak: %s %r failed validation: %s", label, rel, reason)
+        return None
+    return raw
 
 
 def load_song(
@@ -754,6 +798,7 @@ def load_song(
     notation_acc: dict[str, dict] = {}
     any_notation = False
     arrangement_ids_acc: list[str | None] = []  # parallel to song.arrangements
+    drum_pointer_entries: list[dict] = []  # feedpak 1.17.0 drum-part pointers
     for entry in manifest.get("arrangements", []) or []:
         if not isinstance(entry, dict):
             log.warning("sloppak: non-dict arrangement entry skipped (%r)", type(entry).__name__)
@@ -763,6 +808,15 @@ def load_song(
         notation_raw = entry.get("notation")
         has_notation_key = isinstance(notation_raw, str) and bool(notation_raw.strip())
         if not rel and not has_notation_key:
+            # A DRUM-PART POINTER entry (feedpak 1.17.0 "drums as
+            # arrangements"): `type: drums` with a per-arrangement `drum_tab`
+            # file and no note file. Collect it for the drum-parts load after
+            # this loop — but NEVER turn it into a fretted Arrangement: this
+            # skip is the grading invariant (a drum part must not reach the
+            # fretted pipeline, where its empty chart would grade as garbage).
+            _etype = str(entry.get("type") or "").strip().lower()
+            if _etype in ("drums", "drum") and isinstance(entry.get("drum_tab"), str):
+                drum_pointer_entries.append(entry)
             continue
         data = None
         if rel:
@@ -868,32 +922,61 @@ def load_song(
     drum_tab_data: dict | None = None
     drum_tab_rel = manifest.get("drum_tab")
     if isinstance(drum_tab_rel, str) and drum_tab_rel:
-        # Constrain to source_dir to prevent a crafted manifest from reading
-        # files outside the sloppak directory via path traversal (e.g. ../../etc).
-        # Wrap both resolve() calls in a broad handler: symlink loops and
-        # permission errors on .resolve() should disable drums, not abort load.
-        try:
-            dt_path = (source_dir / drum_tab_rel).resolve()
-            dt_path.relative_to(source_dir.resolve())
-        except ValueError:
-            log.warning("sloppak: drum_tab path %r escapes source_dir — skipped", drum_tab_rel)
-            dt_path = None
-        except OSError as e:
-            log.warning("sloppak: drum_tab path resolution failed (%s) — skipped", e)
-            dt_path = None
-        if dt_path is not None and dt_path.exists():
-            try:
-                raw = load_json(dt_path)
-            except Exception as e:
-                log.warning("sloppak: failed to parse drum_tab %r: %s", drum_tab_rel, e)
-                raw = None
-            if raw is not None:
-                ok, reason = drums_mod.validate_drum_tab(raw)
-                if ok:
-                    drum_tab_data = raw
-                else:
-                    log.warning("sloppak: drum_tab %r failed validation: %s",
-                                drum_tab_rel, reason)
+        drum_tab_data = _load_drum_tab_file(source_dir, drum_tab_rel, "drum_tab")
+
+    # DRUM PARTS (feedpak 1.17.0 "drums as arrangements"): resolve the
+    # `type: drums` pointer entries collected in the arrangements loop into a
+    # primary-first parts list. The entry whose pointer names the SAME file as
+    # the song-level `drum_tab:` key is the PRIMARY's alias — it contributes
+    # its id/name but is never loaded twice. Extra parts load their own files
+    # with the same permissive posture (a bad part disables that part only).
+    drum_parts: list[dict] | None = None
+    if drum_tab_data is not None or drum_pointer_entries:
+        _primary_id = "drums"
+        _primary_name = None
+        _extra_parts: list[dict] = []
+        _seen_rels: set[str] = set()
+        for _entry in drum_pointer_entries:
+            _rel = str(_entry.get("drum_tab") or "").strip()
+            if not _rel or _rel in _seen_rels:
+                continue
+            _seen_rels.add(_rel)
+            _eid = str(_entry.get("id") or "").strip()
+            _ename = str(_entry.get("name") or "").strip()
+            if isinstance(drum_tab_rel, str) and _rel == drum_tab_rel.strip():
+                # The primary's alias entry — adopt its identity only.
+                if _eid:
+                    _primary_id = _eid
+                if _ename:
+                    _primary_name = _ename
+                continue
+            _tab = _load_drum_tab_file(source_dir, _rel, "drum part")
+            if _tab is None:
+                continue
+            _tab_name = _tab.get("name")
+            _extra_parts.append({
+                "id": _eid or f"drums-{len(_extra_parts) + 2}",
+                "name": _ename
+                    or (_tab_name if isinstance(_tab_name, str) and _tab_name else "Drums"),
+                "drum_tab": _tab,
+            })
+        _parts: list[dict] = []
+        if drum_tab_data is not None:
+            if _primary_name is None:
+                _dt_name = drum_tab_data.get("name")
+                _primary_name = _dt_name if isinstance(_dt_name, str) and _dt_name else "Drums"
+            # The primary's payload IS the song-level tab (same object).
+            _parts.append({"id": _primary_id, "name": _primary_name, "drum_tab": drum_tab_data})
+        _parts.extend(_extra_parts)
+        if _parts:
+            if drum_tab_data is None:
+                # Pointer-only pack (a writer omitted the song-level alias —
+                # spec writers keep it, but a reader must cope): the first
+                # part becomes the primary for every legacy consumer
+                # (has_drum_tab, the default drum_tab stream, the drum-only
+                # placeholder arrangement below).
+                drum_tab_data = _parts[0]["drum_tab"]
+            drum_parts = _parts
 
     # Drum-only sloppak: every GP track was percussion, so it ships a
     # drum_tab but no pitched arrangements. The highway WS rejects an empty
@@ -1221,6 +1304,7 @@ def load_song(
         manifest=manifest,
         feedpak_version=_fpv if isinstance(_fpv, str) and _fpv else None,
         drum_tab=drum_tab_data,
+        drum_parts=drum_parts,
         song_timeline=song_timeline_data,
         tempos=tempos_data,
         time_signatures=time_sigs_data,

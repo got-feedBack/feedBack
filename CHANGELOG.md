@@ -8,8 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **`chart-transform` capability domain (#952)** — plugins can now remap the
-  chart before rendering and scoring through a core-owned provider
+- **Multiple drum parts (feedpak 1.17.0 "drums as arrangements").** The sloppak
+  loader now reads `type: drums` arrangement entries carrying per-arrangement
+  `drum_tab` file pointers — a song can ship several drum charts (a second
+  drummer, an aux-percussion layer). Parts surface as `LoadedSloppak.drum_parts`
+  (primary first; the entry aliasing the song-level `drum_tab:` key is the
+  primary and is never loaded twice), the highway WS `song_info` gains a
+  `drum_parts` name list, and `?drum_part=<id>` on the WS URL selects which
+  part's tab streams (`drum_tab` messages carry `part_id` when a parts list
+  exists; unknown ids fall back to the primary). Pointer entries are **never**
+  loaded as fretted arrangements — the loader's file/notation gate keeps a drum
+  part out of the fretted pipeline (and out of note-detection grading), pinned
+  by test. Legacy single-drum packs read exactly as before, as a one-part list.
   coordinator. Synchronous transforms run after difficulty filtering; host
   data is isolated from providers, accepted timelines are time-sorted, and
   failures fall back to the original chart with a fixed public reason.

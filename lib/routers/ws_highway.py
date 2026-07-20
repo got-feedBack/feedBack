@@ -144,8 +144,15 @@ def _sanitize_authors(manifest: dict | None) -> list[dict]:
 
 
 @router.websocket("/ws/highway/{filename:path}")
-async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1, naming_mode: str = "legacy"):
-    """Stream song data for the highway renderer over WebSocket."""
+async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
+                     naming_mode: str = "legacy", drum_part: str = ""):
+    """Stream song data for the highway renderer over WebSocket.
+
+    `drum_part` selects WHICH drum part's tab streams when the pack carries
+    several (feedpak 1.17.0 "drums as arrangements") — a part id from
+    song_info's `drum_parts`. Empty / unknown ids fall back to the primary,
+    so a stale or mistyped selection degrades to today's behavior instead of
+    silencing drums."""
     await websocket.accept()
     structlog.contextvars.bind_contextvars(ws_conn_id=uuid.uuid4().hex[:8])
 
@@ -564,6 +571,15 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
             "has_drum_tab": bool(
                 is_slop and loaded_slop is not None and loaded_slop.drum_tab is not None
             ),
+            # The song's DRUM PARTS (feedpak 1.17.0 "drums as arrangements"),
+            # primary first — names only; the selected part's payload streams
+            # as the `drum_tab`/`drum_hits` messages below. Always a list
+            # (empty when the pack has no drums, and a single entry for a
+            # legacy one-drum pack), so a part picker can bind unconditionally.
+            "drum_parts": [
+                {"id": p["id"], "name": p["name"]}
+                for p in (loaded_slop.drum_parts or [])
+            ] if is_slop and loaded_slop is not None else [],
             "has_notation": bool(
                 is_slop
                 and loaded_slop is not None
@@ -587,18 +603,35 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
         # client-side drums plugin keeps a fallback decoder for them.
         if is_slop and loaded_slop is not None and loaded_slop.drum_tab is not None:
             dt = loaded_slop.drum_tab
+            # Multiple drum parts: `?drum_part=<id>` picks which part's tab
+            # streams; the default (and any unknown id) is the PRIMARY —
+            # exactly the pre-parts behavior, so legacy clients notice nothing.
+            _dt_part_id = None
+            if loaded_slop.drum_parts:
+                _dt_part_id = loaded_slop.drum_parts[0]["id"]
+                if drum_part:
+                    for _p in loaded_slop.drum_parts:
+                        if _p["id"] == drum_part:
+                            dt = _p["drum_tab"]
+                            _dt_part_id = _p["id"]
+                            break
             kit = drums_mod.normalise_kit(dt.get("kit"))
             hits_wire = drums_mod.hits_to_wire(dt.get("hits") or [])
             _dt_name = dt.get("name")
             _dt_name = _dt_name if isinstance(_dt_name, str) and _dt_name else "Drums"
+            _dt_msg = {
+                "type": "drum_tab",
+                "version": int(dt.get("version", drums_mod.SCHEMA_VERSION)),
+                "name": _dt_name,
+                "kit": kit,
+                "total": len(hits_wire),
+            }
+            # Which part this stream carries — present only when the pack has
+            # a parts list, so the legacy frame stays byte-identical.
+            if _dt_part_id is not None:
+                _dt_msg["part_id"] = _dt_part_id
             try:
-                await websocket.send_json({
-                    "type": "drum_tab",
-                    "version": int(dt.get("version", drums_mod.SCHEMA_VERSION)),
-                    "name": _dt_name,
-                    "kit": kit,
-                    "total": len(hits_wire),
-                })
+                await websocket.send_json(_dt_msg)
                 for i in range(0, len(hits_wire), 500):
                     await websocket.send_json({
                         "type": "drum_hits",
