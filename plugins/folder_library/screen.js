@@ -742,7 +742,6 @@ function createFolderSurface(cfg) {
     // calls playSong or touches the main player's <audio> element.
     var _HOVER_PREVIEW_DELAY_MS = 800;   // dwell before preview — long enough that a click/drag doesn't trigger it
     var _previewIndHost = null;             // art element currently showing the indicator
-    var _previewMissing = {};               // filenames song_preview has no preview for (don't re-request)
 
     // Delegate to the song_preview plugin (the canonical preview subsystem): it
     // resolves the clip from the pack's manifest `preview:` key (falling back to
@@ -809,24 +808,20 @@ function createFolderSurface(cfg) {
         }
     }
     function _startPreview(song, host) {
+        // Only packs the backend flagged with a baked preview are requested at
+        // all — so hover never hits song_preview's 404 for a preview-less pack
+        // (which would log a console error). Play from 0; the clip is short.
+        if (!song || !song.has_preview) return;
         var url = _previewUrl(song);
-        if (!url || _previewMissing[song.filename]) return;   // no URL, or known no-preview → silent skip
+        if (!url) return;
         var a   = _previewEl();
         var seq = ++_previewSeq;
-        // HEAD-probe first: song_preview 404s for packs with no baked preview, and
-        // pointing <audio> at a 404 logs a console error (a fetch 404 is silent).
-        // Remember misses so re-hovering the same song doesn't re-request. Play
-        // from 0 — the clip is already short (don't seek by song.duration).
-        fetch(url, { method: 'HEAD' }).then(function (res) {
-            if (seq !== _previewSeq) return;                  // hover moved on before it resolved
-            if (!res.ok) { _previewMissing[song.filename] = true; return; }
-            _showIndicator(host);
-            a.onerror          = function () { if (seq === _previewSeq) _clearIndicator(); };
-            a.onloadedmetadata = function () { if (seq === _previewSeq) a.play().catch(function () {}); };
-            a.onplaying        = function () { if (seq === _previewSeq) _markIndicatorPlaying(); };
-            a.src = url;
-            a.load();
-        }).catch(function () {});                             // network error → no-op, no noise
+        _showIndicator(host);
+        a.onerror          = function () { if (seq === _previewSeq) _clearIndicator(); };
+        a.onloadedmetadata = function () { if (seq === _previewSeq) a.play().catch(function () {}); };
+        a.onplaying        = function () { if (seq === _previewSeq) _markIndicatorPlaying(); };
+        a.src = url;
+        a.load();
     }
     function _armHoverPreview(el, song, host) {
         el.addEventListener('mouseenter', function () {
