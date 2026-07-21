@@ -153,15 +153,14 @@ Each song object (built by `_meta()`):
   "added": 1748132400.0,
   "arrangements": ["Lead", "Rhythm", "Bass"],
   "stems": ["Drums", "Bass", "Vocals"],
-  "lyrics": true,
-  "audio_member": "preview.ogg"
+  "lyrics": true
 }
 ```
 
 - `filename` is the full relative path from the DLC root — pass it directly to `window.playSong()`.
 - `added` is a Unix timestamp (float, seconds) from `stat().st_mtime` — convert with `new Date(added * 1000)`. Always recomputed fresh (it changes when a file moves), even on a metadata-cache hit.
 - `arrangements` / `stems` are flat lists of **strings**, even though `extract_meta()` returns them as objects.
-- `audio_member` is the best in-pack audio file for **hover-preview**, resolved by `_audio_member()` (`preview.ogg` → `stems/full.ogg` → `stems/audio.mp3` → any stem; `null` if the pack has no audio). Fetch it as `/api/sloppak/<filename>/file/<audio_member>` (both path-encoded per segment). Resolving it server-side means the frontend previews with **one** request instead of probing (and 404ing) a hardcoded path. Cached with the rest of the meta.
+- Hover-preview audio is **not** resolved here — it delegates to the `song_preview` plugin (see Preview on Hover), so the tree carries no audio member.
 
 ### extract_meta returns arrangements/stems as objects, not strings
 
@@ -335,7 +334,7 @@ Drag-and-drop uses **pointer events** (mousedown/mousemove/mouseup), not the HTM
 
 Hovering a song for `_HOVER_PREVIEW_DELAY_MS` (800 ms) plays a short audio preview in place — no navigation to the player. Toggled by a play-icon toolbar button (`_injectToolbar`); **on by default** (`_previewHover`, persisted per surface under `<cfg.storePrefix>previewHover` — only an explicit stored `'false'` disables it).
 
-- **Audio** — a dedicated `_previewAudio` `<audio>` element (never the main player's). Source is `song.audio_member` (backend-resolved; see Song Metadata) fetched from `/api/sloppak/<file>/file/<member>`, played **from 0**. Don't seek by `song.duration` — the member is usually a short `preview.ogg` clip, so a full-song offset lands past its end and nothing plays.
+- **Audio** — a dedicated `_previewAudio` `<audio>` element (never the main player's), played **from 0**. The URL (`_previewUrl`) **delegates to the `song_preview` plugin** — `/api/plugins/song_preview/audio?file=<filename>` — the canonical preview subsystem. It resolves the clip **strictly** from the pack's manifest `preview:` key (a short baked clip) with Range support; there is **no stem fallback by design** (a full-length stem isn't a preview), so a pack without a baked preview — hand-authored packs, most tutorials — returns **404** and simply doesn't preview until `song_preview`'s backfill generates a clip. Don't resolve pack members here — reading the manifest is the spec-faithful way, guessing filenames (and playing a full-length stem as a "preview") is not. If `song_preview` isn't installed the endpoint 404s too, and either way `onerror` clears the indicator so preview no-ops. Don't seek by `song.duration` — the clip is short, so a full-song offset lands past its end and nothing plays.
 - **Sequence guard** — `_previewSeq` is bumped on every start/stop, so a slow load that resolves after the pointer has moved on is ignored.
 - **Drag / click safety** — `mouseenter` skips arming while a drag is in progress (`_dragState` non-null); `mousedown` clears the pending dwell timer **and** `_stopPreview()`s any already-playing one, so grabbing a song to drag (or clicking to play) never leaves a preview running.
 - **Indicator** — a waveform overlay (`.fl-wf`, 9 bars) over the art, drawn via a one-time injected `<style>` (`_ensurePreviewStyle`). It **fades in** (`fl-in`) to avoid an abrupt pop, and the bars animate only once audio actually fires (the `.playing` class, set on the `playing` event). Perf: bars animate with `transform: scaleY` + `will-change: transform` (GPU-composited, no per-frame JS), only while playing. `_showIndicator` / `_markIndicatorPlaying` / `_clearIndicator` manage it against `_previewIndHost`.

@@ -85,9 +85,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Folder Library — preview song on hover.** The Folders library view gains a
   toolbar toggle (on by default): hovering a song ~0.8s previews its audio in
   place, with a waveform indicator over the artwork, and stops on leave. Uses a
-  dedicated `<audio>` element (never the main player) and the backend resolves
-  each pack's audio member so every song previews in one request. The
-  preference persists per surface in `localStorage`.
+  dedicated `<audio>` element (never the main player) and delegates preview
+  resolution/serving to the `song_preview` plugin (manifest `preview:` key,
+  backfill, Range) rather than resolving pack audio itself. The preference
+  persists per surface in `localStorage`.
 
 ### Changed
 - **`GET /api/song/{f}?stems=1`** (new, opt-in) — returns the pack's playable stem
