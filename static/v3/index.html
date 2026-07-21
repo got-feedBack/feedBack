@@ -1194,6 +1194,10 @@
                         <button id="arr-default-pin" type="button" onclick="pinCurrentArrangementDefault()" aria-pressed="false" aria-label="Select an arrangement to make it the default" class="v3-pop-pin" title="Select an arrangement to make it the default">☆</button>
                     </span>
                 </div>
+                <div class="v3-pop-row hidden" id="v3-drum-part-row">
+                    <span class="v3-pop-label">Drum part</span>
+                    <select id="drum-part-select" onchange="changeDrumPart(this.value)" class="v3-pop-select max-w-[130px]" title="Which drum chart to play — a song can carry several"></select>
+                </div>
                 <div class="v3-pop-row">
                     <span class="v3-pop-label" id="mastery-slider-label">Difficulty</span>
                     <span class="flex items-center gap-2">
