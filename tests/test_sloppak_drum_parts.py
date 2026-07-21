@@ -118,6 +118,24 @@ def test_two_parts_resolve_primary_first_with_alias_identity(tmp_path: Path):
     assert loaded.drum_parts[1]["drum_tab"]["hits"][0]["t"] == 2.0
 
 
+def test_primary_pointer_equivalent_path_is_not_duplicated(tmp_path: Path):
+    manifest = {
+        "drum_tab": "drum_tab.json",
+        "arrangements": [
+            {"id": "lead", "name": "Lead", "file": "arrangements/lead.json"},
+            {"id": "kit", "name": "Live Kit", "type": "drums",
+             "drum_tab": "./drum_tab.json"},
+        ],
+    }
+    pak = _write_pak(tmp_path, manifest, {"drum_tab.json": _tab("Drums")})
+    loaded = _load(pak, tmp_path)
+    assert loaded.drum_parts is not None
+    assert [(p["id"], p["name"]) for p in loaded.drum_parts] == [
+        ("kit", "Live Kit"),
+    ]
+    assert loaded.drum_parts[0]["drum_tab"] is loaded.drum_tab
+
+
 def test_legacy_single_drum_pack_gets_a_one_part_list(tmp_path: Path):
     pak = _write_pak(tmp_path, {"drum_tab": "drum_tab.json"}, {
         "drum_tab.json": _tab("Drums"),

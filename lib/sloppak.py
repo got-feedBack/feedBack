@@ -790,14 +790,23 @@ def _resolve_drum_parts(
     primary_name = None
     extra_parts: list[dict] = []
     seen_rels: set[str] = set()
+    # Use the same canonical, traversal-safe identity as zip member lookup so
+    # equivalent spellings ("x.json", "./x.json", or backslashes) identify
+    # one file. Otherwise an alias pointer can reload and duplicate the primary.
+    primary_rel_key = (
+        _zip_member_key(drum_tab_rel.strip())
+        if isinstance(drum_tab_rel, str) and drum_tab_rel.strip() else None
+    )
     for entry in drum_pointer_entries:
         rel = str(entry.get("drum_tab") or "").strip()
-        if not rel or rel in seen_rels:
+        rel_key = _zip_member_key(rel) if rel else None
+        rel_identity = rel_key or rel
+        if not rel or rel_identity in seen_rels:
             continue
-        seen_rels.add(rel)
+        seen_rels.add(rel_identity)
         entry_id = str(entry.get("id") or "").strip()
         entry_name = str(entry.get("name") or "").strip()
-        if isinstance(drum_tab_rel, str) and rel == drum_tab_rel.strip():
+        if primary_rel_key is not None and rel_key == primary_rel_key:
             if entry_id:
                 primary_id = entry_id
             if entry_name:
