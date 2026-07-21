@@ -167,6 +167,33 @@ def test_download_worker_end_to_end(client, tmp_path):
     assert "sha256" in bad["error"]
 
 
+def test_content_packs_build_roundtrips_through_download(client, tmp_path):
+    # tools/content_packs.py must produce a zip the real career worker accepts:
+    # build_pack → manifest_entry → _download_pack → installed.
+    from tools import content_packs
+
+    src = tmp_path / "bar"
+    src.mkdir()
+    for s in career_routes.REQUIRED_LOOPS:
+        (src / f"{s}.mp4").write_bytes(b"fake-" + s.encode())
+    (src / "cheer.mp4").write_bytes(b"fake-cheer")
+    (src / "manifest.json").write_text(json.dumps({
+        "venue": "bar", "version": 1,
+        "loops": {s: f"{s}.mp4" for s in career_routes.REQUIRED_LOOPS},
+        "stingers": {"cheer": "cheer.mp4"},
+    }))
+    out_dir = tmp_path / "packs"
+    zip_path = out_dir / content_packs.pack_asset("bar", 1)
+    info = content_packs.build_pack(src, zip_path)
+    entry = content_packs.manifest_entry(zip_path, zip_path.resolve().as_uri())
+    assert entry["sha256"] == info["sha256"] and entry["bytes"] == info["bytes"]
+
+    progress = {"status": "running", "bytes_done": 0, "bytes_total": 0, "error": None}
+    career_routes._download_pack("bar", entry, progress)
+    assert progress["status"] == "done", progress["error"]
+    assert career_routes._installed("bar")
+
+
 def test_double_download_409s(client, monkeypatch):
     bar = career_routes._venue("bar")
     monkeypatch.setitem(bar, "pack", {"url": "http://x/pack.zip", "sha256": "0" * 64})
