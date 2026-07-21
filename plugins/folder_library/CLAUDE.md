@@ -341,8 +341,6 @@ Hovering a song for `_HOVER_PREVIEW_DELAY_MS` (800 ms) plays a short audio previ
 - **Indicator** — a waveform overlay (`.fl-wf`, 9 bars) over the art, drawn via a one-time injected `<style>` (`_ensurePreviewStyle`). It **fades in** (`fl-in`) to avoid an abrupt pop, and the bars animate only once audio actually fires (the `.playing` class, set on the `playing` event). Perf: bars animate with `transform: scaleY` + `will-change: transform` (GPU-composited, no per-frame JS), only while playing. `_showIndicator` / `_markIndicatorPlaying` / `_clearIndicator` manage it against `_previewIndHost`.
 - **CSS gotcha** — set the bar animation with **longhand** `animation-name`/`-duration`/… , not the `animation` shorthand: the shorthand resets `animation-delay` to 0 and (being higher-specificity) overrode the per-bar `nth-child` delays, making every bar move in sync.
 
-Changing `screen.js` needs a re-fetch: the host loads it as `screen.js?v=<plugin.json version>`, so **bump `plugin.json` `version`** to ship a change to users (or hard-refresh while developing).
-
 ## Roadmap
 
 Implemented since the original release: **nested subfolders** (recursive tree + create-inside-folder), drag-and-drop, sort, advanced filtering, server-side tree filtering synced to the host library, the warm metadata cache, and **preview-on-hover** (see above).
