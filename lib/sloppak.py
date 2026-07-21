@@ -935,6 +935,11 @@ def load_song(
         # the arrangement JSON (name, tuning, capo, centOffset).
         if entry.get("name"):
             arr.name = str(entry["name"])
+        # Editor-authored instrument type (feedpak-spec §5.2 / editor PR #335).
+        # Drives arrangement_string_count's bass fallback so a bass authored on
+        # an arrangement whose NAME doesn't say "bass" still reports 4 strings.
+        if entry.get("type"):
+            arr.type = str(entry["type"]).strip().lower()
         if "tuning" in entry:
             arr.tuning = list(entry["tuning"])
         if "capo" in entry:
