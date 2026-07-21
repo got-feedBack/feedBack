@@ -742,14 +742,16 @@ function createFolderSurface(cfg) {
     // calls playSong or touches the main player's <audio> element.
     var _HOVER_PREVIEW_DELAY_MS = 800;   // dwell before preview — long enough that a click/drag doesn't trigger it
     var _previewIndHost = null;             // art element currently showing the indicator
+    var _previewMissing = {};               // filenames song_preview has no preview for (don't re-request)
 
-    // The backend resolves the correct in-pack audio member (song.audio_member),
-    // so we preview with a single request — no probing / 404s. Null = no audio.
+    // Delegate to the song_preview plugin (the canonical preview subsystem): it
+    // resolves the clip from the pack's manifest `preview:` key (falling back to
+    // the default stem), serves it with Range support, and backfills a missing
+    // preview.ogg. If song_preview isn't installed the endpoint 404s and the
+    // audio's onerror clears the indicator — preview no-ops, nothing breaks.
     function _previewUrl(song) {
-        if (!song || !song.audio_member) return null;
-        var enc = song.filename.split('/').map(encodeURIComponent).join('/');
-        var mem = song.audio_member.split('/').map(encodeURIComponent).join('/');
-        return '/api/sloppak/' + enc + '/file/' + mem;
+        if (!song || !song.filename) return null;
+        return '/api/plugins/song_preview/audio?file=' + encodeURIComponent(song.filename);
     }
 
     function _ensurePreviewStyle() {
@@ -807,20 +809,24 @@ function createFolderSurface(cfg) {
         }
     }
     function _startPreview(song, host) {
-        // Play from 0 — preview.ogg is already a short curated clip, and the
-        // full-track fallbacks are fine from the start. (Seeking by a fraction
-        // of song.duration broke playback whenever the offset landed past the
-        // end of a short preview clip.)
         var url = _previewUrl(song);
-        if (!url) return;                    // pack carries no previewable audio
+        if (!url || _previewMissing[song.filename]) return;   // no URL, or known no-preview → silent skip
         var a   = _previewEl();
         var seq = ++_previewSeq;
-        _showIndicator(host);
-        a.onerror         = function () { if (seq === _previewSeq) _clearIndicator(); };
-        a.onloadedmetadata = function () { if (seq === _previewSeq) a.play().catch(function () {}); };
-        a.onplaying       = function () { if (seq === _previewSeq) _markIndicatorPlaying(); };
-        a.src = url;
-        a.load();
+        // HEAD-probe first: song_preview 404s for packs with no baked preview, and
+        // pointing <audio> at a 404 logs a console error (a fetch 404 is silent).
+        // Remember misses so re-hovering the same song doesn't re-request. Play
+        // from 0 — the clip is already short (don't seek by song.duration).
+        fetch(url, { method: 'HEAD' }).then(function (res) {
+            if (seq !== _previewSeq) return;                  // hover moved on before it resolved
+            if (!res.ok) { _previewMissing[song.filename] = true; return; }
+            _showIndicator(host);
+            a.onerror          = function () { if (seq === _previewSeq) _clearIndicator(); };
+            a.onloadedmetadata = function () { if (seq === _previewSeq) a.play().catch(function () {}); };
+            a.onplaying        = function () { if (seq === _previewSeq) _markIndicatorPlaying(); };
+            a.src = url;
+            a.load();
+        }).catch(function () {});                             // network error → no-op, no noise
     }
     function _armHoverPreview(el, song, host) {
         el.addEventListener('mouseenter', function () {
@@ -1838,8 +1844,8 @@ function createFolderSurface(cfg) {
         init: _init,
         onScreenChanged: _onScreenChanged,
         render: _render,
-        // Pure window arithmetic, exposed for tests (no DOM needed).
-        __test: { visibleWindow: _visibleWindow, VIRTUAL_MIN: VIRTUAL_MIN, VIRTUAL_BUFFER: VIRTUAL_BUFFER },
+        // Pure helpers, exposed for tests (no DOM needed).
+        __test: { visibleWindow: _visibleWindow, VIRTUAL_MIN: VIRTUAL_MIN, VIRTUAL_BUFFER: VIRTUAL_BUFFER, previewUrl: _previewUrl },
     };
 }
 
