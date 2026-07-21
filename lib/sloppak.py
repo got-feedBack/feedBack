@@ -882,16 +882,25 @@ def load_song(
         rel = rel_raw.strip() if isinstance(rel_raw, str) else ""
         notation_raw = entry.get("notation")
         has_notation_key = isinstance(notation_raw, str) and bool(notation_raw.strip())
-        if not rel and not has_notation_key:
+        _etype = str(entry.get("type") or "").strip().lower()
+        is_drums = _etype in ("drums", "drum")
+        # A drums-typed entry MUST NEVER become a fretted Arrangement (grading
+        # invariant, spec §5.2/§7.5): route on `type` FIRST, not on file
+        # absence — a malformed drums entry that also carries a note file/
+        # notation would otherwise fall through and grade as garbage.
+        if is_drums or (not rel and not has_notation_key):
             # A DRUM-PART POINTER entry (feedpak 1.17.0 "drums as
             # arrangements"): `type: drums` with a per-arrangement `drum_tab`
-            # file and no note file. Collect it for the drum-parts load after
-            # this loop — but NEVER turn it into a fretted Arrangement: this
-            # skip is the grading invariant (a drum part must not reach the
-            # fretted pipeline, where its empty chart would grade as garbage).
-            _etype = str(entry.get("type") or "").strip().lower()
-            if _etype in ("drums", "drum") and isinstance(entry.get("drum_tab"), str):
+            # file. Collect it for the drum-parts load after this loop.
+            if is_drums and isinstance(entry.get("drum_tab"), str):
                 drum_pointer_entries.append(entry)
+            elif is_drums:
+                # Drums-typed but no drum_tab pointer — drop it (any note
+                # file/notation it carries is ignored), never fret it.
+                log.warning(
+                    "sloppak: drums-typed arrangement entry %r has no drum_tab pointer — dropped",
+                    entry.get("id"),
+                )
             elif isinstance(entry.get("drum_tab"), str):
                 log.warning(
                     "sloppak: arrangement entry has drum_tab %r but type=%r — ignored",

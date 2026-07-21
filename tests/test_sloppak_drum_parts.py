@@ -19,6 +19,7 @@ a per-arrangement `drum_tab` file pointer and NO note `file`. The loader:
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import yaml
@@ -98,6 +99,28 @@ def test_pointer_entries_never_become_fretted_arrangements(tmp_path: Path):
     assert [a.name for a in loaded.song.arrangements] == ["Lead"]
     # And the ids list stays parallel to song.arrangements (skipped entries
     # contribute nothing) — a misalignment here would remap every chart edit.
+    assert loaded.arrangement_ids == ["lead"]
+
+
+def test_drums_typed_entry_with_note_file_never_frets(tmp_path: Path):
+    # A malformed entry: type:drums but ALSO carrying a note `file`. Keying the
+    # skip on file absence would let it through as a fretted, selectable,
+    # gradeable Arrangement (spec §5.2/§7.5 MUST-NOT). Routing on `type` first
+    # drops it instead — it never reaches song.arrangements.
+    bogus = {
+        "name": "Bogus", "tuning": [0, 0, 0, 0, 0, 0], "capo": 0,
+        "notes": [], "chords": [], "anchors": [], "handshapes": [],
+        "templates": [], "beats": [], "sections": [],
+    }
+    pak = _write_pak(tmp_path, {
+        "arrangements": [
+            {"id": "lead", "name": "Lead", "file": "arrangements/lead.json"},
+            {"id": "bad", "name": "Bogus", "type": "drums",
+             "file": "arrangements/bogus.json"},
+        ],
+    }, {"arrangements/bogus.json": bogus})
+    loaded = _load(pak, tmp_path)
+    assert [a.name for a in loaded.song.arrangements] == ["Lead"]
     assert loaded.arrangement_ids == ["lead"]
 
 
@@ -231,7 +254,18 @@ def test_drum_pointer_with_wrong_type_logs_warning(tmp_path: Path, caplog):
             {"id": "typo", "type": "druns", "drum_tab": "drum_tab_typo.json"},
         ],
     }, {"drum_tab_typo.json": _tab("Typo")})
-    loaded = _load(pak, tmp_path)
+    # feedBack sets propagate=False, so pytest's root capture sees nothing from
+    # it — attach caplog's handler to the feedBack logger and pin WARNING
+    # regardless of ambient level (a sibling test can leak ERROR onto this tree).
+    lg = logging.getLogger("feedBack")
+    orig_level = lg.level
+    lg.addHandler(caplog.handler)
+    lg.setLevel(logging.WARNING)
+    try:
+        loaded = _load(pak, tmp_path)
+    finally:
+        lg.removeHandler(caplog.handler)
+        lg.setLevel(orig_level)
     assert loaded.drum_parts is None
     assert "has drum_tab" in caplog.text and "type='druns'" in caplog.text
 

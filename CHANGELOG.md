@@ -20,7 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loaded as fretted arrangements — the loader's file/notation gate keeps a drum
   part out of the fretted pipeline (and out of note-detection grading), pinned
   by test. Legacy single-drum packs read exactly as before, as a one-part list.
-- **Chart-transform coordinator.** Synchronous transforms run after difficulty filtering; host
+- **`chart-transform` capability domain (#952)** — plugins can now remap the
+  chart before rendering and scoring through a core-owned provider
+  coordinator. Synchronous transforms run after difficulty filtering; host
   data is isolated from providers, accepted timelines are time-sorted, and
   failures fall back to the original chart with a fixed public reason.
   Effective chart arrays and metadata are available to 2D/custom renderers
