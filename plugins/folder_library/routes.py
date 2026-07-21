@@ -12,6 +12,14 @@ from fastapi.responses import JSONResponse
 import shutil
 import re
 
+# Core manifest reader — used only to tell the frontend which packs actually
+# carry a baked preview (manifest `preview:` key), so hover never requests a
+# preview-less pack and logs a 404. Guarded so the plugin still loads without it.
+try:
+    from sloppak import load_manifest as _load_manifest
+except Exception:
+    _load_manifest = None
+
 
 # ── Pure, testable helpers ─────────────────────────────────────────────────
 
@@ -136,7 +144,13 @@ def setup(app, context):
 
         # Cache miss — run the expensive extract.
         m = {"title": None, "artist": None, "album": None, "duration": None,
-             "year": None, "tuning": None, "arrangements": [], "stems": [], "lyrics": False}
+             "year": None, "tuning": None, "arrangements": [], "stems": [], "lyrics": False,
+             "has_preview": False}
+        if _load_manifest is not None:
+            try:
+                m["has_preview"] = bool((_load_manifest(p) or {}).get("preview"))
+            except Exception:
+                pass
         try:
             raw = context["extract_meta"](p)
             if raw:
