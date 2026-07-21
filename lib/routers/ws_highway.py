@@ -143,6 +143,11 @@ def _sanitize_authors(manifest: dict | None) -> list[dict]:
     return out
 
 
+def _drum_part_id_for_wire(drum_parts: list[dict] | None, selected_id: str | None) -> str | None:
+    """Expose a part id only when the pack genuinely has multiple parts."""
+    return selected_id if selected_id is not None and len(drum_parts or []) > 1 else None
+
+
 @router.websocket("/ws/highway/{filename:path}")
 async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
                      naming_mode: str = "legacy", drum_part: str = ""):
@@ -626,10 +631,11 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
                 "kit": kit,
                 "total": len(hits_wire),
             }
-            # Which part this stream carries — present only when the pack has
-            # a parts list, so the legacy frame stays byte-identical.
-            if _dt_part_id is not None:
-                _dt_msg["part_id"] = _dt_part_id
+            # Only multi-part packs identify a part on the wire. Legacy packs
+            # synthesize a one-item list internally but keep their old frame.
+            _wire_part_id = _drum_part_id_for_wire(loaded_slop.drum_parts, _dt_part_id)
+            if _wire_part_id is not None:
+                _dt_msg["part_id"] = _wire_part_id
             try:
                 await websocket.send_json(_dt_msg)
                 for i in range(0, len(hits_wire), 500):

@@ -776,6 +776,72 @@ def _load_drum_tab_file(source_dir: Path, rel: str, label: str) -> dict | None:
     return raw
 
 
+def _resolve_drum_parts(
+    source_dir: Path,
+    drum_tab_rel: object,
+    drum_tab_data: dict | None,
+    drum_pointer_entries: list[dict],
+) -> tuple[dict | None, list[dict] | None]:
+    """Resolve drum pointers into a primary-first list with unique ids."""
+    if drum_tab_data is None and not drum_pointer_entries:
+        return drum_tab_data, None
+
+    primary_id = "drums"
+    primary_name = None
+    extra_parts: list[dict] = []
+    seen_rels: set[str] = set()
+    for entry in drum_pointer_entries:
+        rel = str(entry.get("drum_tab") or "").strip()
+        if not rel or rel in seen_rels:
+            continue
+        seen_rels.add(rel)
+        entry_id = str(entry.get("id") or "").strip()
+        entry_name = str(entry.get("name") or "").strip()
+        if isinstance(drum_tab_rel, str) and rel == drum_tab_rel.strip():
+            if entry_id:
+                primary_id = entry_id
+            if entry_name:
+                primary_name = entry_name
+            continue
+        tab = _load_drum_tab_file(source_dir, rel, f"drum part {entry_id or rel}")
+        if tab is None:
+            continue
+        tab_name = tab.get("name")
+        extra_parts.append({
+            "id": entry_id,
+            "name": entry_name
+                or (tab_name if isinstance(tab_name, str) and tab_name else "Drums"),
+            "drum_tab": tab,
+        })
+
+    parts: list[dict] = []
+    used_ids: set[str] = set()
+    if drum_tab_data is not None:
+        if primary_name is None:
+            tab_name = drum_tab_data.get("name")
+            primary_name = tab_name if isinstance(tab_name, str) and tab_name else "Drums"
+        parts.append({"id": primary_id, "name": primary_name, "drum_tab": drum_tab_data})
+        used_ids.add(primary_id)
+
+    next_generated_id = 2
+    for part in extra_parts:
+        part_id = part["id"]
+        if not part_id or part_id in used_ids:
+            while f"drums-{next_generated_id}" in used_ids:
+                next_generated_id += 1
+            part_id = f"drums-{next_generated_id}"
+            next_generated_id += 1
+        part["id"] = part_id
+        used_ids.add(part_id)
+        parts.append(part)
+
+    if not parts:
+        return drum_tab_data, None
+    if drum_tab_data is None:
+        drum_tab_data = parts[0]["drum_tab"]
+    return drum_tab_data, parts
+
+
 def load_song(
     filename: str,
     dlc_root: Path,
@@ -817,6 +883,11 @@ def load_song(
             _etype = str(entry.get("type") or "").strip().lower()
             if _etype in ("drums", "drum") and isinstance(entry.get("drum_tab"), str):
                 drum_pointer_entries.append(entry)
+            elif isinstance(entry.get("drum_tab"), str):
+                log.warning(
+                    "sloppak: arrangement entry has drum_tab %r but type=%r — ignored",
+                    entry.get("drum_tab"), entry.get("type"),
+                )
             continue
         data = None
         if rel:
@@ -924,59 +995,11 @@ def load_song(
     if isinstance(drum_tab_rel, str) and drum_tab_rel:
         drum_tab_data = _load_drum_tab_file(source_dir, drum_tab_rel, "drum_tab")
 
-    # DRUM PARTS (feedpak 1.17.0 "drums as arrangements"): resolve the
-    # `type: drums` pointer entries collected in the arrangements loop into a
-    # primary-first parts list. The entry whose pointer names the SAME file as
-    # the song-level `drum_tab:` key is the PRIMARY's alias — it contributes
-    # its id/name but is never loaded twice. Extra parts load their own files
-    # with the same permissive posture (a bad part disables that part only).
-    drum_parts: list[dict] | None = None
-    if drum_tab_data is not None or drum_pointer_entries:
-        _primary_id = "drums"
-        _primary_name = None
-        _extra_parts: list[dict] = []
-        _seen_rels: set[str] = set()
-        for _entry in drum_pointer_entries:
-            _rel = str(_entry.get("drum_tab") or "").strip()
-            if not _rel or _rel in _seen_rels:
-                continue
-            _seen_rels.add(_rel)
-            _eid = str(_entry.get("id") or "").strip()
-            _ename = str(_entry.get("name") or "").strip()
-            if isinstance(drum_tab_rel, str) and _rel == drum_tab_rel.strip():
-                # The primary's alias entry — adopt its identity only.
-                if _eid:
-                    _primary_id = _eid
-                if _ename:
-                    _primary_name = _ename
-                continue
-            _tab = _load_drum_tab_file(source_dir, _rel, "drum part")
-            if _tab is None:
-                continue
-            _tab_name = _tab.get("name")
-            _extra_parts.append({
-                "id": _eid or f"drums-{len(_extra_parts) + 2}",
-                "name": _ename
-                    or (_tab_name if isinstance(_tab_name, str) and _tab_name else "Drums"),
-                "drum_tab": _tab,
-            })
-        _parts: list[dict] = []
-        if drum_tab_data is not None:
-            if _primary_name is None:
-                _dt_name = drum_tab_data.get("name")
-                _primary_name = _dt_name if isinstance(_dt_name, str) and _dt_name else "Drums"
-            # The primary's payload IS the song-level tab (same object).
-            _parts.append({"id": _primary_id, "name": _primary_name, "drum_tab": drum_tab_data})
-        _parts.extend(_extra_parts)
-        if _parts:
-            if drum_tab_data is None:
-                # Pointer-only pack (a writer omitted the song-level alias —
-                # spec writers keep it, but a reader must cope): the first
-                # part becomes the primary for every legacy consumer
-                # (has_drum_tab, the default drum_tab stream, the drum-only
-                # placeholder arrangement below).
-                drum_tab_data = _parts[0]["drum_tab"]
-            drum_parts = _parts
+    # Keep the dense compatibility logic independently testable and guarantee
+    # ids are unique before the highway exposes them as selectors.
+    drum_tab_data, drum_parts = _resolve_drum_parts(
+        source_dir, drum_tab_rel, drum_tab_data, drum_pointer_entries,
+    )
 
     # Drum-only sloppak: every GP track was percussion, so it ships a
     # drum_tab but no pitched arrangements. The highway WS rejects an empty

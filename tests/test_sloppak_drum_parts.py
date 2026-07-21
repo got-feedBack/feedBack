@@ -191,6 +191,33 @@ def test_duplicate_pointer_rels_load_once(tmp_path: Path):
     assert [p["id"] for p in loaded.drum_parts] == ["drums", "drums-2"]
 
 
+def test_duplicate_part_ids_are_made_unique(tmp_path: Path):
+    manifest = _two_part_manifest()
+    manifest["arrangements"][2]["id"] = "drums"
+    manifest["arrangements"].append(
+        {"id": "drums-2", "name": "Aux", "type": "drums",
+         "drum_tab": "drum_tab_aux.json"})
+    pak = _write_pak(tmp_path, manifest, {
+        "drum_tab.json": _tab("Drums"),
+        "drum_tab_drums-2.json": _tab("Drums (Live)"),
+        "drum_tab_aux.json": _tab("Aux"),
+    })
+    loaded = _load(pak, tmp_path)
+    assert [p["id"] for p in loaded.drum_parts] == ["drums", "drums-2", "drums-3"]
+
+
+def test_drum_pointer_with_wrong_type_logs_warning(tmp_path: Path, caplog):
+    pak = _write_pak(tmp_path, {
+        "arrangements": [
+            {"id": "lead", "name": "Lead", "file": "arrangements/lead.json"},
+            {"id": "typo", "type": "druns", "drum_tab": "drum_tab_typo.json"},
+        ],
+    }, {"drum_tab_typo.json": _tab("Typo")})
+    loaded = _load(pak, tmp_path)
+    assert loaded.drum_parts is None
+    assert "has drum_tab" in caplog.text and "type='druns'" in caplog.text
+
+
 # ── Drum-only pack with parts ────────────────────────────────────────────────
 
 def test_drum_only_pack_with_pointer_entries_still_synthesizes_placeholder(tmp_path: Path):
