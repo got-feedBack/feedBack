@@ -15,12 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (primary first; the entry aliasing the song-level `drum_tab:` key is the
   primary and is never loaded twice), the highway WS `song_info` gains a
   `drum_parts` name list, and `?drum_part=<id>` on the WS URL selects which
-  part's tab streams (`drum_tab` messages carry `part_id` when a parts list
-  exists; unknown ids fall back to the primary). Pointer entries are **never**
+  part's tab streams (`drum_tab` messages carry `part_id` when multiple parts
+  exist; unknown ids fall back to the primary). Pointer entries are **never**
   loaded as fretted arrangements — the loader's file/notation gate keeps a drum
   part out of the fretted pipeline (and out of note-detection grading), pinned
   by test. Legacy single-drum packs read exactly as before, as a one-part list.
-  coordinator. Synchronous transforms run after difficulty filtering; host
+- **Chart-transform coordinator.** Synchronous transforms run after difficulty filtering; host
   data is isolated from providers, accepted timelines are time-sorted, and
   failures fall back to the original chart with a fixed public reason.
   Effective chart arrays and metadata are available to 2D/custom renderers
