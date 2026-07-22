@@ -1030,7 +1030,9 @@
         if (tuningLabel) {
             const rawOffsets = (typeof window.parseRawTuningOffsets === 'function')
                 ? (window.parseRawTuningOffsets(shown.tuning_offsets)
-                    || window.parseRawTuningOffsets(shownTuningOffsets(shown)))
+                    || window.parseRawTuningOffsets(shownTuningOffsets(shown))
+                    || window.parseRawTuningOffsets(shownTuning)
+                    || window.parseRawTuningOffsets(shown.tuning))
                 : null;
             const targetNotes = (tuningLabel === 'Custom Tuning' && rawOffsets
                 && typeof window.displayTuningTargets === 'function')
