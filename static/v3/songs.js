@@ -135,6 +135,17 @@
         return true;
     }
 
+    function _activeInstrument() {
+        var id = sm && sm._activeInstrumentProfile;
+        if (!id) return null;
+        var insts = window.feedBack && window.feedBack._instruments;
+        if (!Array.isArray(insts)) return null;
+        for (var i = 0; i < insts.length; i++) {
+            if (id.indexOf(insts[i].id) === 0) return insts[i];
+        }
+        return null;
+    }
+
     const STEMS = ['guitar', 'bass', 'drums', 'vocals', 'piano', 'other'];
     const PAGE_SIZE = 24;
     // Extra rows rendered above/below the viewport so a fast scroll doesn't flash
@@ -1000,10 +1011,11 @@
         for (const chip of chips) {
             const offs = chip.getAttribute('data-tuning-offsets').split(',').map(Number);
             if (!offs.length || offs.some((n) => !isFinite(n))) continue;
-            // Pass the instrument so coverage uses the right base pitches (bass vs guitar).
+            // Pass the instrument so coverage uses the right base pitches.
             const arrangement = chip.dataset.tuningBass === '1' ? 'Bass' : 'Lead';
+            const instId = chip.dataset.tuningInstrument || (chip.dataset.tuningBass === '1' ? 'bass' : 'guitar');
             let rep = null;
-            try { rep = await cov({ tuning: offs, stringCount: offs.length, arrangement: arrangement }); } catch (_) { rep = null; }
+            try { rep = await cov({ tuning: offs, stringCount: offs.length, arrangement: arrangement, instrument: instId }); } catch (_) { rep = null; }
             if (token !== _tuningDecorToken) return;   // superseded by a re-paint / tuning change
             if (rep) _applyChipMatch(chip, rep.covered ? 'match' : 'retune');
         }
@@ -1055,21 +1067,24 @@
             // a 4-string bass tuning read as guitar can false-match a guitar player.
             const chipArrs = shown.arrangements || [];
             // Bass either because the chip is SHOWING the bass chart's tuning
-            // (a bass player on a song that has one), or because every
-            // arrangement is a bass part. Checked via libInstrument() rather
-            // than comparing the two names — they are EQUAL for most songs, so
-            // a value comparison would flag a guitarist's chip as bass.
-            const chipIsBass = libInstrument() === 'bass'
+            // Which instrument this chip represents — read from the active
+            // instrument profile in the registry, falling back to the
+            // 3-perspective bass/lead detection for the tuner plugin's coverage
+            // checker (which only knows 'Bass' and 'Lead' arrangement labels).
+            const inst = _activeInstrument();
+            const instId = inst ? inst.id : (libInstrument() === 'bass' ? 'bass' : 'guitar');
+            const isBass = instId === 'bass'
                 || (chipArrs.length > 0
                     && chipArrs.every((a) => /\bbass\b/i.test((a && a.name) || '')));
-            // Truncate inferred bass offsets: 6-element guitar offsets copied
-            // to a bass chip must be 4 elements or the coverage checker
-            // compares 6-string guitar against 4-string bass → mismatch.
+            const stringCount = inst && inst.string_count ? inst.string_count : (isBass ? 4 : 6);
+            // Truncate offsets to the instrument's string count so the
+            // coverage checker compares the right number of strings.
             let chipOffsets = rawOffsets;
-            if (chipIsBass && chipOffsets && chipOffsets.length === 6) chipOffsets = chipOffsets.slice(0, 4);
+            if (chipOffsets && chipOffsets.length > stringCount) chipOffsets = chipOffsets.slice(0, stringCount);
             const matchAttr = (chipOffsets && chipOffsets.length)
                 ? ' data-tuning-chip data-tuning-offsets="' + esc(chipOffsets.join(',')) + '"'
-                    + (chipIsBass ? ' data-tuning-bass="1"' : '') : '';
+                    + ' data-tuning-instrument="' + esc(instId) + '"'
+                    + (isBass ? ' data-tuning-bass="1"' : '') : '';
             if (targetNotes) {
                 tuning = '<span class="' + pos + ' bg-fb-mid text-black text-[0.5625rem] font-bold px-1.5 py-0.5 rounded-sm leading-tight max-w-[5.5rem] text-center opacity-100 group-hover:opacity-0 transition"' + matchAttr + ' title="' + esc(badgeTitle) + '">'
                     + esc('Custom Tuning') + '<br><span class="font-semibold tracking-wide">' + esc(targetNotes) + '</span></span>';
@@ -4583,6 +4598,10 @@
         sm.on('instrument:changed', function (e) {
             var instId = e && e.detail && e.detail.instrument;
             if (!instId || !_autoFilterEnabled) return;
+            // Record the new instrument so working-tuning-changed skips its
+            // reload path — this handler already handles the reload.
+            _lastRenderInstrument = libInstrument();
+            state.filters.tunings = [];
             if (_applyArrangementAutoFilter(instId)) {
                 reload();
                 renderDrawerIfOpen();
