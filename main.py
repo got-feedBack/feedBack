@@ -44,6 +44,13 @@ def run() -> None:
         # record — including early startup messages — passes through the same
         # structured pipeline.
         log_config=None,
+        # Cap inbound WebSocket frames at the transport, before uvicorn
+        # materializes them in memory (its default is 16 MB). No client sends
+        # large frames to this server: the highway WS receives only small
+        # control messages, and the /ws/sync relay enforces its own tighter
+        # 16 KB application cap (routers/ws_sync.py MAX_FRAME_BYTES) — this is
+        # the defense-in-depth bound above it.
+        ws_max_size=64 * 1024,
     )
 
 

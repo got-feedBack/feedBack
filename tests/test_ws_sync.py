@@ -12,8 +12,10 @@ including that one client tripping a limit doesn't disturb the others.
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import sys
+import time
 
 import pytest
 from fastapi import FastAPI
@@ -162,6 +164,56 @@ def test_rate_cap_closes_flooding_sender(client, monkeypatch):
         with client.websocket_connect("/ws/sync/ROOM10") as c:
             c.send_text("fresh-socket")
             assert b.receive_text() == "fresh-socket"
+
+
+class _StalledPeer:
+    """A fake room member whose send never completes (peer stopped draining)."""
+
+    async def send_text(self, text):
+        await asyncio.Event().wait()
+
+
+def test_stalled_peer_is_evicted_and_healthy_peers_still_receive(client, monkeypatch):
+    monkeypatch.setattr(ws_sync, "SEND_TIMEOUT_SECONDS", 0.2)
+    with client.websocket_connect("/ws/sync/ROOM11") as a, \
+         client.websocket_connect("/ws/sync/ROOM11") as b:
+        # Wait for both handlers to have registered in the room, then inject
+        # the stalled peer directly (a real stalled TCP peer isn't
+        # constructible under TestClient).
+        deadline = time.monotonic() + 2.0
+        while len(ws_sync._rooms.get("ROOM11", {})) < 2:
+            assert time.monotonic() < deadline, "room never filled"
+            time.sleep(0.01)
+        stalled = _StalledPeer()
+        ws_sync._rooms["ROOM11"][stalled] = asyncio.Lock()
+
+        # Healthy delivery is not blocked behind the stalled peer, and by the
+        # time a second frame has round-tripped, the first fan-out's timeout
+        # has fired and evicted it.
+        a.send_text("f1")
+        assert b.receive_text() == "f1"
+        a.send_text("f2")
+        assert b.receive_text() == "f2"
+        assert stalled not in ws_sync._rooms["ROOM11"]
+
+
+def test_main_run_caps_uvicorn_ws_max_size():
+    """main.py must bound inbound WS frames at the transport (uvicorn defaults
+    to 16 MB, which would let a client materialize frames far past the relay's
+    16 KB application cap before the handler ever sees them)."""
+    import unittest.mock
+
+    import main
+
+    with (
+        unittest.mock.patch("logging_setup.configure_logging"),
+        unittest.mock.patch("uvicorn.run") as mock_run,
+    ):
+        main.run()
+
+    kwargs = mock_run.call_args.kwargs
+    assert kwargs.get("ws_max_size") == 64 * 1024
+    assert kwargs["ws_max_size"] >= ws_sync.MAX_FRAME_BYTES
 
 
 # ── Real-app integration ─────────────────────────────────────────────────────

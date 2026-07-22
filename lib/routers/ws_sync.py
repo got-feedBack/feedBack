@@ -48,6 +48,11 @@ MAX_CLIENTS_PER_ROOM = 16
 MAX_ROOMS = 32
 RATE_MSGS_PER_SEC = 120.0  # sustained inbound frames per socket
 RATE_BURST = 240.0  # token-bucket burst headroom
+# A peer that stops draining its socket would leave send_text() pending
+# forever — and since publishers await the fan-out gather, one stalled peer
+# would stall every publisher's receive loop behind it. Bounding the send
+# turns the stall into an eviction through the normal failed-send drop path.
+SEND_TIMEOUT_SECONDS = 5.0
 
 # RFC 6455 close codes.
 _WS_UNSUPPORTED_DATA = 1003  # binary frame on a text-only relay
@@ -63,7 +68,7 @@ _rooms: dict[str, dict[WebSocket, asyncio.Lock]] = {}
 
 async def _send_locked(peer: WebSocket, lock: asyncio.Lock, text: str) -> None:
     async with lock:
-        await peer.send_text(text)
+        await asyncio.wait_for(peer.send_text(text), timeout=SEND_TIMEOUT_SECONDS)
 
 
 @router.websocket("/ws/sync/{session_id}")
