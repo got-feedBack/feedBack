@@ -1029,8 +1029,8 @@
         let tuning = '';
         if (tuningLabel) {
             const rawOffsets = (typeof window.parseRawTuningOffsets === 'function')
-                ? (window.parseRawTuningOffsets(shownTuningOffsets(shown))
-                    || window.parseRawTuningOffsets(shownTuning))
+                ? (window.parseRawTuningOffsets(shown.tuning_offsets)
+                    || window.parseRawTuningOffsets(shownTuningOffsets(shown)))
                 : null;
             const targetNotes = (tuningLabel === 'Custom Tuning' && rawOffsets
                 && typeof window.displayTuningTargets === 'function')
@@ -1045,7 +1045,7 @@
                 ? ('Custom Tuning: ' + targetNotes)
                 : tuningLabel)
                 + (inferred ? ' — from the guitar chart (no bass arrangement)' : '');
-            const pos = 'absolute top-2 ' + (state.selectMode ? 'left-9' : 'left-2');
+            const pos = 'absolute top-0 rounded-br-md ' + (state.selectMode ? 'left-9' : 'left-0');
             // Tag the chip with its offsets so decorateTuningChips() can colour it
             // green (matches your current tuning) / amber (needs a retune) after paint.
             // Also flag a bass-only song (every arrangement is a bass part) so coverage
@@ -1064,10 +1064,10 @@
                 ? ' data-tuning-chip data-tuning-offsets="' + esc(rawOffsets.join(',')) + '"'
                     + (chipIsBass ? ' data-tuning-bass="1"' : '') : '';
             if (targetNotes) {
-                tuning = '<span class="' + pos + ' bg-fb-mid text-black text-[0.5625rem] font-bold px-1.5 py-0.5 rounded-sm leading-tight max-w-[5.5rem] text-center"' + matchAttr + ' title="' + esc(badgeTitle) + '">'
+                tuning = '<span class="' + pos + ' bg-fb-mid text-black text-[0.5625rem] font-bold px-1.5 py-0.5 rounded-sm leading-tight max-w-[5.5rem] text-center opacity-100 group-hover:opacity-0 transition"' + matchAttr + ' title="' + esc(badgeTitle) + '">'
                     + esc('Custom Tuning') + '<br><span class="font-semibold tracking-wide">' + esc(targetNotes) + '</span></span>';
             } else {
-                tuning = '<span class="' + pos + ' bg-fb-mid text-black text-[0.625rem] font-bold px-1.5 py-0.5 rounded-sm"' + matchAttr + ' title="' + esc(badgeTitle) + '">' + esc(tuningLabel) + (inferred ? '<span class="opacity-60"> ~</span>' : '') + '</span>';
+                tuning = '<span class="' + pos + ' bg-fb-mid text-black text-[0.625rem] font-bold px-1.5 py-0.5 rounded-sm opacity-100 group-hover:opacity-0 transition"' + matchAttr + ' title="' + esc(badgeTitle) + '">' + esc(tuningLabel) + (inferred ? '<span class="opacity-60"> ~</span>' : '') + '</span>';
             }
         }
         // Display-only (pointer-events-none) so a click falls through to the
