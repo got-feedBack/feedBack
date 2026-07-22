@@ -1059,7 +1059,7 @@
             // arrangement is a bass part. Checked via libInstrument() rather
             // than comparing the two names — they are EQUAL for most songs, so
             // a value comparison would flag a guitarist's chip as bass.
-            const chipIsBass = (libInstrument() === 'bass' && !!shown.bass_tuning_name)
+            const chipIsBass = libInstrument() === 'bass'
                 || (chipArrs.length > 0
                     && chipArrs.every((a) => /\bbass\b/i.test((a && a.name) || '')));
             // Truncate inferred bass offsets: 6-element guitar offsets copied
@@ -2783,8 +2783,10 @@
 
     function shownTuningOffsets(song) {
         const f = perspectiveTuningField();
-        if (f && song[f]) {
-            return song[f.replace('_name', '_offsets')] || song.tuning_offsets;
+        if (f) {
+            const offKey = f.replace('_name', '_offsets');
+            if (song[offKey]) return song[offKey];
+            return song.tuning_offsets;
         }
         return song.tuning_offsets;
     }
