@@ -81,7 +81,7 @@
 
             html += '<div id="' + id + '" class="' + (isOpen ? '' : 'hidden') + ' space-y-4 pl-4 border-l-2 border-fb-border/30">';
 
-            // ΓöÇΓöÇ Roles ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+            // ── Roles ──────────────────────────────────
             if (inst.roles && inst.roles.length) {
                 html += '<div><div class="text-[0.625rem] uppercase tracking-wider text-fb-textDim mb-1.5">Roles</div>' +
                     '<div class="flex flex-wrap gap-1">';
@@ -94,15 +94,15 @@
                 html += '</div></div>';
             }
 
-            // ΓöÇΓöÇ Arrangement name patterns (editable) ΓöÇΓöÇΓöÇΓöÇ
+            // ── Arrangement name patterns (editable) ────
             html += _renderEditableNames(inst, over);
 
-            // ΓöÇΓöÇ String counts (stringed, editable) ΓöÇΓöÇΓöÇΓöÇΓöÇ
+            // ── String counts (stringed, editable) ─────
             if (isStringed) {
                 html += _renderEditableStringCounts(inst, over);
             }
 
-            // ΓöÇΓöÇ Custom tunings (stringed, editable) ΓöÇΓöÇΓöÇΓöÇ
+            // ── Custom tunings (stringed, editable) ────
             if (isStringed) {
                 html += _renderTunings(inst, over);
             }
@@ -160,7 +160,7 @@
                     ? '<button type="button" data-remove-name="' + esc(item.name) + '" data-inst="' + esc(inst.id) + '" class="ml-1 text-red-400 hover:text-red-300 text-[0.625rem]" title="Remove">&times;</button>'
                     : '';
                 html += '<span class="text-xs bg-gray-800/50 border ' + (item.source === 'user' ? 'border-green-700/50' : 'border-gray-700') + ' rounded-md px-2 py-0.5">' +
-                    esc(item.name) + ' <span class="text-fb-textDim text-[0.625rem]">ΓåÆ ' + esc(item.role) + '</span>' + removeBtn +
+                    esc(item.name) + ' <span class="text-fb-textDim text-[0.625rem]">\u2192 ' + esc(item.role) + '</span>' + removeBtn +
                     '</span>';
             }
             html += '</div>';
