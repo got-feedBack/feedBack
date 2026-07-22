@@ -234,6 +234,44 @@ test('a gold slam marks the bronze moment seen too — never both ceremonies', (
     assert.equal(w2.notifications.length, 0);
 });
 
+test('formatBytes renders the download-size disclosure (MB/GB, empty when unknown)', () => {
+    const f = load().__careerPassportTest.formatBytes;
+    assert.equal(f(351284599), '~335 MB');   // arena
+    assert.equal(f(359899852), '~343 MB');   // club
+    assert.equal(f(2 * 1024 * 1024 * 1024), '~2.0 GB');
+    assert.equal(f(0), '');                    // nothing to download
+    assert.equal(f(null), '');
+    assert.equal(f(undefined), '');
+});
+
+test('boot registers career achievements and unlocks career_started on first visit', () => {
+    // No achievements API in the bare-vm harness, so career's contributions
+    // land in the __feedBackAchievementsPending queue (the documented drain
+    // contract). Draining against a fake API must registerAll + unlock.
+    const w = load();   // fresh window → WELCOME_KEY unset → first visit
+    const pending = w.__feedBackAchievementsPending || [];
+    assert.ok(pending.length >= 2, 'register + career_started unlock should be queued');
+
+    const registered = [];
+    const unlocked = [];
+    const api = {
+        register: () => {},
+        registerAll: (defs) => defs.forEach((d) => registered.push(d.id)),
+        unlock: (id) => unlocked.push(id),
+    };
+    pending.forEach((fn) => fn(api));
+    assert.deepEqual(registered, ['career_started', 'first_venue_gig']);
+    assert.deepEqual(unlocked, ['career_started']);
+
+    // Second boot (welcomed flag now set) must NOT re-unlock career_started.
+    const store = { 'feedBack-career-welcomed': '1' };
+    const w2 = load(store);
+    const pending2 = w2.__feedBackAchievementsPending || [];
+    const unlocked2 = [];
+    pending2.forEach((fn) => fn({ register() {}, registerAll() {}, unlock: (id) => unlocked2.push(id) }));
+    assert.deepEqual(unlocked2, []);
+});
+
 test('careerTotals counts gold badges on the wall', () => {
     const t = load().__careerPassportTest;
     t.setView({

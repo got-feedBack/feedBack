@@ -29,6 +29,16 @@
     const PP_LABELS = { guitar: 'Guitar', bass: 'Bass', keys: 'Keys', drums: 'Drums' };
     const PP_BROCHURE_ART = ['🎸', '🎷', '🎹', '🥁', '🎺', '🎻', '🎤', '🪕'];
 
+    // First-visit welcome + career achievements (contributed to the achievements
+    // plugin via its cross-plugin API — career is a source, competency only).
+    const WELCOME_KEY = 'feedBack-career-welcomed';
+    const CAREER_ACHIEVEMENTS = [
+        { id: 'career_started', title: 'Hit the Road',
+          description: 'Start your career.', category: 'career', sourceId: 'career' },
+        { id: 'first_venue_gig', title: 'First Gig',
+          description: 'Play your first venue gig.', category: 'career', sourceId: 'career' },
+    ];
+
     let _state = null;
     let _pollTimer = 0;
     let _appliedManifestVenue = null;
@@ -46,6 +56,25 @@
     let _ppGigRun = null;        // {songs, venue_id, genre, genre_key, instrument, idx} mid-set
 
     function $(id) { return document.getElementById(id); }
+
+    // Human-readable pack size for the download-consent disclosure. '' when
+    // unknown/absent so callers can omit the "(~X MB)" suffix entirely.
+    function formatBytes(n) {
+        if (!n || n <= 0) return '';
+        const mb = n / (1024 * 1024);
+        return mb >= 1024 ? `~${(mb / 1024).toFixed(1)} GB` : `~${Math.round(mb)} MB`;
+    }
+
+    // Run fn against the achievements API now if it's loaded, else queue it for
+    // the achievements plugin to drain when it comes up (documented contract in
+    // plugins/achievements/screen.js — the __feedBackAchievementsPending queue).
+    function withAchievements(fn) {
+        const api = window.feedBack && window.feedBack.achievements;
+        if (api) { try { fn(api); } catch (_) { /* optional */ } return; }
+        (window.__feedBackAchievementsPending =
+            window.__feedBackAchievementsPending || []).push(fn);
+    }
+    function grantAchievement(id) { withAchievements((api) => api.unlock(id)); }
 
     function esc(s) {
         return String(s == null ? '' : s).replace(/[&<>"']/g,
@@ -121,7 +150,10 @@
         } else if (v.has_pack) {
             const err = dl.status === 'error'
                 ? `<div class="text-xs text-amber-400 mb-1">${esc(dl.error || 'Download failed')} — try again</div>` : '';
-            action = `${err}<button data-career-download="${esc(v.id)}" class="career-btn career-btn-primary">Download venue pack</button>`;
+            // Consent disclosure: this button starts a download — say its size.
+            const size = formatBytes(v.pack_bytes);
+            const label = size ? `Download venue pack (${size})` : 'Download venue pack';
+            action = `${err}<button data-career-download="${esc(v.id)}" class="career-btn career-btn-primary">${label}</button>`;
         } else {
             action = '<div class="text-xs text-gray-500">Venue pack coming soon — plays with the standard stage for now</div>';
         }
@@ -1309,6 +1341,7 @@
             });
             if (res.ok) gig = (await res.json()).gig;
         } catch (_) { /* summary still shows, unlogged */ }
+        if (gig) grantAchievement('first_venue_gig');  // idempotent; only 1st counts
         showGigSummary(run, gig);
         refreshPassports();
     }
@@ -1568,6 +1601,16 @@
         // announces the fresh mount points — same seam achievements uses.
         document.addEventListener('v3:profile-rendered', renderProfileWall);
         document.addEventListener('v3:dashboard-rendered', renderDashCard);
+        // Career achievements are contributed on every mount (register is
+        // idempotent) so they render greyed before they're earned.
+        withAchievements((api) => api.registerAll(CAREER_ACHIEVEMENTS));
+        // First visit IS "starting career" → the career_started milestone. The
+        // achievements plugin surfaces its own unlock toast, so career doesn't
+        // fire one here (would double up). WELCOME_KEY just avoids re-calling.
+        if (!lsGet(WELCOME_KEY)) {
+            lsSet(WELCOME_KEY, '1');
+            grantAchievement('career_started');
+        }
         refresh();
     }
 
@@ -1575,7 +1618,7 @@
     // the badge-diff logic; nothing here touches the DOM.
     window.__careerPassportTest = {
         ppKey, ppJitter, ppLabel, detectNewBadges, seenBadges, markBadgeSeen,
-        fmtHours, ppFillFraction, careerTotals, closestAskHTML,
+        fmtHours, ppFillFraction, careerTotals, closestAskHTML, formatBytes,
         onGigSongEnded, onGigSongStop,
         setGigRun(r) { _ppGigRun = r; },
         getGigRun() { return _ppGigRun; },
