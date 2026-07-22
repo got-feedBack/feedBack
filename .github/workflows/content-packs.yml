@@ -42,13 +42,22 @@ jobs:
       - name: Build & publish packs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Never interpolate dispatch inputs straight into the shell — a crafted
+          # value would execute on the runner with this job's write token. Pass
+          # via env, validate the formats, and use a Bash argument array.
+          VENUES: ${{ github.event.inputs.venues }}
+          VERSION: ${{ github.event.inputs.version }}
         run: |
-          dirs=""
-          for v in ${{ github.event.inputs.venues }}; do
-            dirs="$dirs plugins/career/venue-packs/$v"
+          set -euo pipefail
+          [[ "$VERSION" =~ ^[1-9][0-9]*$ ]] || { echo "::error::version must be a positive integer"; exit 1; }
+          [[ "$VENUES" =~ ^[a-z0-9][a-z0-9-]*(\ [a-z0-9][a-z0-9-]*)*$ ]] || { echo "::error::venues must be space-separated venue ids"; exit 1; }
+          read -r -a venues <<< "$VENUES"
+          dirs=()
+          for v in "${venues[@]}"; do
+            dirs+=("plugins/career/venue-packs/$v")
           done
-          python tools/content_packs.py $dirs \
-            --version ${{ github.event.inputs.version }} \
+          python tools/content_packs.py "${dirs[@]}" \
+            --version "$VERSION" \
             --publish \
             --manifest /tmp/packs-manifest.json
           cat /tmp/packs-manifest.json

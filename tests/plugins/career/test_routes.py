@@ -209,6 +209,23 @@ def test_content_packs_build_roundtrips_through_download(client, tmp_path):
     assert career_routes._installed("bar")
 
 
+def test_content_packs_rejects_files_the_downloader_would_refuse(tmp_path):
+    # A stray file (e.g. macOS .DS_Store) must fail the build, not get published
+    # and then break every client's download at _validate_pack_dir.
+    from tools import content_packs
+
+    src = tmp_path / "bar"
+    src.mkdir()
+    (src / "bored.mp4").write_bytes(b"fake")
+    (src / ".DS_Store").write_bytes(b"junk")
+    try:
+        content_packs.build_pack(src, tmp_path / "bar-pack-v1.zip")
+    except ValueError as e:
+        assert "downloader will reject" in str(e)
+    else:
+        raise AssertionError("build_pack accepted a .DS_Store the downloader rejects")
+
+
 def test_double_download_409s(client, monkeypatch):
     bar = career_routes._venue("bar")
     monkeypatch.setitem(bar, "pack", {"url": "http://x/pack.zip", "sha256": "0" * 64, "bytes": 123})

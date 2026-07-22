@@ -19,12 +19,18 @@ Run ``python tools/content_packs.py --selfcheck`` for the built-in round-trip.
 import argparse
 import hashlib
 import json
+import re
 import subprocess
 import sys
 import zipfile
 from pathlib import Path
 
 REPO = "got-feedBack/feedBack"  # where the content-packs release lives (public)
+
+# Must mirror career's download-time whitelist (plugins/career/routes.py
+# PACK_FILENAME_RE). If the builder packs a name the downloader rejects (e.g. a
+# stray .DS_Store), the published pack fails _validate_pack_dir for every client.
+PACK_FILENAME_RE = re.compile(r"^[a-z0-9_-]{1,64}\.(mp4|webm|mp3|json)$")
 
 
 def build_pack(src_dir: Path, out_zip: Path) -> dict:
@@ -44,6 +50,11 @@ def build_pack(src_dir: Path, out_zip: Path) -> dict:
                    key=lambda p: p.name)
     if not files:
         raise ValueError(f"no files to pack in {src_dir}")
+    bad = [p.name for p in files if not PACK_FILENAME_RE.fullmatch(p.name)]
+    if bad:
+        raise ValueError(
+            f"{src_dir}: files the downloader will reject: {bad} "
+            f"(allowed: {PACK_FILENAME_RE.pattern})")
     out_zip.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(out_zip, "w", zipfile.ZIP_STORED) as zf:
         # ZIP_STORED: the media (mp4/mp3) and .vst3 binaries are already
@@ -53,6 +64,10 @@ def build_pack(src_dir: Path, out_zip: Path) -> dict:
             # bytes don't depend on the checkout's file timestamps.
             info = zipfile.ZipInfo(p.name, date_time=(1980, 1, 1, 0, 0, 0))
             info.compress_type = zipfile.ZIP_STORED
+            # Pin create_system: ZipInfo defaults it from the host OS (0 on
+            # Windows, 3 on Unix), which would otherwise make the same pack
+            # hash differently across runners. 3 = Unix.
+            info.create_system = 3
             info.external_attr = 0o644 << 16
             zf.writestr(info, p.read_bytes())
     data = out_zip.read_bytes()
