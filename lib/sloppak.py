@@ -730,6 +730,125 @@ class LoadedSloppak:
     # separated stems the moment one drops below 100% — demucs recombination is
     # lossy, so the mixdown is strictly the better audio when nothing is muted.
     full_mix: str | None = None
+    # The song's DRUM PARTS (feedpak 1.17.0 "drums as arrangements"): one dict
+    # {"id", "name", "drum_tab"} per part, primary FIRST. A part comes from a
+    # `type: drums` arrangement entry carrying a per-arrangement `drum_tab`
+    # file pointer and NO note `file` — entries this loader deliberately never
+    # turns into fretted Arrangements (see the file/notation gate in
+    # load_song; that skip IS the grading invariant). The primary part's
+    # payload is the SAME object as `drum_tab` above (the song-level key is
+    # its back-compat alias). None when the pack has no drums at all; a
+    # single-part list for a legacy pack with only the song-level key.
+    drum_parts: list[dict] | None = None
+
+
+def _load_drum_tab_file(source_dir: Path, rel: str, label: str) -> dict | None:
+    """Load + schema-validate one drum-tab JSON named by a manifest-relative
+    path. Shared by the song-level `drum_tab:` key and the per-arrangement
+    drum-part pointers (feedpak 1.17.0), so every tab gets the same posture:
+    permissive — a missing file disables that part silently; a traversal,
+    parse, or validation failure disables it with a warning, never aborting
+    the load."""
+    # Constrain to source_dir to prevent a crafted manifest from reading
+    # files outside the sloppak directory via path traversal (e.g. ../../etc).
+    # Wrap both resolve() calls in a broad handler: symlink loops and
+    # permission errors on .resolve() should disable drums, not abort load.
+    try:
+        dt_path = (source_dir / rel).resolve()
+        dt_path.relative_to(source_dir.resolve())
+    except ValueError:
+        log.warning("sloppak: %s path %r escapes source_dir — skipped", label, rel)
+        return None
+    except OSError as e:
+        log.warning("sloppak: %s path resolution failed (%s) — skipped", label, e)
+        return None
+    if not dt_path.exists():
+        return None
+    try:
+        raw = load_json(dt_path)
+    except Exception as e:
+        log.warning("sloppak: failed to parse %s %r: %s", label, rel, e)
+        return None
+    ok, reason = drums_mod.validate_drum_tab(raw)
+    if not ok:
+        log.warning("sloppak: %s %r failed validation: %s", label, rel, reason)
+        return None
+    return raw
+
+
+def _resolve_drum_parts(
+    source_dir: Path,
+    drum_tab_rel: object,
+    drum_tab_data: dict | None,
+    drum_pointer_entries: list[dict],
+) -> tuple[dict | None, list[dict] | None]:
+    """Resolve drum pointers into a primary-first list with unique ids."""
+    if drum_tab_data is None and not drum_pointer_entries:
+        return drum_tab_data, None
+
+    primary_id = "drums"
+    primary_name = None
+    extra_parts: list[dict] = []
+    seen_rels: set[str] = set()
+    # Use the same canonical, traversal-safe identity as zip member lookup so
+    # equivalent spellings ("x.json", "./x.json", or backslashes) identify
+    # one file. Otherwise an alias pointer can reload and duplicate the primary.
+    primary_rel_key = (
+        _zip_member_key(drum_tab_rel.strip())
+        if isinstance(drum_tab_rel, str) and drum_tab_rel.strip() else None
+    )
+    for entry in drum_pointer_entries:
+        rel = str(entry.get("drum_tab") or "").strip()
+        rel_key = _zip_member_key(rel) if rel else None
+        rel_identity = rel_key or rel
+        if not rel or rel_identity in seen_rels:
+            continue
+        seen_rels.add(rel_identity)
+        entry_id = str(entry.get("id") or "").strip()
+        entry_name = str(entry.get("name") or "").strip()
+        if primary_rel_key is not None and rel_key == primary_rel_key:
+            if entry_id:
+                primary_id = entry_id
+            if entry_name:
+                primary_name = entry_name
+            continue
+        tab = _load_drum_tab_file(source_dir, rel, f"drum part {entry_id or rel}")
+        if tab is None:
+            continue
+        tab_name = tab.get("name")
+        extra_parts.append({
+            "id": entry_id,
+            "name": entry_name
+                or (tab_name if isinstance(tab_name, str) and tab_name else "Drums"),
+            "drum_tab": tab,
+        })
+
+    parts: list[dict] = []
+    used_ids: set[str] = set()
+    if drum_tab_data is not None:
+        if primary_name is None:
+            tab_name = drum_tab_data.get("name")
+            primary_name = tab_name if isinstance(tab_name, str) and tab_name else "Drums"
+        parts.append({"id": primary_id, "name": primary_name, "drum_tab": drum_tab_data})
+        used_ids.add(primary_id)
+
+    next_generated_id = 2
+    for part in extra_parts:
+        part_id = part["id"]
+        if not part_id or part_id in used_ids:
+            while f"drums-{next_generated_id}" in used_ids:
+                next_generated_id += 1
+            part_id = f"drums-{next_generated_id}"
+            next_generated_id += 1
+        part["id"] = part_id
+        used_ids.add(part_id)
+        parts.append(part)
+
+    if not parts:
+        return drum_tab_data, None
+    if drum_tab_data is None:
+        drum_tab_data = parts[0]["drum_tab"]
+    return drum_tab_data, parts
 
 
 def load_song(
@@ -754,6 +873,7 @@ def load_song(
     notation_acc: dict[str, dict] = {}
     any_notation = False
     arrangement_ids_acc: list[str | None] = []  # parallel to song.arrangements
+    drum_pointer_entries: list[dict] = []  # feedpak 1.17.0 drum-part pointers
     for entry in manifest.get("arrangements", []) or []:
         if not isinstance(entry, dict):
             log.warning("sloppak: non-dict arrangement entry skipped (%r)", type(entry).__name__)
@@ -762,7 +882,30 @@ def load_song(
         rel = rel_raw.strip() if isinstance(rel_raw, str) else ""
         notation_raw = entry.get("notation")
         has_notation_key = isinstance(notation_raw, str) and bool(notation_raw.strip())
-        if not rel and not has_notation_key:
+        _etype = str(entry.get("type") or "").strip().lower()
+        is_drums = _etype in ("drums", "drum")
+        # A drums-typed entry MUST NEVER become a fretted Arrangement (grading
+        # invariant, spec §5.2/§7.5): route on `type` FIRST, not on file
+        # absence — a malformed drums entry that also carries a note file/
+        # notation would otherwise fall through and grade as garbage.
+        if is_drums or (not rel and not has_notation_key):
+            # A DRUM-PART POINTER entry (feedpak 1.17.0 "drums as
+            # arrangements"): `type: drums` with a per-arrangement `drum_tab`
+            # file. Collect it for the drum-parts load after this loop.
+            if is_drums and isinstance(entry.get("drum_tab"), str):
+                drum_pointer_entries.append(entry)
+            elif is_drums:
+                # Drums-typed but no drum_tab pointer — drop it (any note
+                # file/notation it carries is ignored), never fret it.
+                log.warning(
+                    "sloppak: drums-typed arrangement entry %r has no drum_tab pointer — dropped",
+                    entry.get("id"),
+                )
+            elif isinstance(entry.get("drum_tab"), str):
+                log.warning(
+                    "sloppak: arrangement entry has drum_tab %r but type=%r — ignored",
+                    entry.get("drum_tab"), entry.get("type"),
+                )
             continue
         data = None
         if rel:
@@ -792,6 +935,11 @@ def load_song(
         # the arrangement JSON (name, tuning, capo, centOffset).
         if entry.get("name"):
             arr.name = str(entry["name"])
+        # Editor-authored instrument type (feedpak-spec §5.2 / editor PR #335).
+        # Drives arrangement_string_count's bass fallback so a bass authored on
+        # an arrangement whose NAME doesn't say "bass" still reports 4 strings.
+        if entry.get("type"):
+            arr.type = str(entry["type"]).strip().lower()
         if "tuning" in entry:
             arr.tuning = list(entry["tuning"])
         if "capo" in entry:
@@ -868,32 +1016,13 @@ def load_song(
     drum_tab_data: dict | None = None
     drum_tab_rel = manifest.get("drum_tab")
     if isinstance(drum_tab_rel, str) and drum_tab_rel:
-        # Constrain to source_dir to prevent a crafted manifest from reading
-        # files outside the sloppak directory via path traversal (e.g. ../../etc).
-        # Wrap both resolve() calls in a broad handler: symlink loops and
-        # permission errors on .resolve() should disable drums, not abort load.
-        try:
-            dt_path = (source_dir / drum_tab_rel).resolve()
-            dt_path.relative_to(source_dir.resolve())
-        except ValueError:
-            log.warning("sloppak: drum_tab path %r escapes source_dir — skipped", drum_tab_rel)
-            dt_path = None
-        except OSError as e:
-            log.warning("sloppak: drum_tab path resolution failed (%s) — skipped", e)
-            dt_path = None
-        if dt_path is not None and dt_path.exists():
-            try:
-                raw = load_json(dt_path)
-            except Exception as e:
-                log.warning("sloppak: failed to parse drum_tab %r: %s", drum_tab_rel, e)
-                raw = None
-            if raw is not None:
-                ok, reason = drums_mod.validate_drum_tab(raw)
-                if ok:
-                    drum_tab_data = raw
-                else:
-                    log.warning("sloppak: drum_tab %r failed validation: %s",
-                                drum_tab_rel, reason)
+        drum_tab_data = _load_drum_tab_file(source_dir, drum_tab_rel, "drum_tab")
+
+    # Keep the dense compatibility logic independently testable and guarantee
+    # ids are unique before the highway exposes them as selectors.
+    drum_tab_data, drum_parts = _resolve_drum_parts(
+        source_dir, drum_tab_rel, drum_tab_data, drum_pointer_entries,
+    )
 
     # Drum-only sloppak: every GP track was percussion, so it ships a
     # drum_tab but no pitched arrangements. The highway WS rejects an empty
@@ -1221,6 +1350,7 @@ def load_song(
         manifest=manifest,
         feedpak_version=_fpv if isinstance(_fpv, str) and _fpv else None,
         drum_tab=drum_tab_data,
+        drum_parts=drum_parts,
         song_timeline=song_timeline_data,
         tempos=tempos_data,
         time_signatures=time_sigs_data,

@@ -14,6 +14,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   starter `bar` venue bundled for offline play. Trims ~678 MB from the desktop
   download; an unpublished pack shows "coming soon" and plays on the standard
   stage until its release lands.
+- **Session-sync relay WebSocket — `/ws/sync/{session_id}` (#1030).** A
+  deliberately dumb JSON fan-out room: a text frame received from one client is
+  forwarded verbatim to every other client on the same session id; the server
+  interprets nothing (message schemas are owned by consumers). Rooms are created
+  on first join and garbage-collected when the last socket leaves — no history,
+  no replay, no persistence, so a host that crashes and rejoins the same id
+  resumes publishing to reconnecting subscribers with no server-side
+  coordination. Session ids are client-generated (`[A-Za-z0-9_-]{4,64}`); DoS
+  hygiene for a LAN-exposed port via frame-size (16 KB), per-room (16 sockets),
+  total-room (32), and per-socket rate (120 msg/s sustained, 240 burst) caps —
+  over-limit sockets are closed with a policy code and the room carries on, and
+  a peer that dies — or stalls: fan-out sends are bounded by a 5 s timeout —
+  mid-fan-out is dropped without disturbing delivery to the rest. `main.py`
+  also caps inbound WS frames at the transport (`ws_max_size=64 KB`, down from
+  uvicorn's 16 MB default) so oversized frames never materialize server-side. First consumer: splitscreen's "pop out to LAN" follower mode
+  (feedBack-plugin-splitscreen#21), which relays playhead/playstate/song-change
+  frames from a host window to view-only followers on other LAN devices.
+  Implementation in `lib/routers/ws_sync.py`; tests in `tests/test_ws_sync.py`.
+- **Drum-part picker (feedpak 1.17.0 "drums as arrangements").** When a song
+  carries several drum charts, a **Drum part** selector appears beside the
+  arrangement switcher (advanced settings) so a player can choose which drummer
+  to play. Selecting one re-streams that part's tab over the highway WS
+  (`?drum_part=<id>`, mirroring the arrangement switch); the choice persists
+  across an arrangement change, and the picker reflects the server's
+  authoritative part (unknown/absent selection falls back to the primary). The
+  row hides for single-drum and non-drum songs, so nothing changes there. Builds
+  on the loader below; no plugin change needed — the drum renderer just draws
+  whatever tab streams.
+- **Multiple drum parts (feedpak 1.17.0 "drums as arrangements").** The sloppak
+  loader now reads `type: drums` arrangement entries carrying per-arrangement
+  `drum_tab` file pointers — a song can ship several drum charts (a second
+  drummer, an aux-percussion layer). Parts surface as `LoadedSloppak.drum_parts`
+  (primary first; the entry aliasing the song-level `drum_tab:` key is the
+  primary and is never loaded twice), the highway WS `song_info` gains a
+  `drum_parts` name list, and `?drum_part=<id>` on the WS URL selects which
+  part's tab streams (`drum_tab` messages carry `part_id` when multiple parts
+  exist; unknown ids fall back to the primary). Pointer entries are **never**
+  loaded as fretted arrangements — the loader's file/notation gate keeps a drum
+  part out of the fretted pipeline (and out of note-detection grading), pinned
+  by test. Legacy single-drum packs read exactly as before, as a one-part list.
 - **`chart-transform` capability domain (#952)** — plugins can now remap the
   chart before rendering and scoring through a core-owned provider
   coordinator. Synchronous transforms run after difficulty filtering; host

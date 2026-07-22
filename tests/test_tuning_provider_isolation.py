@@ -60,12 +60,14 @@ def test_the_failure_is_actually_logged(registry, caplog):
     # capture_logger() context manager for this, but it is not importable from here:
     # pyproject pins pythonpath to [".", "lib"], so `tests` is not a package.)
     lg = logging.getLogger("feedBack")
+    orig_level = lg.level
     lg.addHandler(caplog.handler)
     lg.setLevel(logging.ERROR)
     try:
         registry.get_merged()
     finally:
         lg.removeHandler(caplog.handler)
+        lg.setLevel(orig_level)  # restore, or ERROR leaks onto the feedBack tree
 
     assert any("bad-plugin" in r.getMessage() for r in caplog.records), (
         "the raising provider was never named in the logs"

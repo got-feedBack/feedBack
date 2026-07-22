@@ -182,6 +182,12 @@ class Arrangement:
     # `base`/`changes` drive the highway tone-change markers; `definitions`
     # feed the Tones plugin gear panel.
     tones: dict | None = None
+    # Editor-authored instrument type (feedpak-spec §5.2 / editor PR #335):
+    # "bass" | "guitar" | "piano" | "keys" | "drums" | "". First-class DATA that
+    # lets a user author an instrument on an arrangement whose NAME doesn't say
+    # so. Lifted from the sloppak manifest entry by sloppak.load_song(); "" for
+    # archive/loose sources, which instead carry the path_* flags below.
+    type: str = ""
     # arrangement XML <arrangementProperties> flags for smart naming (feedBack feat/arrangement).
     # Populated from the XML; default False/0 for sloppak / GP-imported sources.
     path_lead: bool = False
@@ -503,8 +509,8 @@ def note_pitch_midi(arr: "Arrangement", note: "Note") -> int | None:
     O(notes) via ``arrangement_string_count`` — for a whole arrangement, hoist
     the base with :func:`base_open_string_midis` and call :func:`pitch_from_base`
     per note instead."""
-    is_bass = "bass" in (arr.name or "").lower()
-    base = base_open_string_midis(arrangement_string_count(arr), is_bass)
+    base = base_open_string_midis(arrangement_string_count(arr),
+                                  arrangement_is_bass(arr))
     return pitch_from_base(base, int(getattr(arr, "capo", 0) or 0),
                            arr.tuning or [], note.string, note.fret)
 
@@ -633,6 +639,23 @@ def phrase_from_wire(d: dict) -> Phrase:
     )
 
 
+def arrangement_is_bass(arr: Arrangement) -> bool:
+    """Whether ``arr`` is a bass, most-authoritative signal first: an
+    editor-authored ``type == "bass"`` (feedpak-spec §5.2 / editor PR #335,
+    lifted onto sloppaks by :func:`sloppak.load_song`), then the archive
+    ``path_bass`` <arrangementProperties> flag, then the legacy "bass"
+    case-insensitive substring in the name. Single source of the bass decision
+    so string-count derivation and the open-string pitch base (via
+    :func:`base_open_string_midis`) agree — a bass authored on an arrangement
+    whose NAME doesn't say "bass" must get both 4 lanes AND the bass MIDI base,
+    not 4 lanes on a guitar octave."""
+    return (
+        (arr.type or "").strip().lower() == "bass"
+        or bool(arr.path_bass)
+        or "bass" in (arr.name or "").lower()
+    )
+
+
 def arrangement_string_count(arr: Arrangement) -> int:
     """Derive the active arrangement's string count.
 
@@ -650,10 +673,17 @@ def arrangement_string_count(arr: Arrangement) -> int:
        But this is a LOWER BOUND only — a 6-string lead chart that
        never plays string 5 reports 5, undercounting by 1.
 
-    2. **Name-based fallback.** Arrangements named "Bass" (case-
-       insensitive substring match) default to 4; everything else
-       defaults to 6. This catches the partial-string-usage case
-       where notes don't span all the instrument's strings.
+    2. **Instrument-type fallback.** An arrangement whose authoritative
+       instrument signal says bass defaults to 4; everything else
+       defaults to 6. This catches the partial-string-usage case where
+       notes don't span all the instrument's strings. The bass signal is
+       any of: an editor-authored ``type == "bass"`` (feedpak-spec §5.2 /
+       editor PR #335 — lifted onto sloppaks by ``sloppak.load_song``),
+       the ``path_bass`` <arrangementProperties> flag (archive/DLC
+       sources), or the legacy "bass" case-insensitive substring in the
+       name. Trusting ``type``/``path_bass`` closes the gap where a user
+       authors a bass instrument on an arrangement whose NAME doesn't say
+       "bass" (the editor lays out 4 lanes; core must agree).
 
     A third signal — ``len(arr.tuning)`` when it isn't the arrangement XML
     padded value of 6 — folds in for sloppak / GP-imported sources
@@ -684,6 +714,10 @@ def arrangement_string_count(arr: Arrangement) -> int:
       max(0, 4, 0) = 4
     * Empty arrangement named "Lead" (tuning len 6) →
       max(0, 6, 0) = 6
+    * Editor-authored bass named "Low End" (type "bass", tuning len 6,
+      notes 0..3) → name_based=4 → max(4, 4, 0) = 4
+    * DLC bass named "Low End" (pathBass flag set, tuning len 6, notes
+      0..3) → name_based=4 → max(4, 4, 0) = 4
 
     Topkoa's issue argues plugins shouldn't do arrangement-name
     matching; server-side fallback IS the right place for it
@@ -699,7 +733,9 @@ def arrangement_string_count(arr: Arrangement) -> int:
             if cn.string > max_s:
                 max_s = cn.string
     notes_count = max_s + 1 if max_s >= 0 else 0
-    name_based = 4 if "bass" in arr.name.lower() else 6
+    # Bass signal (type / pathBass / name substring) — see arrangement_is_bass.
+    # Any one being bass pulls the fallback to 4.
+    name_based = 4 if arrangement_is_bass(arr) else 6
     # Tuning-length signal — only trustworthy when NOT the arrangement XML
     # padded value of 6. Length 4/5 indicates explicit bass / 5-string
     # bass; length 7/8 indicates an extended-range guitar from GP.
