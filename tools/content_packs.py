@@ -6,7 +6,7 @@ block that the career and rig_builder download paths consume
 (``plugins/career/routes.py`` ``_download_pack``). Two modes:
 
   --local <dir>    write zips + a file:// manifest (dev/CI/tests; no network)
-  --publish <tag>  gh release upload <tag> <zip> --clobber; emit release URLs
+  --publish        create/upload each pack's per-pack release; emit release URLs
 
 The zip is flat (files at the archive root) to satisfy career's zip-slip guard
 (``PACK_FILENAME_RE``) and ``_validate_pack_dir``. This module is the reusable
