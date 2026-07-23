@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Core reader for source rigs (feedpak 1.18.0).** A pack can declare what a
+  MIDI part should sound like by binding a rig; core now reads that binding and
+  hands it to the client instead of dropping it. Three parts: the
+  `tone_changes` WS message carries the pack's rig bindings (`base_rig`, and
+  `rig` per change) alongside the tone names it already sent; the manifest
+  `rigs:` key loads the pack's rig library (`rigs.json`, spec §7.9) verbatim;
+  and the binding precedence is resolved per spec §5.1/§5.2 — a manifest
+  arrangement entry's `tones` replaces the arrangement JSON's **wholesale**
+  (no field-level merge), while top-level `drum_tones` binds the primary drum
+  part as the fallback a `type: drums` entry's own `tones` outranks. Core
+  deliberately stops there: it does not select a realization or apply the
+  `intent.gm` floor, which belong to whatever actually voices the part. Packs
+  that bind no rig produce a byte-identical `tone_changes` payload, so existing
+  consumers are unaffected.
 - **Opt-in career venue packs (#122)** — higher-tier venue crowd media
   (`club`, `arena`) is no longer bundled; the app downloads each pack on demand
   from its release when you reach the venue (sha256-verified), keeping the
