@@ -698,6 +698,14 @@ class LoadedSloppak:
     # absent / unreadable / malformed. Streamed over the highway WS as a
     # `keys` message; consumers (renderers, plugins) read it from there.
     keys: dict | None = None
+    # Parsed `rigs.json` payload (manifest `rigs:` key, spec §7.9) — the pack's
+    # library of engine-agnostic signal chains: effect chains and, since
+    # feedpak 1.18.0, MIDI-voiced sound sources. Arrangements bind rigs to time
+    # by referencing a rig `id` from `tones.base_rig` / `tones.changes[].rig`
+    # (§6.9), which `lib/tones.py` carries onto the wire. None when absent /
+    # unreadable / malformed. Rig objects are kept verbatim — this loader does
+    # not select realizations or apply the `intent.gm` floor.
+    rigs: dict | None = None
     # Sanitized song-level tempo + time-signature maps from `song_timeline.json`
     # (feedpak 1.2.0). `tempos`: [{time, bpm}]; `time_signatures`: [{time, ts}].
     # None when absent/empty. Streamed over the highway WS (`tempos` /
@@ -774,6 +782,77 @@ def _load_drum_tab_file(source_dir: Path, rel: str, label: str) -> dict | None:
         log.warning("sloppak: %s %r failed validation: %s", label, rel, reason)
         return None
     return raw
+
+
+def _load_rigs_file(source_dir: Path, rel: str) -> dict | None:
+    """Load the pack's rig library (manifest `rigs:` key, spec §7.9).
+
+    Returns `{"version": int, "rigs": [...]}` or None. Same permissive posture
+    as every other side-file: missing / unreadable / malformed -> None, never
+    fatal — spec §7.9 is explicit that a rig library a Reader can't use MUST NOT
+    fail the pack.
+
+    Rig objects are kept **verbatim**. Only entries that could never be
+    addressed are dropped — a rig is reachable solely by `id` (from
+    `tones.base_rig` / `changes[].rig`), so a non-dict entry or one without a
+    usable string id is unreferenceable by construction. Everything else,
+    including unknown `role` / `engine` / `kind` values and `ext` namespaces,
+    passes through untouched, because this loader does not interpret rigs:
+    realization selection and the `intent.gm` fallback belong to whatever
+    voices the part.
+    """
+    try:
+        r_path = (source_dir / rel).resolve()
+        r_path.relative_to(source_dir.resolve())
+    except ValueError:
+        log.warning("sloppak: rigs path %r escapes source_dir — skipped", rel)
+        return None
+    except OSError as e:
+        log.warning("sloppak: rigs path resolution failed (%s) — skipped", e)
+        return None
+    if not r_path.exists():
+        return None
+    try:
+        raw = load_json(r_path)
+    except Exception as e:
+        log.warning("sloppak: failed to parse rigs %r: %s", rel, e)
+        return None
+    if not isinstance(raw, dict):
+        log.warning("sloppak: rigs %r ignored — expected dict, got %s",
+                    rel, type(raw).__name__)
+        return None
+    if not isinstance(raw.get("rigs"), list):
+        log.warning("sloppak: rigs %r ignored — 'rigs' must be a list", rel)
+        return None
+
+    clean_rigs: list[dict] = []
+    seen: set[str] = set()
+    for rig in raw["rigs"]:
+        if not isinstance(rig, dict):
+            continue
+        rid = rig.get("id")
+        if not isinstance(rid, str) or not rid.strip():
+            continue
+        # Normalize the library side of the lookup the same way the reference
+        # side is normalized in lib/tones.py — otherwise a pack with padded ids
+        # fails to resolve against a stripped `base_rig` / `rig`.
+        rid = rid.strip()
+        # A duplicate id makes `tones.base_rig` ambiguous, which would surface
+        # as the wrong sound rather than an error. First wins, loudly.
+        if rid in seen:
+            log.warning("sloppak: rigs %r has duplicate rig id %r — later one ignored",
+                        rel, rid)
+            continue
+        seen.add(rid)
+        clean_rigs.append({**rig, "id": rid})
+
+    # int only — a float version (incl. NaN/Inf, which json.loads accepts)
+    # would raise on int(); default rather than abort an optional side-file.
+    _ver = raw.get("version")
+    return {
+        "version": _ver if isinstance(_ver, int) and not isinstance(_ver, bool) else 1,
+        "rigs": clean_rigs,
+    }
 
 
 def _resolve_drum_parts(
@@ -1325,6 +1404,14 @@ def load_song(
                         "events": clean_events,
                     }
 
+    # Optional rigs.json — the pack's rig library (manifest `rigs:` key,
+    # spec §7.9). Loaded here so the highway WS can hand it to whatever voices
+    # the part; the bindings that reference it ride the arrangement's `tones`.
+    rigs_data: dict | None = None
+    rigs_rel = manifest.get("rigs")
+    if isinstance(rigs_rel, str) and rigs_rel:
+        rigs_data = _load_rigs_file(source_dir, rigs_rel)
+
     _fpv = manifest.get("feedpak_version")
     # The pack's full mix. Normally the RESERVED `full` stem partitioned out
     # above (spec §5.3) — no path work needed, it was validated with the other
@@ -1355,6 +1442,7 @@ def load_song(
         tempos=tempos_data,
         time_signatures=time_sigs_data,
         keys=keys_data,
+        rigs=rigs_data,
         notation_by_id=notation_by_id_data,
         arrangement_ids=arrangement_ids_acc,
         full_mix=full_mix_data,
