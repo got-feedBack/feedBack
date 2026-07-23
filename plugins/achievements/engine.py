@@ -109,7 +109,7 @@ def apply_activity(counters, delta):
 def consecutive_run_length(dates):
     """Longest run of consecutive calendar dates in ``dates`` (ISO 'YYYY-MM-DD').
 
-    Used by the `secret_witching` Feat (practise in the 2–5am window on N
+    Used by the `secret_witching` Feat (practice in the 2–5am window on N
     consecutive nights). Pure date arithmetic so it's unit-testable; routes.py
     feeds it the distinct night-dates recorded in `comp_ledger`.
     """

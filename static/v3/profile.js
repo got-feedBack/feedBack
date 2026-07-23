@@ -379,7 +379,7 @@
             // Step 3 — Achievements wall opt-in (first-run only; default OFF).
             '<div id="v3-ob-step3" class="hidden">' +
             '<label class="block text-xs uppercase tracking-wider text-fb-textDim mb-2">Feats of Power</label>' +
-            '<p class="text-sm text-fb-textDim mb-3">As you practise you’ll earn rare <span class="text-fb-text">Feats of Power</span> — silly, bombastic activity trophies. Want to show them off on the public <span class="text-fb-text">Feats wall</span>?</p>' +
+            '<p class="text-sm text-fb-textDim mb-3">As you practice you’ll earn rare <span class="text-fb-text">Feats of Power</span> — silly, bombastic activity trophies. Want to show them off on the public <span class="text-fb-text">Feats wall</span>?</p>' +
             '<label class="flex items-start gap-3 cursor-pointer rounded-lg border border-fb-border/50 bg-fb-bg/40 p-3">' +
             '<input type="checkbox" id="v3-ob-optin" class="mt-1 h-4 w-4 rounded border-gray-600 bg-gray-800 text-fb-primary focus:ring-fb-primary">' +
             '<span class="text-sm text-fb-text">Share my Feats on the wall' +

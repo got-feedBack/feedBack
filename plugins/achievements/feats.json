@@ -76,7 +76,7 @@
     {
       "id": "secret_witching",
       "title": "The Witching Hour",
-      "description": "Practise in the dead of night, seven nights running.",
+      "description": "Practice in the dead of night, seven nights running.",
       "category": "global",
       "sourceId": "achievements",
       "secret": true,
