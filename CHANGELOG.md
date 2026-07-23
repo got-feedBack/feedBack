@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **The rig library reaches the client.** Completes the core reader for source
+  rigs: a new `rigs` WebSocket message carries the pack's `rigs.json` library
+  verbatim, and each entry in `song_info.drum_parts` now carries its `tones`
+  binding. Previously the *references* shipped (`base_rig`, per-change `rig`)
+  with nothing to resolve them against — the library loaded server-side and had
+  no consumer. The library is sent whenever a pack ships one rather than being
+  gated on the arrangement having tone changes, since a pack can bind sound to
+  its drum parts alone. `highway.js` exposes `getRigs()` / `getToneBaseRig()`
+  and adds `bundle.rigs` / `bundle.toneBaseRig` for renderers. Core still
+  selects no realization and applies no `intent.gm` floor — that belongs to
+  whatever voices the part. Packs that bind no rig send byte-identical frames.
 - **Core reader for source rigs (feedpak 1.18.0).** A pack can declare what a
   MIDI part should sound like by binding a rig; core now reads that binding and
   hands it to the client instead of dropping it. Three parts: the

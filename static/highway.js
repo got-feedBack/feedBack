@@ -239,6 +239,14 @@ function createHighway() {
     hwState.lyricsSource = "";
     hwState.toneChanges = [];
     hwState.toneBase = "";
+    // Rig id bound to the base tone ("" when the chart binds none).
+    hwState.toneBaseRig = "";
+    // The pack's rig library (rigs.json, feedpak-spec §7.9) — the engine-
+    // agnostic signal chains that `toneBase`/`toneChanges[].rig` and each drum
+    // part's `tones` reference by `id`. Empty array when the pack ships none.
+    // Verbatim from the server: core resolves no realization and applies no
+    // `intent.gm` floor, so whatever voices a part reads the whole block.
+    hwState.rigs = [];
     // Drum-tab payload (sloppak-spec §5.3). When the active sloppak's
     // manifest carries a `drum_tab:` key, the server streams a `drum_tab`
     // metadata message followed by chunked `drum_hits`. `drumTab.hits` is
@@ -574,6 +582,10 @@ function createHighway() {
         b.lyricsSource = hwState.lyricsSource;
         b.toneChanges = hwState.toneChanges;
         b.toneBase = hwState.toneBase;
+        b.toneBaseRig = hwState.toneBaseRig;
+        // Live reference, like the other chart arrays — swaps identity when
+        // the song changes, so a field-identity cache stays valid.
+        b.rigs = hwState.rigs;
         // Drum tab payload (or null when the active arrangement has
         // no drum_tab). Live reference — renderers MUST treat as
         // read-only. Plugins should prefer this over decoding the
@@ -1686,7 +1698,7 @@ function createHighway() {
             hwState._resizeHandler = () => this.resize();
             window.addEventListener('resize', hwState._resizeHandler);
             hwState.ready = false;
-            hwState.notes = []; hwState.chords = []; hwState.handShapes = []; hwState.beats = []; hwState.sections = []; hwState.anchors = []; hwState.chordTemplates = []; hwState.lyrics = []; hwState.lyricsSource = ""; hwState.toneChanges = []; hwState.toneBase = ""; hwState.drumTab = null;
+            hwState.notes = []; hwState.chords = []; hwState.handShapes = []; hwState.beats = []; hwState.sections = []; hwState.anchors = []; hwState.chordTemplates = []; hwState.lyrics = []; hwState.lyricsSource = ""; hwState.toneChanges = []; hwState.toneBase = ""; hwState.toneBaseRig = ""; hwState.rigs = []; hwState.drumTab = null;
             hwState.stringCount = 6;  // default until song_info arrives
             // Reset phrase ladder + filter (feedBack#48). _mastery
             // persists across arrangement switches — the slider's
@@ -2391,7 +2403,8 @@ function createHighway() {
                             // having to hook the raw WS themselves.
                             hwState.lyricsSource = msg.source || "";
                             break;
-                        case 'tone_changes': hwState.toneChanges = msg.data; hwState.toneBase = msg.base || ""; break;
+                        case 'tone_changes': hwState.toneChanges = msg.data; hwState.toneBase = msg.base || ""; hwState.toneBaseRig = msg.base_rig || ""; break;
+                        case 'rigs': hwState.rigs = msg.data || []; break;
                         case 'notes': hwState.notes = hwState.notes.concat(msg.data); break;
                         case 'chords': hwState.chords = hwState.chords.concat(msg.data); break;
                         case 'handshapes': hwState.handShapes = hwState.handShapes.concat(msg.data); break;
@@ -2664,6 +2677,11 @@ function createHighway() {
         getChordTemplates() { return hwState._xfChordTemplates !== null ? hwState._xfChordTemplates : hwState.chordTemplates; },
         getToneChanges() { return hwState.toneChanges; },
         getToneBase() { return hwState.toneBase; },
+        // Rig id bound to the base tone ("" when the chart binds none).
+        getToneBaseRig() { return hwState.toneBaseRig; },
+        // The pack's rig library, verbatim (feedpak-spec §7.9). Index by `id`
+        // to resolve a `base_rig` / `rig` / drum-part `tones` reference.
+        getRigs() { return hwState.rigs; },
         getSections() { return hwState.sections; },
         // Timed lyric syllables for the active song: [{t: start, d: length,
         // w: word}], same array the highway WS populates. Exposed so overlay
@@ -2817,7 +2835,7 @@ function createHighway() {
             // Close old WS but keep audio + animation running
             if (hwState.ws) { hwState.ws.close(); hwState.ws = null; }
             hwState.ready = false;
-            hwState.notes = []; hwState.chords = []; hwState.handShapes = []; hwState.beats = []; hwState.sections = []; hwState.anchors = []; hwState.chordTemplates = []; hwState.lyrics = []; hwState.lyricsSource = ""; hwState.toneChanges = []; hwState.toneBase = ""; hwState.drumTab = null;
+            hwState.notes = []; hwState.chords = []; hwState.handShapes = []; hwState.beats = []; hwState.sections = []; hwState.anchors = []; hwState.chordTemplates = []; hwState.lyrics = []; hwState.lyricsSource = ""; hwState.toneChanges = []; hwState.toneBase = ""; hwState.toneBaseRig = ""; hwState.rigs = []; hwState.drumTab = null;
             hwState.stringCount = 6;  // default until song_info arrives
             // Drop any per-song offset from the previous load so setTime
             // calls that fire before the next song_info arrives don't
