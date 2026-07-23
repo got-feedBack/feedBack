@@ -816,16 +816,8 @@ def _load_rigs_file(source_dir: Path, rel: str) -> dict | None:
     realization selection and the `intent.gm` fallback belong to whatever
     voices the part.
     """
-    try:
-        r_path = (source_dir / rel).resolve()
-        r_path.relative_to(source_dir.resolve())
-    except ValueError:
-        log.warning("sloppak: rigs path %r escapes source_dir — skipped", rel)
-        return None
-    except OSError as e:
-        log.warning("sloppak: rigs path resolution failed (%s) — skipped", e)
-        return None
-    if not r_path.exists():
+    r_path = _resolve_pack_path(source_dir, rel, "rigs")
+    if r_path is None or not r_path.exists():
         return None
     try:
         raw = load_json(r_path)
