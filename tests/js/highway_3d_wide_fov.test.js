@@ -23,6 +23,17 @@ const path = require('node:path');
 const SCREEN_JS = path.join(__dirname, '..', '..', 'plugins', 'highway_3d', 'screen.js');
 const src = fs.readFileSync(SCREEN_JS, 'utf8');
 
+function sourceBetween(startText, endText) {
+    const start = src.indexOf(startText);
+    const end = src.indexOf(endText, start);
+    assert.ok(start >= 0 && end > start, 'missing source range');
+    return src.slice(start, end);
+}
+
+function standaloneFunction(startText, endText) {
+    return Function('return (' + sourceBetween(startText, endText).trim() + ')')();
+}
+
 // ── Constants ────────────────────────────────────────────────────────────────
 
 test('BASE_VFOV is a named constant (not a literal in the camera ctor)', () => {
@@ -284,13 +295,31 @@ test('the panel has a dismiss (close) control', () => {
 });
 
 test('camUpdate only writes cam.fov when it actually changes', () => {
-    // Guarding the write avoids a per-frame updateProjectionMatrix on a steady
-    // pane and keeps the disabled path free.
-    assert.match(
-        src,
-        /Math\.abs\(\s*_vfov\s*-\s*cam\.fov\s*\)\s*>\s*1e-4[\s\S]*?cam\.fov\s*=\s*_vfov\s*;[\s\S]*?cam\.updateProjectionMatrix\(\)/,
-        'camUpdate must guard the cam.fov write behind a change check',
-    );
+    const camUpdate = sourceBetween('function camUpdate(bundle)',
+        '        function _freeCamProjectionZoom');
+    assert.equal((camUpdate.match(/const\s+_freeCam\s*=\s*_freeCamFor\(highwayCanvas\)/g) || []).length, 1,
+        'camUpdate must resolve the bridge once');
+    assert.match(camUpdate, /_applyFreeCamProjection\(_vfov,\s*_projectionZoom\)/);
+
+    const projection = sourceBetween('function _freeCamProjectionZoom',
+        '        function _clearFreeCamViewOffset');
+    assert.match(projection,
+        /if\s*\(\s*!freeCam\s*\|\|\s*!freeCam\.enabled\s*\)\s*return\s+1/,
+        'a disabled bridge must keep zoom neutral');
+    const coerceZoom = standaloneFunction('function _coerceFreeCamProjectionZoom',
+        '        function _freeCamNeutralProjectionNdcY');
+    assert.deepEqual(
+        [coerceZoom(2), coerceZoom('2'), coerceZoom(Symbol('bad'))],
+        [2, 1, 1],
+        'projection zoom accepts only finite numeric values without coercion');
+    assert.match(projection,
+        /Number\.isFinite\(vfov\)\s*&&\s*Math\.abs\(vfov\s*-\s*cam\.fov\)\s*>\s*1e-4[\s\S]*?cam\.fov\s*=\s*vfov/,
+        'the original finite and changed fov guards must remain');
+    assert.match(projection,
+        /Math\.abs\(desiredZoom[\s\S]*?1e-4[\s\S]*?cam\.zoom\s*=\s*desiredZoom/,
+        'the zoom write must be guarded');
+    assert.match(projection, /if\s*\(\s*changed\s*\)\s*cam\.updateProjectionMatrix\(\)/,
+        'fov and zoom must share one projection update');
 });
 
 // ── Shortcut (open/close) + lifecycle reset ───────────────────────────────────
@@ -308,9 +337,159 @@ test('the shortcut opens/closes the tuner panel', () => {
 test('destroy() resets the pane aspect and restores the base fov', () => {
     assert.match(src, /_paneAspect\s*=\s*0\s*;/,
         'destroy() must reset _paneAspect to 0');
-    assert.match(
-        src,
-        /cam\.fov\s*!==\s*BASE_VFOV[\s\S]*?cam\.fov\s*=\s*BASE_VFOV\s*;\s*cam\.updateProjectionMatrix\(\)/,
-        'destroy() must restore cam.fov to BASE_VFOV for instance reuse',
+    assert.match(src,
+        /destroy\(\)\s*\{[\s\S]*?_unsubscribeFocus\(\);\s*teardown\(\);[\s\S]*?highwayCanvas\s*=\s*null/,
+        'destroy() must delegate cleanup through teardown');
+
+    const teardown = sourceBetween('function teardown()', '        function canvasSize(canvas)');
+    assert.match(teardown,
+        /_resetFreeCamViewOffsetState\(true\)[\s\S]*?_resetFreeCamProjectionState\(\)/);
+    const reset = sourceBetween('function _resetFreeCamProjectionState',
+        '        function _freeCamShouldApplyViewOffset');
+    assert.match(reset,
+        /cam\.fov\s*!==\s*BASE_VFOV[\s\S]*?cam\.fov\s*=\s*BASE_VFOV/,
+        'destroy() cleanup must strictly restore the base fov');
+    assert.match(reset,
+        /cam\.zoom\s*!==\s*1[\s\S]*?cam\.zoom\s*=\s*1/,
+        'destroy() cleanup must strictly restore neutral zoom');
+    assert.match(reset, /if\s*\(\s*changed\s*\)\s*cam\.updateProjectionMatrix\(\)/,
+        'fov and zoom cleanup must share one projection update');
+});
+
+test('free-camera view offsets are normalized and cached', () => {
+    const toPixels = standaloneFunction('function _freeCamViewOffsetToPixels',
+        '        function _freeCamPixelsToViewOffset');
+    const toOffset = standaloneFunction('function _freeCamPixelsToViewOffset',
+        '        function _setFreeCamViewOffsetPixels');
+    assert.deepEqual(
+        [toPixels(0.25, 800), toPixels(-0.1, 600), toOffset(200, 800), toOffset(-60, 600)],
+        [200, -60, 0.25, -0.1],
     );
+    const view = sourceBetween('function _setFreeCamViewOffsetPixels',
+        '        function _getFreeCamBoardAnchorOffset');
+    assert.match(view,
+        /const\s+view\s*=\s*cam\.view[\s\S]*?view\.offsetX[\s\S]*?view\.offsetY[\s\S]*?return\s+true[\s\S]*?cam\.setViewOffset\(/,
+        'steady offsets must skip setViewOffset');
+});
+
+test('free-camera projection controls do not feed adaptive tilt', () => {
+    const update = sourceBetween('function camUpdate(bundle)',
+        '        function _freeCamProjectionZoom');
+    assert.match(update,
+        /_probe\.project\(cam\)[\s\S]*?_freeCamNeutralProjectionNdcY\(_probe\.y,\s*_projectionZoom\)[\s\S]*?if\s*\(\s*_tiltProbeY\s*<\s*DESIRED_NDC_Y/);
+    const neutral = sourceBetween('function _freeCamNeutralProjectionNdcY',
+        '        function _applyFreeCamProjection');
+    assert.match(neutral, /return\s+\(ndcY\s*-\s*viewOffsetY\)\s*\/\s*zoom/,
+        'tilt must remove projection zoom and vertical view offset');
+});
+
+test('board anchor validates requests and captures safely', () => {
+    const request = sourceBetween('function _getFreeCamBoardAnchorRequest',
+        '        function _captureFreeCamBoardAnchorWorldPoint');
+    assert.match(request, /const\s+capture\s*=\s*anchor\s*&&\s*anchor\.capture[\s\S]*?capture\.clientX[\s\S]*?capture\.clientY/);
+    assert.match(request,
+        /!Number\.isFinite\(anchor\.requestId\)[\s\S]*?_clearFreeCamBoardAnchorState\(\)[\s\S]*?return\s+null/,
+        'malformed requests must fail safely');
+
+    let clearCount = 0;
+    const getRequest = Function('_clearFreeCamBoardAnchorState',
+        'return (' + request.trim() + ')')(() => { clearCount += 1; });
+    const validAnchor = {
+        enabled: true,
+        requestId: 7,
+        clientX: 80,
+        clientY: 60,
+        capture: { clientX: 40, clientY: 30 },
+    };
+    assert.equal(getRequest({ enabled: 1, boardAnchor: validAnchor }), validAnchor,
+        'truthy bridge enablement must accept a valid numeric request');
+    assert.equal(getRequest({ enabled: false, boardAnchor: validAnchor }), null);
+    assert.equal(getRequest({ enabled: true, boardAnchor: {
+        ...validAnchor,
+        clientX: '80',
+    } }), null, 'numeric strings must not be coerced');
+    assert.doesNotThrow(() => getRequest({ enabled: true, boardAnchor: {
+        ...validAnchor,
+        requestId: Symbol('request'),
+    } }));
+    assert.equal(clearCount, 3, 'disabled and malformed requests must clear state');
+
+    const offset = sourceBetween('function _getFreeCamBoardAnchorOffset',
+        '        function _getFreeCamBoardAnchorRequest');
+    assert.match(offset,
+        /canvas\.getBoundingClientRect\(\)[\s\S]*?_captureFreeCamBoardAnchorWorldPoint\(capture,\s*rect\)/);
+    assert.match(offset,
+        /unavailable:\s*true[\s\S]*?finally\s*\{[\s\S]*?cam\.zoom\s*=\s*savedZoom[\s\S]*?_setFreeCamViewOffsetPixels\(viewW,\s*viewH,\s*baseX,\s*baseY\)/,
+        'unavailable captures must stay safe and projection state must be restored');
+});
+
+test('board anchor publishes the public correction contract', () => {
+    const publish = sourceBetween('function _publishFreeCamBoardAnchorReadout',
+        '        function _writeFreeCamBoardAnchorReadout');
+    assert.match(publish,
+        /freeCam\.boardAnchorReadout[\s\S]*?_freeCamPixelsToViewOffset\(offset\.x,\s*viewW\)[\s\S]*?_freeCamPixelsToViewOffset\(offset\.y,\s*viewH\)/,
+        'readout corrections must use caller-owned normalized offsets');
+
+    const toOffset = standaloneFunction('function _freeCamPixelsToViewOffset',
+        '        function _setFreeCamViewOffsetPixels');
+    const write = standaloneFunction('function _writeFreeCamBoardAnchorReadout',
+        '        /* ── Resize helper');
+    const publishReadout = Function('_freeCamPixelsToViewOffset',
+        '_writeFreeCamBoardAnchorReadout',
+        'return (' + publish.trim() + ')')(toOffset, write);
+    const readout = {};
+    publishReadout({ boardAnchorReadout: readout }, {
+        active: true,
+        requestId: 7,
+        x: 80,
+        y: -60,
+    }, 800, 600);
+    assert.deepEqual(readout, {
+        active: true,
+        requestId: 7,
+        viewOffsetDeltaX: 0.1,
+        viewOffsetDeltaY: -0.1,
+    });
+    publishReadout({ boardAnchorReadout: readout }, null, 800, 600);
+    assert.deepEqual(readout, {
+        active: false,
+        requestId: 0,
+        viewOffsetDeltaX: 0,
+        viewOffsetDeltaY: 0,
+    });
+    assert.doesNotThrow(() => publishReadout({
+        boardAnchorReadout: Object.freeze({}),
+    }, { active: true, requestId: 8, x: 1, y: 1 }, 1, 1));
+});
+
+test('board anchor recaptures for owner request or canvas changes', () => {
+    const ownership = sourceBetween('function _getFreeCamBoardAnchorOffset',
+        '        function _getFreeCamBoardAnchorRequest');
+    assert.match(ownership,
+        /retained\.bridge\s*!==\s*freeCam[\s\S]*?_clearFreeCamBoardAnchorState\(\)[\s\S]*?retained\s*=\s*null/,
+        'switching bridge objects must clear the previous owner');
+    assert.match(ownership,
+        /!retained\s*\|\|\s*retained\.requestId\s*!==\s*requestId[\s\S]*?retained\.viewW\s*!==\s*viewW[\s\S]*?retained\.viewH\s*!==\s*viewH/);
+});
+
+test('board anchor steady work reuses scratch state and retained ownership', () => {
+    const offset = sourceBetween('function _getFreeCamBoardAnchorOffset',
+        '        function _getFreeCamBoardAnchorRequest');
+    assert.match(offset,
+        /_freeCamBoardAnchorOffset\.active\s*=\s*true[\s\S]*?return\s+_freeCamBoardAnchorOffset/);
+    assert.doesNotMatch(offset, /return\s*\{\s*active:\s*true/);
+    assert.match(offset,
+        /_freeCamBoardAnchorProject[\s\S]*?point\.project\(cam\)/,
+        'projection must reuse the renderer-owned vector');
+
+    const readout = sourceBetween('function _writeFreeCamBoardAnchorReadout',
+        '        /* ── Resize helper');
+    assert.match(readout,
+        /if\s*\(\s*!Object\.is\(readout\[key\],\s*value\)\s*\)\s*readout\[key\]\s*=\s*value/);
+    const cleanup = sourceBetween('function _clearFreeCamBoardAnchorState',
+        '        function _resetFreeCamProjectionState');
+    assert.match(cleanup,
+        /_publishFreeCamBoardAnchorReadout\(retainedBridge,\s*null,\s*1,\s*1\)/);
+    assert.doesNotMatch(cleanup, /window\.__h3dCamCtl|__h3dCamCtlPanels|_freeCamFor|document/,
+        'cleanup must stay scoped to the retained owner');
 });

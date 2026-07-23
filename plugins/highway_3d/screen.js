@@ -5418,6 +5418,12 @@
         let _camPreScanned = false;
         let _camBootstrapHolding = false;
         let _camBootstrapMode = null;
+        let _freeCamBoardAnchorState = null;
+        let _freeCamBoardAnchorNear = null;
+        let _freeCamBoardAnchorFar = null;
+        let _freeCamBoardAnchorProject = null;
+        const _freeCamBoardAnchorOffset = { active: true, requestId: 0, x: 0, y: 0 };
+        const _FREE_CAM_NO_BOARD_ANCHOR_OFFSET = Object.freeze({ active: false, requestId: 0, x: 0, y: 0 });
         let _songKey = null;
         // Smooth lookahead camera: fused world-X and displayed fret-span.
         let _lookaheadCamX = xFretMid(CAM_LOCK_CENTER_FRET);
@@ -11663,6 +11669,7 @@
                     _camPreScanned = false;
                     _camBootstrapHolding = false;
                     _camBootstrapMode = null;
+                    _resetFreeCamViewOffsetState(false);
                     tgtX = curX = xFretMid(CAM_LOCK_CENTER_FRET);
                     tgtDist = curDist = CAM_DIST_BASE;
                     prevLowFretBonus = 0;
@@ -15636,9 +15643,15 @@
                 && !(_aspTune.splitOnly && !_ssActive()));
             const _tune = _aspActive ? _aspTune : null;
             const _vfov = effectiveVfov(_paneAspect, _tune);
-            if (Number.isFinite(_vfov) && Math.abs(_vfov - cam.fov) > 1e-4) {
-                cam.fov = _vfov;
-                cam.updateProjectionMatrix();
+            // Resolve the Camera Director bridge once (per-panel under splitscreen,
+            // else global). Used for projection zoom, the wide-pane gate, and transforms below.
+            const _freeCam = _freeCamFor(highwayCanvas);
+            const _projectionZoom = _freeCamProjectionZoom(_freeCam);
+            _applyFreeCamProjection(_vfov, _projectionZoom);
+            const _freeCamUsesViewOffset = _freeCamShouldApplyViewOffset(_freeCam);
+            if (!_freeCamUsesViewOffset) {
+                _resetFreeCamViewOffsetState(false);
+                _publishFreeCamBoardAnchorReadout(_freeCam, null, 1, 1);
             }
             // Publish a per-pane live readout for the tuner panel (only while it's
             // open, so the steady path stays allocation-free). Keyed by pane so
@@ -15654,9 +15667,6 @@
             // suppressed while the Camera Director owns the view (it wins).
             const _startAspect = (_tune && Number.isFinite(_tune.startAspect) && _tune.startAspect > 0)
                 ? _tune.startAspect : HORPLUS_START_ASPECT;
-            // Resolve the Camera Director bridge once (per-panel under splitscreen,
-            // else global). Used both for the wide-pane gate and the transforms below.
-            const _freeCam = _freeCamFor(highwayCanvas);
             const _dirActive = !!(_freeCam && _freeCam.enabled);
             const _wide = !!(_tune && _paneAspect > _startAspect) && !_dirActive;
             const _poseHMul = (_wide && Number.isFinite(_tune.heightMul)) ? _tune.heightMul : 1;
@@ -15718,6 +15728,7 @@
             cam.lookAt(curX, curLookY + _poseLookYAdd, _lookAtZ);    // tentative look — needed for project()
             cam.updateMatrixWorld();
             _probe.project(cam);                             // _probe.y → NDC in [-1, 1]
+            const _tiltProbeY = _freeCamNeutralProjectionNdcY(_probe.y, _projectionZoom);
 
             // Keep fretboard centre in the lower third of the screen (NDC ≈ -0.35).
             // The deadband width and correction strength are both blended
@@ -15727,10 +15738,10 @@
             const DESIRED_NDC_Y = -0.35;
             const tiltBand   = CAM_TILT_BAND_T + (CAM_TILT_BAND_C - CAM_TILT_BAND_T) * tiltSmoothing;
             const tiltStr    = CAM_TILT_STR_T  + (CAM_TILT_STR_C  - CAM_TILT_STR_T)  * tiltSmoothing;
-            if (_probe.y < DESIRED_NDC_Y - tiltBand || _probe.y > DESIRED_NDC_Y + tiltBand) {
+            if (_tiltProbeY < DESIRED_NDC_Y - tiltBand || _tiltProbeY > DESIRED_NDC_Y + tiltBand) {
                 // _probe.y too low → fretboard near bottom → tgtLookY decreases → camera tilts down → fretboard rises
                 // _probe.y too high → fretboard near top  → tgtLookY increases → camera tilts up   → fretboard drops
-                const correction = (DESIRED_NDC_Y - _probe.y) * fretMidY * tiltStr;
+                const correction = (DESIRED_NDC_Y - _tiltProbeY) * fretMidY * tiltStr;
                 tgtLookY = Math.max(-fretMidY, Math.min(fretMidY, tgtLookY - correction));
             }
             curLookY += (tgtLookY - curLookY) * lerp;
@@ -15738,13 +15749,17 @@
             // Final look-at with the corrected Y (overrides the tentative one above).
             // User tilt (pitch) + pan offsets layer on top when the free-cam is
             // enabled; each is coerced to a finite number to avoid a NaN look-at.
+            let _lookX = curX, _lookY = curLookY + _poseLookYAdd, _lookZ = _lookAtZ;
             if (_freeCam && _freeCam.enabled) {
                 const _panX = Number.isFinite(_freeCam.panX) ? _freeCam.panX : 0;
                 const _panY = Number.isFinite(_freeCam.panY) ? _freeCam.panY : 0;
                 const _pitch = Number.isFinite(_freeCam.pitch) ? _freeCam.pitch : 0;
-                cam.lookAt(curX + _panX * K, curLookY + (_pitch + _panY) * K, _lookAtZ);
-            } else {
-                cam.lookAt(curX, curLookY + _poseLookYAdd, _lookAtZ);
+                _lookX = curX + _panX * K;
+                _lookY = curLookY + (_pitch + _panY) * K;
+            }
+            cam.lookAt(_lookX, _lookY, _lookZ);
+            if (_freeCamUsesViewOffset) {
+                _applyFreeCamViewOffset(_freeCam, _projectionZoom);
             }
 
             // ── Fret-row fit guard ────────────────────────────────────────────
@@ -15780,6 +15795,299 @@
             }
         }
 
+        function _freeCamProjectionZoom(freeCam) {
+            if (!freeCam || !freeCam.enabled) return 1;
+            return _coerceFreeCamProjectionZoom(freeCam.projectionZoom);
+        }
+
+        function _coerceFreeCamProjectionZoom(value) {
+            return Number.isFinite(value) && value > 0 ? value : 1;
+        }
+
+        function _freeCamNeutralProjectionNdcY(ndcY, projectionZoom) {
+            if (!Number.isFinite(ndcY)) return ndcY;
+            const zoom = _coerceFreeCamProjectionZoom(projectionZoom);
+            const view = cam && cam.view && cam.view.enabled ? cam.view : null;
+            const viewOffsetY = view && view.fullHeight > 0 && Number.isFinite(view.offsetY)
+                ? (2 * view.offsetY) / view.fullHeight
+                : 0;
+            return (ndcY - viewOffsetY) / zoom;
+        }
+
+        function _applyFreeCamProjection(vfov, projectionZoom) {
+            if (!cam) return;
+            let changed = false;
+            const desiredZoom = _coerceFreeCamProjectionZoom(projectionZoom);
+            if (Number.isFinite(vfov) && Math.abs(vfov - cam.fov) > 1e-4) {
+                cam.fov = vfov;
+                changed = true;
+            }
+            if (Math.abs(desiredZoom - (Number.isFinite(cam.zoom) ? cam.zoom : 1)) > 1e-4) {
+                cam.zoom = desiredZoom;
+                changed = true;
+            }
+            if (changed) cam.updateProjectionMatrix();
+        }
+
+        function _clearFreeCamViewOffset() {
+            if (cam && cam.view && cam.view.enabled === true &&
+                    typeof cam.clearViewOffset === 'function') {
+                cam.clearViewOffset();
+            }
+        }
+
+        function _resetFreeCamViewOffsetState(dropScratch) {
+            _clearFreeCamViewOffset();
+            _clearFreeCamBoardAnchorState();
+            if (dropScratch) {
+                _freeCamBoardAnchorNear = null;
+                _freeCamBoardAnchorFar = null;
+                _freeCamBoardAnchorProject = null;
+            }
+        }
+
+        function _clearFreeCamBoardAnchorState() {
+            const retainedBridge = _freeCamBoardAnchorState && _freeCamBoardAnchorState.bridge;
+            _freeCamBoardAnchorState = null;
+            _publishFreeCamBoardAnchorReadout(retainedBridge, null, 1, 1);
+        }
+
+        function _resetFreeCamProjectionState() {
+            if (!cam) return;
+            let changed = false;
+            if (cam.fov !== BASE_VFOV) {
+                cam.fov = BASE_VFOV;
+                changed = true;
+            }
+            if (cam.zoom !== 1) {
+                cam.zoom = 1;
+                changed = true;
+            }
+            if (changed) cam.updateProjectionMatrix();
+        }
+
+        function _freeCamShouldApplyViewOffset(freeCam) {
+            if (!freeCam || !freeCam.enabled) return false;
+            if (Number.isFinite(freeCam.viewOffsetX) && freeCam.viewOffsetX !== 0) return true;
+            if (Number.isFinite(freeCam.viewOffsetY) && freeCam.viewOffsetY !== 0) return true;
+            if (freeCam.boardAnchor && freeCam.boardAnchor.enabled === true) return true;
+            return !!(freeCam.boardAnchorReadout && freeCam.boardAnchorReadout.active === true);
+        }
+
+        function _applyFreeCamViewOffset(freeCam, projectionZoom) {
+            if (!cam || typeof cam.setViewOffset !== 'function') {
+                _clearFreeCamBoardAnchorState();
+                _publishFreeCamBoardAnchorReadout(freeCam, null, 1, 1);
+                return;
+            }
+
+            const canvas = ren && ren.domElement ? ren.domElement : highwayCanvas;
+            const viewW = Math.max(1, Math.round(canvas && canvas.width ? canvas.width : 0));
+            const viewH = Math.max(1, Math.round(canvas && canvas.height ? canvas.height : 0));
+            const baseX = _freeCamViewOffsetToPixels(
+                Number.isFinite(freeCam.viewOffsetX) ? freeCam.viewOffsetX : 0, viewW);
+            const baseY = _freeCamViewOffsetToPixels(
+                Number.isFinite(freeCam.viewOffsetY) ? freeCam.viewOffsetY : 0, viewH);
+            const anchor = _getFreeCamBoardAnchorOffset(
+                freeCam, canvas, viewW, viewH, baseX, baseY, projectionZoom);
+
+            _setFreeCamViewOffsetPixels(viewW, viewH, baseX + anchor.x, baseY + anchor.y);
+            _publishFreeCamBoardAnchorReadout(freeCam, anchor, viewW, viewH);
+        }
+
+        function _freeCamViewOffsetToPixels(value, size) {
+            return Number.isFinite(value) && Number.isFinite(size) && size > 0 ? value * size : 0;
+        }
+
+        function _freeCamPixelsToViewOffset(value, size) {
+            return Number.isFinite(value) && Number.isFinite(size) && size > 0 ? value / size : 0;
+        }
+
+        function _setFreeCamViewOffsetPixels(viewW, viewH, offsetX, offsetY) {
+            if (!cam || typeof cam.setViewOffset !== 'function') return false;
+            const width = Math.max(1, Math.round(Number(viewW) || 0));
+            const height = Math.max(1, Math.round(Number(viewH) || 0));
+            const x = Number.isFinite(offsetX) ? offsetX : 0;
+            const y = Number.isFinite(offsetY) ? offsetY : 0;
+            if (Math.abs(x) < 1e-6 && Math.abs(y) < 1e-6) {
+                _clearFreeCamViewOffset();
+                return true;
+            }
+
+            const view = cam.view;
+            if (view && view.enabled === true &&
+                    view.fullWidth === width && view.fullHeight === height &&
+                    view.width === width && view.height === height &&
+                    Math.abs(view.offsetX - x) < 1e-4 &&
+                    Math.abs(view.offsetY - y) < 1e-4) return true;
+
+            cam.setViewOffset(width, height, x, y, width, height);
+            return true;
+        }
+
+        function _getFreeCamBoardAnchorOffset(
+            freeCam, canvas, viewW, viewH, baseX, baseY, projectionZoom
+        ) {
+            const request = _getFreeCamBoardAnchorRequest(freeCam);
+            if (!request || !canvas || typeof canvas.getBoundingClientRect !== 'function') {
+                _clearFreeCamBoardAnchorState();
+                return _FREE_CAM_NO_BOARD_ANCHOR_OFFSET;
+            }
+
+            const requestId = request.requestId;
+            let retained = _freeCamBoardAnchorState;
+            if (retained && retained.bridge !== freeCam) {
+                _clearFreeCamBoardAnchorState();
+                retained = null;
+            }
+            const recapture = !retained || retained.requestId !== requestId ||
+                retained.viewW !== viewW || retained.viewH !== viewH;
+            if (recapture) {
+                const rawRect = canvas.getBoundingClientRect();
+                const rect = {
+                    left: Number(rawRect && rawRect.left),
+                    top: Number(rawRect && rawRect.top),
+                    width: Number(rawRect && rawRect.width),
+                    height: Number(rawRect && rawRect.height),
+                };
+                if (!Number.isFinite(rect.left) || !Number.isFinite(rect.top) ||
+                        !Number.isFinite(rect.width) || rect.width <= 0 ||
+                        !Number.isFinite(rect.height) || rect.height <= 0) {
+                    _clearFreeCamBoardAnchorState();
+                    return _FREE_CAM_NO_BOARD_ANCHOR_OFFSET;
+                }
+
+                const capture = request.capture;
+                const captureX = Number.isFinite(capture.viewOffsetX)
+                    ? _freeCamViewOffsetToPixels(capture.viewOffsetX, viewW) : baseX;
+                const captureY = Number.isFinite(capture.viewOffsetY)
+                    ? _freeCamViewOffsetToPixels(capture.viewOffsetY, viewH) : baseY;
+                const savedZoom = Number.isFinite(cam.zoom) ? cam.zoom : 1;
+                const captureZoom = Number.isFinite(capture.projectionZoom) &&
+                    capture.projectionZoom > 0 ? capture.projectionZoom : projectionZoom;
+                try {
+                    _setFreeCamViewOffsetPixels(viewW, viewH, captureX, captureY);
+                    if (Math.abs(captureZoom - savedZoom) >= 1e-6) {
+                        cam.zoom = captureZoom;
+                        cam.updateProjectionMatrix();
+                    }
+                    const point = _captureFreeCamBoardAnchorWorldPoint(capture, rect);
+                    if (point) {
+                        point.bridge = freeCam;
+                        point.requestId = requestId;
+                        point.rect = rect;
+                        point.viewW = viewW;
+                        point.viewH = viewH;
+                        _freeCamBoardAnchorState = point;
+                    } else {
+                        _freeCamBoardAnchorState = {
+                            bridge: freeCam, requestId, unavailable: true, rect, viewW, viewH
+                        };
+                    }
+                } finally {
+                    if (Math.abs(savedZoom - (Number.isFinite(cam.zoom) ? cam.zoom : 1)) >= 1e-6) {
+                        cam.zoom = savedZoom;
+                        cam.updateProjectionMatrix();
+                    }
+                    _setFreeCamViewOffsetPixels(viewW, viewH, baseX, baseY);
+                }
+            } else {
+                _setFreeCamViewOffsetPixels(viewW, viewH, baseX, baseY);
+            }
+
+            const state = _freeCamBoardAnchorState;
+            if (!state || state.unavailable) return _FREE_CAM_NO_BOARD_ANCHOR_OFFSET;
+            const point = _freeCamBoardAnchorProject ||
+                (_freeCamBoardAnchorProject = new T.Vector3());
+            point.set(state.x, state.y, state.z);
+            cam.updateMatrixWorld();
+            point.project(cam);
+            if (!Number.isFinite(point.x) || !Number.isFinite(point.y) ||
+                    !Number.isFinite(point.z)) return _FREE_CAM_NO_BOARD_ANCHOR_OFFSET;
+
+            const rect = state.rect;
+            const clientX = rect.left + (point.x * 0.5 + 0.5) * rect.width;
+            const clientY = rect.top + (-point.y * 0.5 + 0.5) * rect.height;
+            _freeCamBoardAnchorOffset.active = true;
+            _freeCamBoardAnchorOffset.requestId = requestId;
+            _freeCamBoardAnchorOffset.x =
+                (clientX - request.clientX) * (viewW / rect.width);
+            _freeCamBoardAnchorOffset.y =
+                (clientY - request.clientY) * (viewH / rect.height);
+            return _freeCamBoardAnchorOffset;
+        }
+
+        function _getFreeCamBoardAnchorRequest(freeCam) {
+            const anchor = freeCam && freeCam.enabled ? freeCam.boardAnchor : null;
+            const capture = anchor && anchor.capture;
+            if (!anchor || anchor.enabled !== true ||
+                    !Number.isFinite(anchor.requestId) ||
+                    !Number.isFinite(anchor.clientX) ||
+                    !Number.isFinite(anchor.clientY) ||
+                    !capture || typeof capture !== 'object' ||
+                    !Number.isFinite(capture.clientX) ||
+                    !Number.isFinite(capture.clientY)) {
+                _clearFreeCamBoardAnchorState();
+                return null;
+            }
+            return anchor;
+        }
+
+        function _captureFreeCamBoardAnchorWorldPoint(capture, rect) {
+            if (!cam || !T) return null;
+            const ndcX = ((capture.clientX - rect.left) / rect.width) * 2 - 1;
+            const ndcY = -(((capture.clientY - rect.top) / rect.height) * 2 - 1);
+            const near = _freeCamBoardAnchorNear ||
+                (_freeCamBoardAnchorNear = new T.Vector3());
+            const far = _freeCamBoardAnchorFar ||
+                (_freeCamBoardAnchorFar = new T.Vector3());
+            cam.updateMatrixWorld();
+            near.set(ndcX, ndcY, -1).unproject(cam);
+            far.set(ndcX, ndcY, 1).unproject(cam);
+
+            const y = S_BASE - NH / 2 - 2 * K;
+            const dy = far.y - near.y;
+            if (!Number.isFinite(dy) || Math.abs(dy) < 1e-6) return null;
+            const t = (y - near.y) / dy;
+            if (!Number.isFinite(t) || t < 0 || t > 1) return null;
+
+            const span = boardSpanX();
+            const x = near.x + (far.x - near.x) * t;
+            const z = near.z + (far.z - near.z) * t;
+            if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+            return {
+                x: Math.max(span.min - 2 * K, Math.min(span.max + 2 * K, x)),
+                y,
+                z: Math.max(-TS * AHEAD, Math.min(0, z)),
+            };
+        }
+
+        function _publishFreeCamBoardAnchorReadout(freeCam, offset, viewW, viewH) {
+            const readout = freeCam && typeof freeCam === 'object' &&
+                freeCam.boardAnchorReadout && typeof freeCam.boardAnchorReadout === 'object'
+                ? freeCam.boardAnchorReadout : null;
+            if (!readout) return;
+
+            const active = !!(offset && offset.active === true);
+            const requestId = active && Number.isFinite(offset.requestId)
+                ? offset.requestId : 0;
+            const deltaX = active ? _freeCamPixelsToViewOffset(offset.x, viewW) : 0;
+            const deltaY = active ? _freeCamPixelsToViewOffset(offset.y, viewH) : 0;
+            _writeFreeCamBoardAnchorReadout(readout, 'active', active);
+            _writeFreeCamBoardAnchorReadout(readout, 'requestId', requestId);
+            _writeFreeCamBoardAnchorReadout(readout, 'viewOffsetDeltaX',
+                Number.isFinite(deltaX) ? deltaX : 0);
+            _writeFreeCamBoardAnchorReadout(readout, 'viewOffsetDeltaY',
+                Number.isFinite(deltaY) ? deltaY : 0);
+        }
+
+        function _writeFreeCamBoardAnchorReadout(readout, key, value) {
+            try {
+                if (!Object.is(readout[key], value)) readout[key] = value;
+            } catch (_) {
+                /* optional readout must never affect rendering */
+            }
+        }
         /* ── Resize helper ───────────────────────────────────────────────── */
         function applySize(w, h) {
             if (!ren || !cam || !wrap) return;
@@ -15863,6 +16171,8 @@
             }
             _onCtxLost = _onCtxRestored = null;
             _ctxLost = false;
+            _resetFreeCamViewOffsetState(true);
+            _resetFreeCamProjectionState();
             // Notedetect listeners (issue #9). Remove on destroy so a
             // panel that stops doesn't keep accumulating marks. Marks
             // arrays are cleared too — they hold stale chart positions
