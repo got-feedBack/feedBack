@@ -988,6 +988,40 @@ def _resolve_drum_parts(
     return drum_tab_data, parts
 
 
+_VOCALISH_NAMES = ("vocal", "voice", "karaoke")
+
+
+def _has_vocal_arrangement(song: Song) -> bool:
+    """True when the loader already produced an explicitly vocal arrangement
+    (by editor-authored ``type`` or by name), so the vocals projection must
+    not add a duplicate."""
+    for arr in song.arrangements:
+        if str(getattr(arr, "type", "") or "").strip().lower() in ("vocals", "vocal"):
+            return True
+        name = str(arr.name or "").lower()
+        if any(tok in name for tok in _VOCALISH_NAMES):
+            return True
+    return False
+
+
+def _load_vocal_pitch_for_duration(source_dir: Path, rel: str) -> dict | None:
+    """Path-confined, fully permissive read of the ``vocal_pitch`` sidecar —
+    used only for the melody-only duration fallback. Any failure returns
+    None: a malformed sidecar costs the fallback, never the load."""
+    try:
+        vp_path = (source_dir / rel).resolve()
+        vp_path.relative_to(source_dir.resolve())
+    except (ValueError, OSError):
+        return None
+    if not vp_path.exists():
+        return None
+    try:
+        data = load_json(vp_path)
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def load_song(
     filename: str,
     dlc_root: Path,
@@ -1187,6 +1221,43 @@ def load_song(
                 song.song_length = _max_t + 2.0
         song.arrangements.append(Arrangement(name="Drums"))
         arrangement_ids_acc.append(None)
+
+    # Vocals-arrangement projection: a sloppak that carries a sung-melody
+    # sidecar (`vocal_pitch`, feedpak-spec §7.2) gets a synthetic chartless
+    # "Vocals" arrangement so the melody is selectable in the player, vocal
+    # visualizers can auto-match it, and sung runs land in their own honest
+    # `song_stats` bucket instead of being posted against a fretted
+    # arrangement's records (`instrument_for_arrangement` already maps the
+    # name to "vocals"). The synthetic entry carries no notes — the melody
+    # itself stays in the sidecar, which vocal visualizers fetch directly.
+    # Skipped when the loader already produced an explicitly vocal
+    # arrangement (a chartless vocal-NAMED manifest entry was dropped by the
+    # loop above, so it does not suppress the projection — the projection is
+    # what makes that authored intent playable).
+    vocal_pitch_rel = manifest.get("vocal_pitch")
+    if isinstance(vocal_pitch_rel, str) and vocal_pitch_rel.strip():
+        if not _has_vocal_arrangement(song):
+            if song.song_length <= 0:
+                # Duration fallback for melody-only paks (same contract as the
+                # drum-only placeholder): last sung note's end + tail. The
+                # sidecar read is path-confined and fully permissive — a
+                # malformed file only costs the fallback, never the load.
+                _vp = _load_vocal_pitch_for_duration(source_dir, vocal_pitch_rel.strip())
+                _max_t = 0.0
+                for _n in (_vp.get("notes") if isinstance(_vp, dict) else None) or []:
+                    if not isinstance(_n, dict):
+                        continue
+                    try:
+                        _max_t = max(
+                            _max_t,
+                            float(_n.get("t", 0) or 0) + float(_n.get("d", 0) or 0),
+                        )
+                    except (TypeError, ValueError):
+                        continue
+                if _max_t > 0:
+                    song.song_length = _max_t + 2.0
+            song.arrangements.append(Arrangement(name="Vocals", type="vocals"))
+            arrangement_ids_acc.append(None)
 
     # Optional song_timeline.json — top-level manifest key per sloppak-spec §5.3.
     # When present, its beats and sections override whatever the arrangement JSONs
@@ -1534,6 +1605,30 @@ def extract_meta(path: Path) -> dict:
                 "notes": 0,  # unknown without loading; fine for the index
             }
         )
+    # Vocals-arrangement projection — the metadata mirror of load_song()'s.
+    # A `vocal_pitch` sidecar (feedpak-spec §7.2) projects a synthetic
+    # "Vocals" entry so the library and the `song_stats` arrangement-count
+    # validation agree with the player's arrangement list; without it a
+    # sung run would be rejected (index out of range) or, worse, recorded
+    # against a fretted arrangement. Suppressed when the manifest already
+    # declares a vocal-ish entry (even a chartless one — that entry is
+    # counted by the loop above, and load_song projects its playable
+    # counterpart, so the counts stay in step).
+    _vp_rel = manifest.get("vocal_pitch")
+    if isinstance(_vp_rel, str) and _vp_rel.strip():
+        _has_vocalish = False
+        for entry in arr_list:
+            if not isinstance(entry, dict):
+                continue
+            _ename = str(entry.get("name", entry.get("id", "")) or "").lower()
+            _etype = str(entry.get("type") or "").strip().lower()
+            if _etype in ("vocals", "vocal") or any(t in _ename for t in _VOCALISH_NAMES):
+                _has_vocalish = True
+                break
+        if not _has_vocalish:
+            arrangements.append(
+                {"index": len(arrangements), "name": "Vocals", "notes": 0}
+            )
     # Sort like archive path: Lead > Combo > Rhythm > Bass
     priority = {"Lead": 0, "Combo": 1, "Rhythm": 2, "Bass": 3}
     arrangements.sort(key=lambda a: priority.get(a["name"], 99))
