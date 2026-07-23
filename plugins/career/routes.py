@@ -672,6 +672,9 @@ def setup(app, context):
                 "installed": _installed(v["id"]),
                 "bundled": _bundled(v["id"]),
                 "has_pack": _bundled(v["id"]) or _pack_published(v.get("pack")),
+                # Size of the downloadable pack (for the "Download (~343 MB)"
+                # disclosure); None when there's nothing to download.
+                "pack_bytes": (v.get("pack") or {}).get("bytes") or None,
                 "download": dl,
             })
         return {

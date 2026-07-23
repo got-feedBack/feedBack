@@ -226,6 +226,46 @@ def test_content_packs_rejects_files_the_downloader_would_refuse(tmp_path):
         raise AssertionError("build_pack accepted a .DS_Store the downloader rejects")
 
 
+def test_unlocked_venue_survives_media_being_unbundled(client, meta_db, monkeypatch, tmp_path):
+    # Upgrade / no-progress-loss: a player who already unlocked arena upgrades
+    # into the slim build where arena media is no longer bundled. The venue must
+    # stay UNLOCKED and become DOWNLOADABLE — never locked or broken — and a
+    # download must restore it. (Star state lives in meta.db, untouched by the
+    # bundle change; `unlocked` is computed from stars, not pack presence.)
+    empty = tmp_path / "no-bundled-media"
+    empty.mkdir()
+    # Simulate the slim build: nothing bundled under venue-packs/.
+    monkeypatch.setattr(career_routes, "_bundled_venue_dir", lambda vid: empty / vid)
+    # Earn 150 stars (50 songs x 3 stars) → arena (threshold 150) unlocked.
+    for i in range(50):
+        meta_db.add(f"song{i}.feedpak", "guitar", 0.99)
+
+    arena = {v["id"]: v for v in client.get("/api/plugins/career/state").json()["venues"]}["arena"]
+    assert arena["unlocked"] is True          # progress preserved
+    assert arena["bundled"] is False          # media stripped from the build
+    assert arena["installed"] is False         # nothing to play yet
+    assert arena["has_pack"] is True           # but it's downloadable
+    assert arena["pack_bytes"] and arena["pack_bytes"] > 0   # size known for the disclosure
+
+    # And a real download restores it (mirror the file:// worker path).
+    src = tmp_path / "src"
+    src.mkdir()
+    for s in career_routes.REQUIRED_LOOPS:
+        (src / f"{s}.mp4").write_bytes(b"v-" + s.encode())
+    (src / "manifest.json").write_text(json.dumps(
+        {"venue": "arena", "version": 1,
+         "loops": {s: f"{s}.mp4" for s in career_routes.REQUIRED_LOOPS}}))
+    zip_path = tmp_path / "arena.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        for p in src.iterdir():
+            zf.write(p, p.name)
+    sha = hashlib.sha256(zip_path.read_bytes()).hexdigest()
+    progress = {"status": "running", "bytes_done": 0, "bytes_total": 0, "error": None}
+    career_routes._download_pack("arena", {"url": zip_path.as_uri(), "sha256": sha}, progress)
+    assert progress["status"] == "done", progress["error"]
+    assert career_routes._installed("arena") is True
+
+
 def test_double_download_409s(client, monkeypatch):
     bar = career_routes._venue("bar")
     monkeypatch.setitem(bar, "pack", {"url": "http://x/pack.zip", "sha256": "0" * 64, "bytes": 123})
