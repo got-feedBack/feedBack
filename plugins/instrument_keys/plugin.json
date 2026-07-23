@@ -19,6 +19,7 @@
       {
         "id": "keys",
         "label": "Keys",
+        "arrangement_types": ["keys"],
         "arrangement_names": ["Keys", "Piano", "Keyboard", "Synth", "Synth Lead"],
         "default": true
       }

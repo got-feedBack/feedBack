@@ -53,6 +53,7 @@
         "id": "bass",
         "label": "Bass",
         "arrangement_flags": ["path_bass"],
+        "arrangement_types": ["bass"],
         "arrangement_names": ["Bass", "Pick Bass", "Fingered Bass", "Finger Bass", "Picked Bass"],
         "default": true
       }

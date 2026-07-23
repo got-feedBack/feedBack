@@ -17,6 +17,7 @@
       {
         "id": "drums",
         "label": "Drums",
+        "arrangement_types": ["drums"],
         "arrangement_names": ["Drums", "Drum Kit", "Percussion"],
         "default": true
       }

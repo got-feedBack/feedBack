@@ -105,7 +105,12 @@ class InstrumentRegistry:
         """
         inst_id = _validate_str(definition.get("id"), "instrument.id")
         if inst_id in self._instruments:
-            raise ValueError(f"instrument {inst_id!r} is already registered")
+            log.warning(
+                "instrument %r already registered by plugin %s; skipping %r from plugin %s",
+                inst_id, self._instruments[inst_id].get("_plugin_id", "?"),
+                definition.get("label", inst_id), definition.get("_plugin_id", "?"),
+            )
+            return
         label = _validate_str(definition.get("label", inst_id), "instrument.label")
         kind = _validate_str(definition.get("kind", "custom"), "instrument.kind")
         if kind not in _INSTRUMENT_KINDS:
@@ -233,6 +238,12 @@ class InstrumentRegistry:
             r_names = role.get("arrangement_names") or []
             if not isinstance(r_names, list):
                 raise ValueError(f"roles[{i}].arrangement_names must be a list")
+            r_types = role.get("arrangement_types") or []
+            if not isinstance(r_types, list):
+                raise ValueError(f"roles[{i}].arrangement_types must be a list")
+            for t in r_types:
+                if not isinstance(t, str) or not t.strip():
+                    raise ValueError(f"roles[{i}].arrangement_types entries must be non-empty strings")
             r_default = bool(role.get("default"))
             if r_default:
                 if has_default:
@@ -242,11 +253,33 @@ class InstrumentRegistry:
                 "id": r_id,
                 "label": r_label,
                 "arrangement_flags": list(set(r_flags)),
+                "arrangement_types": [t.strip().lower() for t in r_types if t.strip()],
                 "arrangement_names": [n.strip().lower() for n in r_names if isinstance(n, str) and n.strip()],
                 "default": r_default,
             })
         if roles and not has_default:
             roles[0]["default"] = True
+
+        # Cross-instrument collision detection: warn when two instruments
+        # claim the same arrangement name or type. First-wins rules — the
+        # already-registered instrument keeps the claim.
+        for existing_id, existing in self._instruments.items():
+            for new_role in roles:
+                for existing_role in existing["roles"]:
+                    overlapping_types = set(new_role.get("arrangement_types", [])) & set(existing_role.get("arrangement_types", []))
+                    if overlapping_types:
+                        log.warning(
+                            "instrument %r role %r arrangement_types %s overlap with already-registered %r role %r",
+                            inst_id, new_role["id"], sorted(overlapping_types),
+                            existing_id, existing_role["id"],
+                        )
+                    overlapping_names = set(new_role["arrangement_names"]) & set(existing_role["arrangement_names"])
+                    if overlapping_names:
+                        log.warning(
+                            "instrument %r role %r arrangement_names %s overlap with already-registered %r role %r",
+                            inst_id, new_role["id"], sorted(overlapping_names),
+                            existing_id, existing_role["id"],
+                        )
 
         normalized = {
             "id": inst_id,
@@ -325,13 +358,20 @@ class InstrumentRegistry:
             return inst["roles"][0]["id"]
         return None
 
-    def find_role_by_arrangement(self, instrument_id: str, arr_name: str, arr_flags: dict = None) -> str | None:
-        """Find the role id matching an arrangement name or path flags for a specific instrument."""
+    def find_role_by_arrangement(self, instrument_id: str, arr_name: str, arr_flags: dict = None, arr_type: str = "") -> str | None:
+        """Find the role id matching an arrangement name, type, or path flags for a specific instrument.
+
+        Priority: arrangement_types first (exact spec ``type`` match), then
+        arrangement_names, then arrangement_flags.
+        """
         inst = self._instruments.get(instrument_id)
         if not inst:
             return None
+        arr_type_lower = (arr_type or "").strip().lower()
         name_lower = (arr_name or "").strip().lower()
         for role in inst["roles"]:
+            if arr_type_lower and arr_type_lower in role.get("arrangement_types", []):
+                return role["id"]
             if name_lower in role["arrangement_names"]:
                 return role["id"]
             if arr_flags:
@@ -340,11 +380,18 @@ class InstrumentRegistry:
                         return role["id"]
         return None
 
-    def instrument_id_for_arrangement(self, arr_name: str, arr_flags: dict = None) -> str | None:
-        """Return the instrument id whose roles match a given arrangement name or flags."""
+    def instrument_id_for_arrangement(self, arr_name: str, arr_flags: dict = None, arr_type: str = "") -> str | None:
+        """Return the instrument id whose roles match a given arrangement name, type, or flags.
+
+        Priority: arrangement_types (exact match against spec ``type``) first,
+        then arrangement_names (fuzzy display name match), then arrangement_flags.
+        """
+        arr_type_lower = (arr_type or "").strip().lower()
         name_lower = (arr_name or "").strip().lower()
         for inst in self._instruments.values():
             for role in inst["roles"]:
+                if arr_type_lower and arr_type_lower in role.get("arrangement_types", []):
+                    return inst["id"]
                 if name_lower in role["arrangement_names"]:
                     return inst["id"]
                 if arr_flags:

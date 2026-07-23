@@ -60,6 +60,7 @@
         "id": "lead",
         "label": "Lead",
         "arrangement_flags": ["path_lead"],
+        "arrangement_types": ["lead"],
         "arrangement_names": ["Lead", "Lead Guitar"],
         "default": true
       },
@@ -67,6 +68,7 @@
         "id": "rhythm",
         "label": "Rhythm",
         "arrangement_flags": ["path_rhythm"],
+        "arrangement_types": ["rhythm"],
         "arrangement_names": ["Rhythm", "Rhythm Guitar"]
       }
     ]

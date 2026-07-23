@@ -54,7 +54,8 @@ Each instrument plugin sets `"type": "instrument"` in its manifest and carries a
         "id": "lead",               // role id (snake_case), used in profile ids
         "label": "Lead",            // display label for the role selector
         "arrangement_flags": ["path_lead"],  // XML flags that identify this role
-        "arrangement_names": ["Lead", "Lead Guitar"],  // names that identify this role
+        "arrangement_types": ["lead"],  // spec `type` values that identify this role (normative, exact match — preferred over names)
+        "arrangement_names": ["Lead", "Lead Guitar"],  // display names that identify this role (fuzzy/fallback)
         "default": true             // the default role for this instrument
       }
     ]
@@ -77,9 +78,12 @@ Each instrument plugin sets `"type": "instrument"` in its manifest and carries a
 When a player selects a role (e.g. Guitar → Rhythm), the highway opens the
 arrangement matching that role. Roles match against:
 
-1. **Arrangement flags** — XML `<arrangementProperties>` attributes (e.g. `path_bass`, `path_lead`).
+1. **Arrangement types** — spec `type` values (e.g. `"bass"`, `"drums"`, `"lead"`).
+   Matched exactly against the arrangement's `type` field. This is the primary,
+   normative routing key and is stable across display-name changes.
+2. **Arrangement flags** — XML `<arrangementProperties>` attributes (e.g. `path_bass`, `path_lead`).
    Flagged arrangements match immediately, regardless of name.
-2. **Arrangement names** — matched case-insensitively against the arrangement's
+3. **Arrangement names** — matched case-insensitively against the arrangement's
    smart name (from XML parsing) and raw name. List common GP/RS2014 naming
    variants for each role to maximise coverage (e.g. `["Bass", "Pick Bass", "Fingered Bass"]`).
 
@@ -173,5 +177,5 @@ These ship with fee[dB]ack and are in the `plugins/` directory tree by default:
 | `instrument_guitar` | `guitar` | stringed |
 | `instrument_bass` | `bass` | stringed |
 | `instrument_drums` | `drums` | percussion |
-| `instrument_piano` | `keys` | keyboard |
-| `instrument_vocals` | `vocals` | vocal |
+| `instrument_keys` | `keys` | keyboard |
+

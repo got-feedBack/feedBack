@@ -349,9 +349,9 @@ def instrument_for_arrangement(arr_entry, *, registry=None):
     if registry:
         for inst in registry.get_all():
             for role in inst.get("roles", []):
-                if name in role.get("arrangement_names", []):
+                if arr_type in role.get("arrangement_types", []):
                     return inst["id"]
-                if arr_type in role.get("arrangement_names", []):
+                if name in role.get("arrangement_names", []):
                     return inst["id"]
         # Also check flags: build a virtual arr_entry for path flag matching
         for inst in registry.get_all():
@@ -376,8 +376,6 @@ def instrument_for_arrangement(arr_entry, *, registry=None):
         return "bass"
     if "drum" in name or "percussion" in name:
         return "drums"
-    if "vocal" in name:
-        return "vocals"
     # Word-boundary match so e.g. "Monkeys Medley" doesn't read as keys.
     if re.search(r"\b(?:keys|piano|keyboard|synth)\b", name):
         return "keys"
