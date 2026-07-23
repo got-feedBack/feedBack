@@ -581,8 +581,14 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
             # as the `drum_tab`/`drum_hits` messages below. Always a list
             # (empty when the pack has no drums, and a single entry for a
             # legacy one-drum pack), so a part picker can bind unconditionally.
+            # `tones` is the part's sound binding (feedpak 1.18.0 §5.1/§5.2 —
+            # entry `tones` or the song-level `drum_tones` fallback, already
+            # resolved by the loader). Omitted when the part binds nothing, so
+            # a pack without bindings sends the payload it always did; pair it
+            # with the `rigs` message below to resolve `base_rig`/`rig` ids.
             "drum_parts": [
-                {"id": p["id"], "name": p["name"]}
+                {"id": p["id"], "name": p["name"],
+                 **({"tones": p["tones"]} if p.get("tones") else {})}
                 for p in (loaded_slop.drum_parts or [])
             ] if is_slop and loaded_slop is not None else [],
             "has_notation": bool(
@@ -797,6 +803,22 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
                 if base_rig:
                     payload["base_rig"] = base_rig
                 await websocket.send_json(payload)
+
+            # The pack's RIG LIBRARY (rigs.json, spec §7.9) — the thing the
+            # `base_rig` / `rig` ids above (and the drum parts' `tones`) are
+            # references INTO. Sent whole and verbatim: core does not select a
+            # realization or apply the `intent.gm` floor, so the consumer that
+            # voices the part needs the entire block to make that choice.
+            #
+            # Deliberately NOT gated on this arrangement having tone changes —
+            # a pack can bind sound to its drum parts alone (`drum_tones`) and
+            # still need the library. Sent whenever the pack ships one.
+            if loaded_slop is not None and loaded_slop.rigs is not None:
+                await websocket.send_json({
+                    "type": "rigs",
+                    "version": int(loaded_slop.rigs.get("version", 1)),
+                    "data": loaded_slop.rigs.get("rigs") or [],
+                })
         else:
             xml_paths = sorted(_xml_walk("*.xml"))
 
