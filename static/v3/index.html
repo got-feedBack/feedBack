@@ -492,8 +492,8 @@
                                 <div class="fb-srow-desc">Positive = audio plays ahead of visual notes; raise to catch the highway up. Adjust live with the [ and ] keys (Shift for ±50 ms). Auto-saves.</div>
                             </div>
                         </div>
-                        <input type="range" id="setting-av-offset" min="-1000" max="1000" step="1" value="0"
-                            oninput="setAvOffsetMs(this.value)" class="fb-srow-wide slider-input">
+                        <input type="range" id="setting-av-offset" min="-300" max="300" step="1" value="0"
+                            oninput="setAvOffsetMs(this.value, false, 'manual')" class="fb-srow-wide slider-input">
                     </div>
                     <!-- Note highway speed (master difficulty) -->
                     <div class="fb-srow fb-srow-stack">
@@ -1208,9 +1208,12 @@
                 <div class="v3-pop-row">
                     <span class="v3-pop-label" id="player-av-offset-slider-label">A/V sync (ms)</span>
                     <span class="flex items-center gap-2">
-                        <input type="range" id="player-av-offset-slider" min="-1000" max="1000" value="0" step="1" oninput="setAvOffsetMs(this.value)" class="accent-accent slider-input" title="A/V sync offset (ms) — positive = audio plays ahead of visuals. [ and ] adjust ±10 ms (Shift = ±50). Double-click to reset." ondblclick="setAvOffsetMs(0)" aria-labelledby="player-av-offset-slider-label">
-                        <span id="player-av-offset-label" class="v3-pop-val tabular-nums">+0ms</span>
+                        <input type="range" id="player-av-offset-slider" min="-300" max="300" value="0" step="1" oninput="setAvOffsetMs(this.value, false, 'manual')" class="accent-accent slider-input" title="A/V sync offset (ms). Higher = notes reach the strike line SOONER (visuals sped up); lower = later. [ and ] adjust ±10 ms (Shift = ±50). Double-click to reset." ondblclick="setAvOffsetMs(0, false, 'manual')" aria-labelledby="player-av-offset-slider-label">
+                        <input type="number" id="player-av-offset-num" min="-1000" max="1000" step="1" value="0" onchange="setAvOffsetMs(this.value, false, 'manual')" class="v3-pop-val tabular-nums" style="width:4.4em" title="Type an exact A/V offset in ms (arrows step ±1)" aria-labelledby="player-av-offset-slider-label">
                     </span>
+                </div>
+                <div class="v3-pop-row" style="margin-top:-2px">
+                    <span class="v3-pop-label" style="opacity:.6;font-size:.7rem">↑ higher = notes sooner (visuals faster) · ↓ lower = later · type an exact value on the right</span>
                 </div>
                 <div class="v3-pop-row">
                     <span class="v3-pop-label">Loop</span>

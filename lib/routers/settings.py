@@ -139,6 +139,15 @@ def save_settings(data: dict):
         except (TypeError, ValueError, OverflowError):
             return {"error": "av_offset_ms must be a number between -1000 and 1000"}
 
+    if "av_offset_manual" in data:
+        # Whether av_offset_ms was hand-set by the user. When true the client
+        # protects the value from auto-calibrate overwrites across reloads.
+        raw = data["av_offset_manual"]
+        if raw is not None:
+            if not isinstance(raw, bool):
+                return {"error": "av_offset_manual must be a boolean"}
+            updates["av_offset_manual"] = raw
+
     # fee[dB]ack v0.3.0 gameplay settings (tabbed settings page). null is a
     # no-op per the merge contract; bad shapes return a structured error
     # rather than 500. countdown_before_song is consumed by the song-start
@@ -362,7 +371,7 @@ def save_settings(data: dict):
 # known set means a malformed or hostile body can't wipe unrelated config.
 _RESETTABLE_SETTINGS_KEYS = frozenset({
     "default_arrangement", "demucs_server_url", "master_difficulty",
-    "av_offset_ms", "countdown_before_song", "miss_penalty", "fail_behavior",
+    "av_offset_ms", "av_offset_manual", "countdown_before_song", "miss_penalty", "fail_behavior",
     "reference_pitch", "instrument", "string_count", "tuning", "pathway",
     "instrument_profiles", "active_instrument_profile",
     "achievements_enabled", "use_amp_sims",
