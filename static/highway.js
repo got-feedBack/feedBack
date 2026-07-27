@@ -2358,6 +2358,17 @@ function createHighway() {
                                     // (minigames) get []. app.js shows a credits
                                     // overlay on song load when this is non-empty.
                                     authors: Array.isArray(msg.authors) ? msg.authors : [],
+                                    // Generic plugin metadata (docs/PLUGIN_METADATA_API.md):
+                                    // album/year/genre + MusicBrainz identifiers, when known.
+                                    // Optional/additive — forwarded verbatim from the server's
+                                    // "metadata" key so plugins reading song:loaded get it
+                                    // without a follow-up request. null on an old server that
+                                    // doesn't send it yet, never a missing key, so callers can
+                                    // use a plain `?.` chain rather than an `in`/hasOwnProperty
+                                    // check. See lib/plugin_metadata.py for the field shapes —
+                                    // this object is intentionally NOT re-derived here, only
+                                    // forwarded, so the server stays the single source of truth.
+                                    metadata: msg.metadata ?? null,
                                 };
                                 window.feedBack.emit('song:loaded', window.feedBack.currentSong);
                             }

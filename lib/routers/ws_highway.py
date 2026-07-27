@@ -47,6 +47,7 @@ import notation as notation_mod
 import loosefolder as loosefolder_mod
 from metadata_db import _arr_smart_sort_key
 from dlc_paths import _get_dlc_dir, _resolve_dlc_path
+from plugin_metadata import plugin_metadata_for
 
 import appstate
 
@@ -500,6 +501,33 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
             for i, a in enumerate(song.arrangements)
         ]
         arr_list.sort(key=_arr_smart_sort_key)
+        # Generic plugin metadata (docs/PLUGIN_METADATA_API.md) — album/year/
+        # genre + MusicBrainz identifiers, when known. Keyed the same way
+        # routers/song.py's GET /api/song/{filename} already canonicalizes
+        # (DLC-relative posix path), which is what the scanner actually wrote
+        # the songs/song_enrichment cache rows under; falls back to the raw
+        # `filename` path param on the rare failure of that resolution, same
+        # fallback song.py itself uses. `song` (loaded above via load_song())
+        # already carries this song's own album/year straight from the
+        # sloppak manifest, which is more current than whatever the last
+        # library scan cached and doesn't require reading the sloppak a
+        # second time — passed through as base_metadata so
+        # plugin_metadata_for() only falls back to the songs cache for
+        # whatever base_metadata doesn't cover (currently just genre, which
+        # isn't part of the Song dataclass). At most one indexed cache read
+        # (see lib/plugin_metadata.py), offloaded here the same way `song`
+        # and `loaded_slop` already are above so it never blocks the event
+        # loop.
+        try:
+            metadata_cache_key = song_path.relative_to(dlc.resolve()).as_posix()
+        except ValueError:
+            metadata_cache_key = filename
+        song_base_metadata = {"album": song.album, "year": song.year}
+        plugin_metadata = await loop.run_in_executor(
+            None,
+            lambda: plugin_metadata_for(
+                metadata_cache_key, base_metadata=song_base_metadata),
+        )
         await websocket.send_json({
             "type": "song_info",
             "title": song.title,
@@ -508,6 +536,10 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
             "arrangement": arr.name,
             "arrangement_smart_name": smart_names[best],
             "arrangement_index": best,
+            # Optional, additive — see docs/PLUGIN_METADATA_API.md. Every
+            # existing key above and below is unchanged; old plugin code that
+            # never reads "metadata" keeps working exactly as before.
+            "metadata": plugin_metadata,
             # Echo the resolved naming mode so highway.js doesn't have to
             # re-read localStorage (which can be unavailable / disagree with
             # app.js's in-memory cache when storage writes fail).

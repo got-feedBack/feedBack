@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Plugin Metadata API** — plugins can now read a song's album, year,
+  genre, and MusicBrainz identifiers (recording/release/artist MBID, ISRC)
+  through the highway WebSocket's optional `metadata` object on `song_info`
+  or via `GET /api/song/{filename}/metadata`. Purely additive — no existing
+  field, route, or payload shape changes. See docs/PLUGIN_METADATA_API.md.
 - **Core reader for source rigs (feedpak 1.18.0).** A pack can declare what a
   MIDI part should sound like by binding a rig; core now reads that binding and
   hands it to the client instead of dropping it. Three parts: the

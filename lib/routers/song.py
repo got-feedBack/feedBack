@@ -829,6 +829,54 @@ def post_song_gap_fill(filename: str, data: dict):
     return {"ok": True, "written": additions, "skipped": skipped}
 
 
+@router.get("/api/song/{filename:path}/metadata")
+async def get_song_plugin_metadata(filename: str):
+    """Generic plugin metadata for one song (docs/PLUGIN_METADATA_API.md):
+    album/year/genre plus MusicBrainz identifiers, when known. The REST
+    sibling of the optional `metadata` key already carried on the highway
+    WebSocket's `song_info` frame — both call the same
+    `plugin_metadata_for()` (lib/plugin_metadata.py) so the two can never
+    drift out of sync with each other. Use this route for a song that
+    isn't currently playing (e.g. a library-browsing plugin); use the
+    WebSocket's `metadata` key for the currently-playing song to avoid an
+    extra round trip.
+
+    No network access — every field is read from the already-populated
+    local `songs`/`song_enrichment` cache tables, or is null when unknown.
+
+    Registered ABOVE the bare `GET /api/song/{filename:path}` route below
+    on purpose: within one APIRouter, Starlette matches routes in
+    registration order, and `{filename:path}` greedily matches slashes —
+    if the bare route were registered first, a request for
+    `.../metadata` would be swallowed by it (`filename` would capture
+    `"...song.feedpak/metadata"` whole) and this route would never be
+    reached. Do not reorder these two without re-verifying that.
+    """
+    import asyncio
+    from plugin_metadata import plugin_metadata_for
+
+    dlc = _get_dlc_dir()
+    if not dlc:
+        return JSONResponse({"error": "DLC folder not configured"}, 404)
+
+    song_path = _resolve_dlc_path(dlc, filename)
+    if song_path is None:
+        return JSONResponse({"error": "forbidden"}, 403)
+    if not song_path.exists():
+        return JSONResponse({"error": "File not found"}, 404)
+
+    # Same canonicalization as GET /api/song/{filename} below, for the
+    # same reason: two URL forms of the same physical file must resolve
+    # to the one cache row the scanner actually wrote.
+    try:
+        cache_key = song_path.relative_to(dlc.resolve()).as_posix()
+    except ValueError:
+        cache_key = filename
+
+    return await asyncio.get_event_loop().run_in_executor(
+        None, plugin_metadata_for, cache_key)
+
+
 def _playable_stems_payload(filename: str, dlc) -> dict:
     """The playable stems (id/url/default) + full-mix URL for a sloppak.
 
