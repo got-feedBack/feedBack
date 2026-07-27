@@ -1,0 +1,108 @@
+<!-- Coaching settings — the LLM practice coach.
+     The Anthropic API key is a SECRET: it is stored ONLY in this browser's
+     localStorage and sent straight from your browser to the Anthropic API.
+     It never touches the slopsmith server (no /api/settings round-trip here).
+     The inline script below is re-executed by core when this panel mounts
+     (see static/app.js: settings <script> tags are recreated to run), so it
+     hydrates the fields from localStorage and persists changes on input. The
+     same keys are read by coaching.js at play time. -->
+
+<div class="space-y-4">
+    <p class="text-xs text-gray-500 leading-relaxed">
+        After each play, the coaching plugin can send the play feedback to the Anthropic API using
+        <strong>your own</strong> API key and get back a prioritized practice plan (shown in a panel over the player).
+        Your key is stored only in this browser and is sent directly to Anthropic — it never reaches the slopsmith server.
+    </p>
+
+    <label class="flex items-start gap-3 cursor-pointer select-none">
+        <input type="checkbox" id="coaching-enabled"
+               class="mt-0.5 rounded border-gray-600 bg-dark-700 text-accent focus:ring-accent/40">
+        <span class="text-sm text-gray-300">
+            Enable the LLM practice coach
+            <span class="block text-xs text-gray-500">Requires an API key below. On by default once a key is set.</span>
+        </span>
+    </label>
+
+    <div class="bg-dark-700/40 border border-gray-800 rounded-xl p-4 space-y-3">
+        <div>
+            <label for="coaching-apikey" class="block text-sm font-medium text-gray-300 mb-1">Anthropic API key</label>
+            <input type="password" id="coaching-apikey" autocomplete="off" spellcheck="false"
+                   placeholder="sk-ant-..."
+                   class="w-full bg-dark-700 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono focus:ring-accent/40 focus:border-accent">
+            <div class="flex items-center justify-between mt-2">
+                <span id="coaching-key-status" class="text-xs text-gray-500">No key set.</span>
+                <button id="coaching-key-clear"
+                        class="text-xs text-gray-400 hover:text-white border border-gray-700 rounded-lg px-3 py-1 transition">
+                    Clear key
+                </button>
+            </div>
+            <p class="text-[11px] text-gray-600 mt-2 leading-relaxed">
+                Stored in <code>localStorage</code> on this device only. Get a key at console.anthropic.com.
+            </p>
+        </div>
+
+        <div>
+            <label for="coaching-model" class="block text-sm font-medium text-gray-300 mb-1">Model</label>
+            <input type="text" id="coaching-model" spellcheck="false"
+                   class="w-full bg-dark-700 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 font-mono focus:ring-accent/40 focus:border-accent">
+            <p class="text-[11px] text-gray-600 mt-1">Default: <code>claude-haiku-4-5</code> (cheapest). Use <code>claude-opus-4-8</code> for best coaching quality.</p>
+        </div>
+    </div>
+</div>
+
+<script>
+(function () {
+    var LS_KEY = 'coaching.anthropicApiKey';
+    var LS_MODEL = 'coaching.model';
+    var LS_ENABLED = 'coaching.llmEnabled';
+    var DEFAULT_MODEL = 'claude-haiku-4-5';
+
+    function ls() { try { return window.localStorage; } catch (e) { return null; } }
+    var store = ls();
+    var keyEl = document.getElementById('coaching-apikey');
+    var modelEl = document.getElementById('coaching-model');
+    var enabledEl = document.getElementById('coaching-enabled');
+    var statusEl = document.getElementById('coaching-key-status');
+    var clearBtn = document.getElementById('coaching-key-clear');
+    if (!keyEl || !modelEl || !enabledEl) return;
+
+    function refreshStatus() {
+        var k = store && store.getItem(LS_KEY);
+        if (statusEl) statusEl.textContent = k ? ('Key set (' + k.slice(0, 7) + '…' + k.slice(-4) + ').') : 'No key set.';
+    }
+
+    // Hydrate from storage.
+    try {
+        // Don't echo the stored key into a visible field on load; show status instead.
+        modelEl.value = (store && store.getItem(LS_MODEL)) || DEFAULT_MODEL;
+        // enabled defaults to true when a key exists and the flag isn't explicitly false
+        var hasKey = !!(store && store.getItem(LS_KEY));
+        enabledEl.checked = hasKey && (store ? store.getItem(LS_ENABLED) !== 'false' : true);
+        refreshStatus();
+    } catch (e) {}
+
+    // Persist on input/change.
+    keyEl.addEventListener('input', function () {
+        if (!store) return;
+        var v = keyEl.value.trim();
+        if (v) { store.setItem(LS_KEY, v); if (store.getItem(LS_ENABLED) == null) { store.setItem(LS_ENABLED, 'true'); enabledEl.checked = true; } }
+        else { store.removeItem(LS_KEY); }
+        refreshStatus();
+    });
+    modelEl.addEventListener('input', function () {
+        if (!store) return;
+        var v = modelEl.value.trim();
+        if (v && v !== DEFAULT_MODEL) store.setItem(LS_MODEL, v); else store.removeItem(LS_MODEL);
+    });
+    enabledEl.addEventListener('change', function () {
+        if (store) store.setItem(LS_ENABLED, enabledEl.checked ? 'true' : 'false');
+    });
+    if (clearBtn) clearBtn.addEventListener('click', function () {
+        if (store) store.removeItem(LS_KEY);
+        keyEl.value = '';
+        enabledEl.checked = false;
+        if (store) store.setItem(LS_ENABLED, 'false');
+        refreshStatus();
+    });
+})();
+</script>

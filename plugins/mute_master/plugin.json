@@ -1,0 +1,16 @@
+{
+  "id": "mute_master",
+  "name": "Mute Master",
+  "version": "0.1.1",
+  "description": "Kill the open-string ring — a chart-free muting drill.",
+  "category": "game",
+  "script": "game.js",
+  "minigame": {
+    "title": "Mute Master",
+    "tagline": "Kill the open-string ring",
+    "type": "chart-free",
+    "scoring": "pitch-continuous",
+    "skill": "muting",
+    "trains": ["mute_fail"]
+  }
+}

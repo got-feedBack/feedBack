@@ -1,0 +1,16 @@
+{
+  "id": "pitch_match",
+  "name": "Pitch Match",
+  "version": "0.1.1",
+  "description": "Land it dead in tune — a chart-free intonation drill.",
+  "category": "game",
+  "script": "game.js",
+  "minigame": {
+    "title": "Pitch Match",
+    "tagline": "Land it dead in tune",
+    "type": "chart-free",
+    "scoring": "pitch-continuous",
+    "skill": "intonation",
+    "trains": ["sharp", "flat"]
+  }
+}
