@@ -3101,44 +3101,51 @@
     // beyond it; depthWrite=false on the plane material plus
     // renderOrder=-1 means notes still paint on top regardless.
     const BG_BACKDROP_DISTANCE = FOG_END * 0.95;
+    const BG_BACKDROP_ASPECT_EPS = 1e-9;
 
-    // Module-level scratch vector reused each frame to avoid GC
-    // churn from per-frame Vector3 allocation. Only valid for the
-    // duration of a single update() call.
+    // Lazily reused scratch objects avoid per-frame allocations.
     const _bgBackdropTmp = (() => {
         // Lazily created when T is available (T isn't bound at module
         // parse time — initScene assigns it inside loadThree().then).
         // Returning a getter that allocates on first read keeps the
         // dependency timing clean.
-        let v = null;
-        return () => v || (v = new T.Vector3());
+        let tmp = null;
+        return () => tmp || (tmp = {
+            min: new T.Vector2(),
+            max: new T.Vector2(),
+            center: new T.Vector3(),
+            quat: new T.Quaternion(),
+        });
     })();
 
-    // Frustum-fit a plane mesh: scale a unit PlaneGeometry to exactly
-    // fill the camera's view at the configured distance, then position
-    // it `distance` units in front of the camera and orient it so the
-    // texture faces the camera. Called whenever cam.aspect changes
-    // (resize) and to position-track the camera each frame.
+    // Fit a unit plane to the projected view at `distance`, centered on
+    // the view window and parallel to the camera.
     function _bgFitBackdropPlane(state) {
         const cam = state.cam;
         const d = state.distance;
-        const halfFovRad = cam.fov * Math.PI / 360;
-        const visibleHeight = 2 * Math.tan(halfFovRad) * d;
-        const visibleWidth = visibleHeight * cam.aspect;
-        if (state.lastAspect !== cam.aspect ||
+        const tmp = _bgBackdropTmp();
+        cam.getViewBounds(d, tmp.min, tmp.max);
+        const visibleWidth = tmp.max.x - tmp.min.x;
+        const visibleHeight = tmp.max.y - tmp.min.y;
+        const visibleAspect = visibleWidth / visibleHeight;
+        if (state.lastVisibleWidth !== visibleWidth ||
             state.lastVisibleHeight !== visibleHeight) {
             state.mesh.scale.set(visibleWidth, visibleHeight, 1);
-            state.lastAspect = cam.aspect;
             state.lastVisibleHeight = visibleHeight;
             state.lastVisibleWidth = visibleWidth;
-            // Aspect change shifts the cover-crop ratio; re-apply.
-            if (state.applyCoverCrop) state.applyCoverCrop();
         }
-        // Track camera each frame: position = cam.position +
-        // cam.forward * distance, orient toward camera.
-        const fwd = cam.getWorldDirection(_bgBackdropTmp());
-        state.mesh.position.copy(cam.position).addScaledVector(fwd, d);
-        state.mesh.lookAt(cam.position);
+        if (Math.abs((state.lastAspect || 0) - visibleAspect) > BG_BACKDROP_ASPECT_EPS) {
+            state.lastAspect = visibleAspect;
+            if (state.applyCoverCrop) state.applyCoverCrop(visibleAspect);
+        }
+        // Use the camera-local view center without tilting the plane.
+        tmp.center.set(
+            (tmp.min.x + tmp.max.x) * 0.5,
+            (tmp.min.y + tmp.max.y) * 0.5,
+            -d,
+        );
+        state.mesh.position.copy(cam.localToWorld(tmp.center));
+        state.mesh.quaternion.copy(cam.getWorldQuaternion(tmp.quat));
     }
 
     // Cover-crop a texture to the plane aspect: the larger axis fills
@@ -3159,6 +3166,17 @@
             tex.offset.y = (1 - tex.repeat.y) * 0.5;
         }
         tex.needsUpdate = true;
+    }
+
+    function _bgBackdropVisibleAspect(state, visibleAspect) {
+        if (Number.isFinite(visibleAspect) && visibleAspect > 0) return visibleAspect;
+        if (Number.isFinite(state?.lastAspect) && state.lastAspect > 0) {
+            return state.lastAspect;
+        }
+        const w = state?.lastVisibleWidth || 0;
+        const h = state?.lastVisibleHeight || 0;
+        if (w > 0 && h > 0) return w / h;
+        return state?.cam?.aspect || 1;
     }
 
     // Background-style registry. Each entry returns a per-panel state
@@ -3472,13 +3490,13 @@
                 backdrop.mesh.visible = false;
                 scene.add(backdrop.mesh);
                 state.backdrop = backdrop;
-                backdrop.applyCoverCrop = function () {
+                backdrop.applyCoverCrop = function (visibleAspect) {
                     if (!backdrop.tex || !backdrop.tex.image) return;
                     _bgCoverCrop(
                         backdrop.tex,
                         backdrop.tex.image.width || 0,
                         backdrop.tex.image.height || 0,
-                        backdrop.cam.aspect,
+                        _bgBackdropVisibleAspect(backdrop, visibleAspect),
                     );
                 };
                 _venueLoadPlateForPov(
@@ -3508,15 +3526,15 @@
                         mesh, geo, mat, tex: null, videoEl: null,
                         cam: settings.cam,
                         distance: BG_BACKDROP_DISTANCE * (i === 0 ? 1.04 : 1.03),
-                        lastAspect: 0, lastVisibleHeight: 0,
+                        lastAspect: 0, lastVisibleHeight: 0, lastVisibleWidth: 0,
                     };
-                    layer.applyCoverCrop = function () {
+                    layer.applyCoverCrop = function (visibleAspect) {
                         if (!layer.videoEl || !layer.tex) return;
                         _bgCoverCrop(
                             layer.tex,
                             layer.videoEl.videoWidth || 0,
                             layer.videoEl.videoHeight || 0,
-                            layer.cam.aspect,
+                            _bgBackdropVisibleAspect(layer, visibleAspect),
                         );
                     };
                     scene.add(mesh);
@@ -3565,7 +3583,7 @@
                             if (layer.videoEl === el) return;
                             if (layer.tex) { layer.mat.map = null; layer.tex.dispose(); layer.tex = null; }
                             layer.videoEl = el;
-                            layer.lastAspect = 0; // force refit + recrop
+                            layer.lastAspect = 0; // force recrop for the new texture
                             if (el) {
                                 const tex = new T.VideoTexture(el);
                                 tex.colorSpace = T.SRGBColorSpace;
@@ -3586,10 +3604,7 @@
                         // videoWidth === 0 until metadata lands — showing the
                         // plane before that paints a black flash over the plate.
                         const ready = !!el && el.videoWidth > 0;
-                        // venue-crowd.js swaps src on the same element (loop ↔
-                        // stinger); a new intrinsic size needs a fresh
-                        // cover-crop, which _bgFitBackdropPlane only reapplies
-                        // on camera aspect changes.
+                        // venue-crowd.js can change a video's intrinsic size.
                         if (ready && (layer.lastVidW !== el.videoWidth ||
                                       layer.lastVidH !== el.videoHeight)) {
                             layer.lastVidW = el.videoWidth;
@@ -3699,18 +3714,16 @@
                     mesh: null, geo: null, mat: null, tex: null,
                     drift: 0.5, intensity: settings.intensity, loaded: false,
                     cam: settings.cam, distance: BG_BACKDROP_DISTANCE,
-                    lastAspect: 0, lastVisibleHeight: 0,
+                    lastAspect: 0, lastVisibleHeight: 0, lastVisibleWidth: 0,
                 };
-                // Helper closure for cover-crop refresh — called both
-                // on async decode (initial) and from _bgFitBackdropPlane
-                // when the camera aspect changes (resize).
-                state.applyCoverCrop = function () {
+                // Cover-crop after decode and projected-aspect changes.
+                state.applyCoverCrop = function (visibleAspect) {
                     if (!state.tex || !state.tex.image) return;
                     _bgCoverCrop(
                         state.tex,
                         state.tex.image.width  || 0,
                         state.tex.image.height || 0,
-                        state.cam.aspect,
+                        _bgBackdropVisibleAspect(state, visibleAspect),
                     );
                 };
                 const tex = new T.TextureLoader().load(
@@ -3784,10 +3797,7 @@
             },
             update(s, bands, dt) {
                 if (!s) return;
-                // Track camera position / aspect every frame. The
-                // helper resizes the plane and refreshes cover-crop
-                // when aspect changes, and re-positions the plane to
-                // stay BG_BACKDROP_DISTANCE in front of the camera.
+                // Fit the plane to the current projected view.
                 _bgFitBackdropPlane(s);
                 // Skip drift advance until the texture has finished
                 // decoding. Without this guard, drift accumulates
@@ -3913,27 +3923,23 @@
 
                     // Full-bleed backdrop: scaled and positioned each
                     // frame in update() via _bgFitBackdropPlane.
-                    // cam + distance + lastAspect / lastVisibleHeight
-                    // power that helper.
+                    // Fit state consumed by _bgFitBackdropPlane.
                     const state = {
                         videoEl, mesh, geo, mat, tex,
                         cam: settings.cam, distance: BG_BACKDROP_DISTANCE,
-                        lastAspect: 0, lastVisibleHeight: 0,
+                        lastAspect: 0, lastVisibleHeight: 0, lastVisibleWidth: 0,
                     };
-                    state.applyCoverCrop = function () {
+                    state.applyCoverCrop = function (visibleAspect) {
                         if (!state.videoEl) return;
                         _bgCoverCrop(
                             state.tex,
                             state.videoEl.videoWidth  || 0,
                             state.videoEl.videoHeight || 0,
-                            state.cam.aspect,
+                            _bgBackdropVisibleAspect(state, visibleAspect),
                         );
                     };
 
-                    // Cover-crop math runs on loadedmetadata since
-                    // video dimensions aren't known until then.
-                    // _bgFitBackdropPlane will also re-apply when the
-                    // camera aspect changes.
+                    // Metadata provides the dimensions needed for cover-crop.
                     videoEl.addEventListener('loadedmetadata', () => {
                         state.applyCoverCrop();
                     });
@@ -3998,8 +4004,7 @@
                 // is intentionally omitted: the video's own motion is
                 // the "life", drifting the crop on top would feel
                 // busy and compete with playback. The only per-frame
-                // work is keeping the plane camera-locked and resized
-                // when aspect changes (handled inside the helper).
+                // per-frame work is fitting the plane to the projected view.
                 _bgFitBackdropPlane(s);
             },
             teardown(s) {

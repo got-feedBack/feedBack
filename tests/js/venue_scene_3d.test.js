@@ -114,6 +114,30 @@ test('plain 3D image style does not load venue POV plate', () => {
     assert.doesNotMatch(imageBlock[0], /_venueLoadPlateForPov/);
 });
 
+test('highway_3d backdrop fit uses projection view bounds', () => {
+    const src = fs.readFileSync(H3D_JS, 'utf8');
+    const helper = src.match(/function _bgFitBackdropPlane\(state\)\s*\{[\s\S]*?\n\s*function _bgCoverCrop/);
+    assert.ok(helper, '_bgFitBackdropPlane missing');
+    assert.match(helper[0], /cam\.getViewBounds\(d,\s*tmp\.min,\s*tmp\.max\)/);
+    assert.match(helper[0], /visibleWidth\s*=\s*tmp\.max\.x\s*-\s*tmp\.min\.x/);
+    assert.match(helper[0], /visibleHeight\s*=\s*tmp\.max\.y\s*-\s*tmp\.min\.y/);
+    assert.match(helper[0], /visibleAspect\s*=\s*visibleWidth\s*\/\s*visibleHeight/);
+    assert.match(helper[0], /state\.lastVisibleWidth\s*!==\s*visibleWidth/);
+    assert.match(helper[0], /state\.lastVisibleHeight\s*!==\s*visibleHeight/);
+    assert.match(helper[0], /Math\.abs\(\(state\.lastAspect\s*\|\|\s*0\)\s*-\s*visibleAspect\)\s*>\s*BG_BACKDROP_ASPECT_EPS/);
+    assert.match(helper[0], /state\.lastAspect\s*=\s*visibleAspect/);
+    assert.match(helper[0], /state\.applyCoverCrop\(visibleAspect\)/);
+    assert.match(helper[0], /\(tmp\.min\.x\s*\+\s*tmp\.max\.x\)\s*\*\s*0\.5/);
+    assert.match(helper[0], /\(tmp\.min\.y\s*\+\s*tmp\.max\.y\)\s*\*\s*0\.5/);
+    assert.match(helper[0], /cam\.localToWorld\(tmp\.center\)/);
+    assert.match(helper[0], /state\.mesh\.quaternion\.copy\(cam\.getWorldQuaternion\(tmp\.quat\)\)/);
+    assert.doesNotMatch(helper[0], /Math\.tan|halfFovRad/);
+    assert.doesNotMatch(helper[0], /\.lookAt\(cam\.position\)/);
+    assert.match(src, /function _bgBackdropVisibleAspect\(state,\s*visibleAspect\)/);
+    assert.doesNotMatch(src, /lastVisibleAspect/);
+    assert.match(src, /new T\.Vector2\(\)[\s\S]*new T\.Vector3\(\)[\s\S]*new T\.Quaternion\(\)/);
+});
+
 test('venue-scene-3d syncs instrument POV from arrangement signal', () => {
     global.h3dVenueSceneSetActive = () => {};
     global.h3dVenueSceneSetMood = () => {};
