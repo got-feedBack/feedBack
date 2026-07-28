@@ -142,7 +142,7 @@ test('no-key: a zero-judgment false-start does NOT clobber a scored play\'s pane
 
 test('no-key: a clustered miss play surfaces a Practice panel at song end', () => {
     const { host, fireWin } = harness();
-    // 3 misses within 2s → one hotspot (findHotspots minMisses=3, gap=2s).
+    // 3 misses within 0.8s → one hotspot (findHotspots default minMisses=2, gap=3s).
     fireWin('notedetect:miss', missJudgment(20.0));
     fireWin('notedetect:miss', missJudgment(20.4));
     fireWin('notedetect:miss', missJudgment(20.8));

@@ -1107,7 +1107,10 @@ function renderBreakdownHtml(feedback) {
 // shows after every play even without an API key — the drill loop must not
 // be gated behind the paid LLM coach. When the LLM plan lands it replaces
 // this with the richer renderSummaryHtml. Pure → node-testable.
-// Open-string label by index, low→high. Bass is 4 strings (EADG); guitar 6.
+// Open-string label by index, low→high. Standard 4-string bass is EADG and
+// standard 6-string guitar EADGBe; indices 4–5 in the bass row (C, B) are a
+// best-effort fallback for extended-range basses whose true string set the
+// arrangement name doesn't disclose — treat them as approximate, not canonical.
 function _stringLabel(s, arrangement) {
     const bass = ['E', 'A', 'D', 'G', 'C', 'B'];
     const gtr = ['E', 'A', 'D', 'G', 'B', 'e'];

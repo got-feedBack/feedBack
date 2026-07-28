@@ -28,9 +28,10 @@ session wrapper. The two load-bearing fields:
 
 - **`mistake.faultVerdict`** (`player_error` | `detector_suspect` |
   `confirmed_detector_bug`) — routes a miss to *drill it* vs *feed it to the
-  harness*. `no_detection` → `detector_suspect`; a detection that fired but was
-  off → `player_error`; `confirmed_detector_bug` is only ever set by an external
-  harness replay.
+  harness*. A detection that fired but was off → `player_error`. `no_detection`
+  → `detector_suspect`, **unless** the miss carries a note-present signal
+  (note_detect heard the pitch yet still scored a miss) → `confirmed_detector_bug`,
+  set in-app; an external harness replay also sets it.
 - **`hotspot.signal.kind`** (`systematic` | `random`) — a consistent skew
   (median clears a floor *and* dominates the spread) is a tool/calibration
   problem (e.g. an A/V offset), not a skill gap. Keeps the drill loop from
@@ -43,7 +44,9 @@ See the schema + builder in [`coaching.js`](coaching.js); it's covered by
 
 `session.summary` is filled by a **client-side** Anthropic Messages API call:
 
-- **Model** `claude-opus-4-8`, a frozen + prompt-cached system prompt, and
+- **Model** `claude-haiku-4-5` (cheapest tier while the flow is proven out —
+  bumps to `claude-opus-4-8` once coaching quality is validated), a frozen +
+  prompt-cached system prompt, and
   `output_config.format` (json_schema) so the reply parses deterministically.
 - The request **distills** the feedback to the session block + hotspots +
   failure/fault tallies — raw mistake atoms are not sent.

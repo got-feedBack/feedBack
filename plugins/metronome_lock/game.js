@@ -51,6 +51,7 @@
 
     // Metronome state.
     let _clickCtx = null, _bpm = 80, _beatPeriodMs = 750;
+    let _metronomeRun = 0;        // token: a newer _startMetronome/_stopMetronome supersedes older awaits
     let _clickMode = 'straight';  // 'straight' | 'backbeat' | 'eighths'
     let _dropOn = false;          // dropped-beat modifier
     let _subdivPerBeat = 1, _subdivPeriodMs = 750;   // scoring/tick grid
@@ -109,13 +110,19 @@
 
     async function _startMetronome(bpm) {
         _stopMetronome();
+        const run = ++_metronomeRun;   // claim this run; a later start/stop invalidates us
         _bpm = bpm;
         _beatPeriodMs = 60000 / bpm;
         _subdivPerBeat = (_clickMode === 'eighths') ? 2 : 1;
         _subdivPeriodMs = _beatPeriodMs / _subdivPerBeat;
         const AC = window.AudioContext || window.webkitAudioContext;
-        _clickCtx = new AC();
-        try { await _clickCtx.resume(); } catch (_) {}
+        const ctx = new AC();
+        try { await ctx.resume(); } catch (_) {}
+        // A newer _startMetronome (rapid BPM/mode/drop changes) or a _stopMetronome
+        // ran while we awaited resume() — abandon this stale context so we don't
+        // leave two schedulers ticking at once.
+        if (run !== _metronomeRun) { try { ctx.close(); } catch (_) {} return; }
+        _clickCtx = ctx;
         const lead = 0.25;   // small runway before tick 0
         _anchorAudio = _clickCtx.currentTime + lead;
         _anchorPerf = performance.now() + lead * 1000;
@@ -126,6 +133,7 @@
     }
 
     function _stopMetronome() {
+        _metronomeRun++;   // invalidate any _startMetronome currently awaiting resume()
         if (_schedTimer) { clearInterval(_schedTimer); _schedTimer = null; }
         try { if (_clickCtx) _clickCtx.close(); } catch (_) {}
         _clickCtx = null;

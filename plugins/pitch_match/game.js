@@ -67,13 +67,13 @@
         return (sdk && sdk.skillDrill) || (typeof window !== 'undefined' ? window.slopsmithSkillDrills : null);
     }
 
-    function _nextTarget() {
+    function _nextTarget(ev) {
         const i = _drill ? _drill.reps : 0;
         const s = STRINGS[i % STRINGS.length];
         const fret = FRETS[(Math.floor(i / STRINGS.length)) % FRETS.length];
         _target = { stringName: s.name, fret, targetMidi: s.openMidi + fret };
         _hold = [];
-        _render();
+        _render(ev);   // keep the just-judged feedback flash while showing the next target
     }
 
     function scoreFromView(v) {
@@ -126,9 +126,8 @@
             _hold = [];
             _sd.skillDrillStep(_drill, ev);
             const view = _sd.skillDrillView(_drill);
-            _render(ev);
-            if (view.passed) _finish();
-            else _nextTarget();
+            if (view.passed) { _render(ev); _finish(); }
+            else _nextTarget(ev);
         } else {
             _hold = [];
         }

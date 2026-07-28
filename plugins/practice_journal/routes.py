@@ -13,31 +13,37 @@ _lock = threading.Lock()
 
 def _get_conn():
     global _conn
+    # Double-checked locking: the cheap unlocked read fast-paths the common case,
+    # the lock + re-check guarantees exactly one thread builds the connection.
     if _conn is None:
-        _conn = sqlite3.connect(_db_path, check_same_thread=False)
-        _conn.execute("PRAGMA journal_mode=WAL")
-        _conn.execute("""
-            CREATE TABLE IF NOT EXISTS practice_sessions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                filename TEXT NOT NULL,
-                title TEXT,
-                artist TEXT,
-                started_at TEXT NOT NULL,
-                duration_seconds REAL NOT NULL DEFAULT 0,
-                avg_speed REAL NOT NULL DEFAULT 1.0,
-                loops_used TEXT DEFAULT '[]',
-                arrangement TEXT
-            )
-        """)
-        _conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_practice_filename
-            ON practice_sessions(filename)
-        """)
-        _conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_practice_started
-            ON practice_sessions(started_at)
-        """)
-        _conn.commit()
+        with _lock:
+            if _conn is None:
+                conn = sqlite3.connect(_db_path, check_same_thread=False)
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS practice_sessions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        filename TEXT NOT NULL,
+                        title TEXT,
+                        artist TEXT,
+                        started_at TEXT NOT NULL,
+                        duration_seconds REAL NOT NULL DEFAULT 0,
+                        avg_speed REAL NOT NULL DEFAULT 1.0,
+                        loops_used TEXT DEFAULT '[]',
+                        arrangement TEXT
+                    )
+                """)
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_practice_filename
+                    ON practice_sessions(filename)
+                """)
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_practice_started
+                    ON practice_sessions(started_at)
+                """)
+                conn.commit()
+                # Publish only once fully built — no partial connection is visible.
+                _conn = conn
     return _conn
 
 
@@ -54,7 +60,9 @@ def setup(app, context):
             return {"error": "No filename"}
 
         duration = data.get("duration", 0)
-        if duration < 5:  # ignore sessions under 5 seconds
+        # Guard against non-numeric payloads (a bad client sending a string would
+        # raise on the comparison); also ignore sessions under 5 seconds.
+        if not isinstance(duration, (int, float)) or duration < 5:
             return {"ok": True, "skipped": True}
 
         conn = _get_conn()
