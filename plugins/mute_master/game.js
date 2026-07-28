@@ -1,14 +1,23 @@
 // Mute Master — the first skill-drill game (docs/TEACHING_NARRATIVE.md).
 //
 // Trains MUTING on bass: when you fret a note, the OPEN string under it must not
-// ring. note_detect flags that exact slip as `mute_fail`; coaching's taxonomy
-// points a `mute_fail` hotspot here. This game proves the contract end to end —
-// detection → skill → game → SHARED rep/streak/pass engine.
+// ring. coaching's taxonomy points a `mute_fail` hotspot here, so this is the
+// game a muting slip deep-links into — the skill → game → SHARED
+// rep/streak/pass half of the contract.
+//
+// HONEST SCOPE — this game infers muting from a self-contained MONOPHONIC pitch
+// scorer (`scoring.createContinuous` — its own mic + YIN), NOT from note_detect:
+// note_detect does not currently emit a `mute_fail` judgment, so the detector→
+// mute_fail leg of the taxonomy is aspirational. A mono detector can't truly
+// prove an open string is silent (it reports one dominant pitch), and octave
+// folding collapses pitch to pitch-class, so muting is only scoreable on
+// targets whose pitch class differs from every open string (see VALID_TARGETS)
+// — a best-effort proxy, not ground truth. Real mute verification needs a
+// polyphonic/spectral signal note_detect would have to produce.
 //
 // Design per the "fast iteration, no lead-in, no slow animations" steer: it is
-// CHART-FREE and self-paced. It uses the SDK's self-contained pitch scorer
-// (`scoring.createContinuous` — its own mic + YIN, no song needed), prompts one
-// fret target at a time, and scores each note the instant you play it:
+// CHART-FREE and self-paced. It prompts one fret target at a time and scores
+// each note the instant you play it:
 //   - you hit the target pitch        → a CLEAN muting rep
 //   - the OPEN string rings instead   → a mute_fail (you didn't mute it)
 // New target immediately, no count-in, no transitions. Eight clean in a row wins.
@@ -35,16 +44,38 @@
         { name: 'A', openMidi: 33 },
         { name: 'D', openMidi: 38 },
     ];
-    const FRETS = [3, 5, 7];      // small, clearly-fretted targets
+    const CAND_FRETS = [2, 3, 4, 5, 6, 7, 8, 9];   // candidate frets, filtered below
     const NOTE = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
     const midiName = (m) => NOTE[((Math.round(m) % 12) + 12) % 12] + (Math.floor(Math.round(m) / 12) - 1);
     // Nearest-OCTAVE semitone distance. The continuous scorer's YIN (minHz 70)
     // can't lock a bass fundamental (open E ≈ 41 Hz) and reports the octave-up
     // harmonic instead, so a played note reads ~12 semitones off its true MIDI.
     // Fold to the nearest octave (as note_detect does) so a correct note still
-    // matches; target and open stay 3+ semitones apart after folding, so this
-    // never confuses them.
+    // matches. The catch: folding collapses pitch to pitch-CLASS, so a target
+    // that shares a class with ANY open string is indistinguishable from that
+    // open ringing — the muting signal we're trying to score. See VALID_TARGETS.
     const _foldSemi = (a, b) => { let d = a - b; d -= Math.round(d / 12) * 12; return Math.abs(d); };
+
+    // Every open string, for collision checks (E A D G — G isn't prompted but
+    // its open can still bleed and alias a fretted target).
+    const BASS_OPENS = [28, 33, 38, 43];
+    // Exclude only EXACT pitch-class unisons with an open string (< 1 semitone
+    // after folding). Anything ≥1 semitone from every open is safely
+    // distinguishable at the NEAR_SEMITONES=0.6 match threshold.
+    const SEP_SEMITONES = 1.0;
+    // A monophonic detector under octave-folding can only score muting on a
+    // target whose pitch class differs from every open string — otherwise
+    // "fretted note, opens muted" reads identically to "that open rang", and a
+    // failed mute scores as clean. Precompute the scoreable (string, fret) set
+    // once (E-fret5 == open A, E-fret3 == open G one octave up, etc. drop out).
+    const VALID_TARGETS = [];
+    for (const s of STRINGS) {
+        for (const fret of CAND_FRETS) {
+            const midi = s.openMidi + fret;
+            const collides = BASS_OPENS.some(o => o !== s.openMidi && _foldSemi(midi, o) < SEP_SEMITONES);
+            if (!collides) VALID_TARGETS.push({ stringName: s.name, fret, targetMidi: midi, openMidi: s.openMidi });
+        }
+    }
 
     let _sdk = null, _cont = null, _drill = null, _sd = null;
     let _startedAt = 0, _finished = false;
@@ -71,11 +102,11 @@
     }
 
     function _nextTarget() {
-        // Vary by index (no Math.random dependency, deterministic-enough rotation).
+        // Rotate through the scoreable targets by rep index (no Math.random
+        // dependency, deterministic rotation). VALID_TARGETS already excludes
+        // any pitch that aliases an open string under octave folding.
         const i = _drill ? _drill.reps : 0;
-        const s = STRINGS[i % STRINGS.length];
-        const fret = FRETS[(Math.floor(i / STRINGS.length)) % FRETS.length];
-        _target = { stringName: s.name, fret, targetMidi: s.openMidi + fret, openMidi: s.openMidi };
+        _target = VALID_TARGETS[i % VALID_TARGETS.length];
         _armed = true;
         _render();
     }

@@ -4,12 +4,22 @@ The first **skill-drill game** for Slopsmith — see
 [`docs/TEACHING_NARRATIVE.md`](../../docs/TEACHING_NARRATIVE.md).
 
 It trains **muting**: when the chart wants a fretted note, the open string must
-not ring. note_detect flags that exact failure as `mute_fail`; coaching's
-practice taxonomy points a `mute_fail` hotspot here, deep-linking into the
-passage you fumbled. The game scores your muting off the live note_detect
-judgment stream using the **shared** skill-drill mechanics
-(`createSkillDrill` / `skillDrillStep` / `skillDrillView`, published by the
-coaching plugin and bridged through the minigames SDK as `sdk.skillDrill`).
+not ring. coaching's practice taxonomy points a `mute_fail` hotspot here,
+deep-linking into the passage you fumbled, and the game runs the **shared**
+skill-drill mechanics (`createSkillDrill` / `skillDrillStep` / `skillDrillView`,
+published by the coaching plugin and bridged through the minigames SDK as
+`sdk.skillDrill`).
+
+**How it actually scores (honest scope):** the game uses its **own**
+self-contained *monophonic* pitch scorer (`scoring.createContinuous` — mic +
+YIN), **not** the note_detect judgment stream — note_detect does not currently
+emit a `mute_fail`, so the detector→`mute_fail` leg of the taxonomy is
+aspirational. A mono detector can't truly prove an open string is silent, and
+octave folding collapses pitch to pitch-class, so muting is only scoreable on
+targets whose pitch class differs from every open string (E-string fret 5 =
+open A, E-string fret 3 = open G an octave up, … are excluded). Treat the score
+as a best-effort proxy; true mute verification needs a polyphonic/spectral
+signal note_detect would have to produce.
 
 **Chart-free and self-paced** (per the "fast, no lead-in, no slow animations"
 steer): it prompts one fret target at a time and scores each note the instant
