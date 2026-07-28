@@ -16,6 +16,21 @@ let _pjFilename = null;
 let _pjTitle = null;
 let _pjArtist = null;
 let _pjArrangement = null;
+// Distinct A–B loops the player actually practiced this session, keyed by a
+// rounded "a-b" string so repeated wraps of the same loop collapse to one
+// entry carrying its restart count. Fed from `loop:restart` (each wrap) plus a
+// final snapshot of a still-set loop at session close.
+let _pjLoops = new Map();
+
+function _pjRecordLoop(a, b) {
+    if (a == null || b == null || !(b > a)) return;
+    const ra = Math.round(a * 100) / 100;
+    const rb = Math.round(b * 100) / 100;
+    const key = ra + '-' + rb;
+    const prev = _pjLoops.get(key);
+    if (prev) prev.count += 1;
+    else _pjLoops.set(key, { a: ra, b: rb, count: 1 });
+}
 
 function _pjSongMeta() {
     // The canonical current-song identity lives on window.feedBack.currentSong
@@ -57,6 +72,7 @@ function _pjStartSession() {
     _pjArtist = meta.artist;
     _pjArrangement = meta.arrangement;
     _pjSessionStart = new Date().toISOString();
+    _pjLoops = new Map();                                    // fresh loop tally per song
 }
 
 function _pjEndSession() {
@@ -64,6 +80,21 @@ function _pjEndSession() {
 
     const duration = (Date.now() - new Date(_pjSessionStart).getTime()) / 1000;
     const avgSpeed = Math.round(_pjCurrentSpeed() * 100) / 100;
+
+    // Capture a still-set loop that never wrapped (set, then practiced without
+    // reaching B) so a configured loop still counts — with count 0 to mark it
+    // as set-but-not-cycled.
+    try {
+        const gl = (window.feedBack && typeof window.feedBack.getLoop === 'function')
+            ? window.feedBack.getLoop({ reason: 'practice-journal' }) : null;
+        if (gl && gl.loopA != null && gl.loopB != null && gl.loopB > gl.loopA) {
+            const ra = Math.round(gl.loopA * 100) / 100;
+            const rb = Math.round(gl.loopB * 100) / 100;
+            const key = ra + '-' + rb;
+            if (!_pjLoops.has(key)) _pjLoops.set(key, { a: ra, b: rb, count: 0 });
+        }
+    } catch (_) {}
+    const loops = Array.from(_pjLoops.values());
 
     // Fire and forget (backend ignores sessions under 5s)
     fetch('/api/plugins/practice_journal/session', {
@@ -76,13 +107,14 @@ function _pjEndSession() {
             started_at: _pjSessionStart,
             duration: duration,
             avg_speed: avgSpeed,
-            loops_used: [],
+            loops_used: loops,
             arrangement: _pjArrangement,
         }),
     }).catch(() => {});
 
     _pjSessionStart = null;
     _pjFilename = null;
+    _pjLoops = new Map();
 }
 
 (function _pjInstall() {
@@ -97,6 +129,12 @@ function _pjEndSession() {
         bus.on('song:loaded', _pjStartSession);
         bus.on('song:ended', _pjEndSession);
         bus.on('song:stop', _pjEndSession);
+        // Each A–B loop wrap during an active session is a real practiced loop.
+        bus.on('loop:restart', (ev) => {
+            if (!_pjSessionStart) return;
+            const d = (ev && ev.detail) || {};
+            _pjRecordLoop(d.loopA, d.loopB);
+        });
         bus.on('screen:changed', (ev) => {
             const id = (ev && ev.detail && ev.detail.id) || null;
             if (id && id !== 'player') _pjEndSession();
@@ -188,13 +226,15 @@ async function _pjLoadDashboard() {
                     + ' ' + date.toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit' });
                 const speedStr = s.speed !== 1.0 ? ` · ${s.speed.toFixed(2)}x` : '';
                 const arrStr = s.arrangement ? ` · ${s.arrangement}` : '';
+                const loopN = Array.isArray(s.loops) ? s.loops.length : 0;
+                const loopStr = loopN ? ` · 🔁 ${loopN}` : '';
                 return `<div class="flex items-center justify-between py-2 px-3 bg-dark-700/30 rounded-lg">
                     <div class="min-w-0">
                         <span class="text-sm text-white truncate block">${esc(s.title || s.filename)}</span>
                         <span class="text-xs text-gray-500">${esc(s.artist)}${arrStr}</span>
                     </div>
                     <div class="text-right flex-shrink-0 ml-2">
-                        <span class="text-xs text-gray-300 block">${_pjFormatDuration(s.duration)}${speedStr}</span>
+                        <span class="text-xs text-gray-300 block">${_pjFormatDuration(s.duration)}${speedStr}${loopStr}</span>
                         <span class="text-xs text-gray-600">${timeStr}</span>
                     </div>
                 </div>`;

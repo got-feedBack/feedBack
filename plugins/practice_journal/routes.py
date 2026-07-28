@@ -128,7 +128,7 @@ def setup(app, context):
 
         # Recent sessions
         recent = conn.execute(
-            "SELECT title, artist, filename, started_at, duration_seconds, avg_speed, arrangement "
+            "SELECT title, artist, filename, started_at, duration_seconds, avg_speed, arrangement, loops_used "
             "FROM practice_sessions ORDER BY started_at DESC LIMIT 20"
         ).fetchall()
 
@@ -147,7 +147,7 @@ def setup(app, context):
             "recent": [
                 {"title": r[0], "artist": r[1], "filename": r[2],
                  "started_at": r[3], "duration": r[4], "speed": r[5],
-                 "arrangement": r[6]}
+                 "arrangement": r[6], "loops": json.loads(r[7]) if r[7] else []}
                 for r in recent
             ],
         }
