@@ -34,6 +34,7 @@
     const GAME_ID = 'metronome_lock';
     const GOAL_STREAK = 8;
     const CONF_MIN = 0.85;        // YIN confidence to accept a note onset
+    const RELEASE_MS = 60;        // sub-threshold must persist this long to re-arm
     const WINDOW_MS = 70;         // within this of the grid point = on time (generous v1)
     const DETECT_LATENCY_MS = 45; // approx pluck → first-confident-frame lag, removed
     const BPMS = [60, 80, 100];   // selectable tempos
@@ -47,6 +48,7 @@
     let _startedAt = 0, _finished = false;
     let _container = null;
     let _armed = true;            // ready to count the next attack (debounce)
+    let _releaseSince = null;     // tMs the note first dropped below CONF_MIN (release debounce)
     let _lastEv = null;           // last judged event, for the skin
 
     // Metronome state.
@@ -129,6 +131,7 @@
         _nextTickAudio = _anchorAudio;
         _tickNum = 0;
         _armed = true;
+        _releaseSince = null;
         _schedTimer = setInterval(_scheduler, SCHED_INTERVAL_MS);
     }
 
@@ -167,8 +170,15 @@
 
     function _onPitch(p) {
         if (_finished || !p || !_clickCtx) return;
-        // Re-arm on a clear release so each grid point's note is one rep.
-        if (!(p.confidence >= CONF_MIN) || !isFinite(p.midiFloat)) { _armed = true; return; }
+        // Re-arm only after a SUSTAINED release: a single sub-threshold frame is a
+        // dropout mid-note, not a new attack. Requiring RELEASE_MS below the floor
+        // keeps one played note from scoring as two grid hits.
+        if (!(p.confidence >= CONF_MIN) || !isFinite(p.midiFloat)) {
+            if (_releaseSince == null) _releaseSince = p.tMs;
+            if (p.tMs - _releaseSince >= RELEASE_MS) _armed = true;
+            return;
+        }
+        _releaseSince = null;   // confident frame — we're inside a note again
         if (!_armed) return;
         _armed = false;   // consume this attack until release
 

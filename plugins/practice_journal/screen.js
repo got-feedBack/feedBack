@@ -225,7 +225,7 @@ async function _pjLoadDashboard() {
                 const timeStr = date.toLocaleDateString('en', { month: 'short', day: 'numeric' })
                     + ' ' + date.toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit' });
                 const speedStr = s.speed !== 1.0 ? ` · ${s.speed.toFixed(2)}x` : '';
-                const arrStr = s.arrangement ? ` · ${s.arrangement}` : '';
+                const arrStr = s.arrangement ? ` · ${esc(s.arrangement)}` : '';
                 const loopN = Array.isArray(s.loops) ? s.loops.length : 0;
                 const loopStr = loopN ? ` · 🔁 ${loopN}` : '';
                 return `<div class="flex items-center justify-between py-2 px-3 bg-dark-700/30 rounded-lg">
