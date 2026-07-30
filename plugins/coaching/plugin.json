@@ -1,7 +1,7 @@
 {
   "id": "coaching",
   "name": "Coaching",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "description": "Turns each play into an actionable practice plan from note_detect's per-note judgments.",
   "category": "practice",
   "script": "coaching.js",

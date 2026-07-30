@@ -1447,6 +1447,24 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
             panel.querySelectorAll('.coaching-drill-btn').forEach((btn) => {
                 btn.onclick = () => _startDrillFromButton(btn);
             });
+            // If this play has ≥2 drillable trouble spots, offer a one-tap
+            // session that drills them worst-first in sequence. Injected here
+            // (not in the pure render fns) so both the no-key and LLM panels
+            // get it; distinct class from .coaching-drill-btn so the per-spot
+            // button count / tests are unaffected.
+            try {
+                const drillable = _drillableHotspots();
+                if (drillable.length >= 2 && !panel.querySelector('#coaching-drill-all')) {
+                    const allBtn = document.createElement('button');
+                    allBtn.id = 'coaching-drill-all';
+                    allBtn.className = 'block w-full mb-3 px-3 py-2 bg-accent hover:bg-accent-light text-white rounded-lg text-sm font-bold transition';
+                    allBtn.innerHTML = '&#9654; Drill all ' + drillable.length + ' spots (worst first)';
+                    allBtn.onclick = () => _startDrillAll();
+                    const anchor = panel.querySelector('#coaching-diag-dl') || panel.querySelector('#coaching-summary-close');
+                    if (anchor && anchor.nextSibling) panel.insertBefore(allBtn, anchor.nextSibling);
+                    else panel.appendChild(allBtn);
+                }
+            } catch (_) {}
             return panel;
         }
 
@@ -1488,6 +1506,162 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
                 else { btn.textContent = 'Couldn’t start drill'; }
             }).catch(() => { btn.textContent = 'Drill failed'; });
         }
+
+        // ── "Drill all" session ──────────────────────────────────────────
+        // Chain the worst-first hotspots into one guided run: drill spot 1 →
+        // (nail, or Skip) → spot 2 → … → recap. Each spot reuses the SAME
+        // note_detect conductor; we only orchestrate advancement by polling
+        // its public isDrilling() — no note_detect changes, no drill-end event
+        // needed. The stepper is inline-styled so a runtime-installed plugin
+        // needs no stylesheet (arbitrary Tailwind values aren't in core's CSS).
+        let _session = null;
+
+        function _drillableHotspots() {
+            const fb = (typeof window !== 'undefined') ? window.__coachingLastFeedback : null;
+            const hs = (fb && Array.isArray(fb.hotspots)) ? fb.hotspots : [];
+            // findHotspots already sorts by severity desc → worst-first.
+            return hs.filter((h) => h && h.drill
+                && Number.isFinite(h.drill.loopA) && Number.isFinite(h.drill.loopB)
+                && h.drill.loopB > h.drill.loopA);
+        }
+
+        function _sessionStepperEl() {
+            let el = document.getElementById('coaching-drill-session');
+            if (!el) {
+                el = document.createElement('div');
+                el.id = 'coaching-drill-session';
+                el.style.cssText = 'position:fixed;top:64px;left:50%;transform:translateX(-50%);'
+                    + 'z-index:160;background:#1f2430;border:1px solid #4080e0;border-radius:12px;'
+                    + 'padding:8px 14px;box-shadow:0 10px 30px rgba(0,0,0,.5);color:#e5e7eb;'
+                    + 'font:14px system-ui;display:flex;align-items:center;gap:10px';
+                (document.getElementById('player') || document.body).appendChild(el);
+            }
+            return el;
+        }
+
+        function _sessionRenderStepper(msg, opts) {
+            opts = opts || {};
+            const el = _sessionStepperEl();
+            const b = (id, label, bg) => `<button id="${id}" style="padding:4px 10px;border:0;border-radius:6px;`
+                + `background:${bg};color:#fff;font:600 12px system-ui;cursor:pointer">${label}</button>`;
+            el.innerHTML = '<span>' + msg + '</span>'
+                + (opts.showSkip ? b('coaching-sess-skip', 'Skip &#9654;', '#3a4150') : '')
+                + (opts.showAgain ? b('coaching-sess-again', '&#9654; Again', '#4080e0') : '')
+                + b('coaching-sess-end', '&times; End', '#3a4150');
+            const wire = (id, fn) => { const n = el.querySelector('#' + id); if (n) n.onclick = fn; };
+            wire('coaching-sess-skip', _sessionSkip);
+            wire('coaching-sess-again', _startDrillAll);
+            wire('coaching-sess-end', () => _sessionEnd());
+        }
+
+        function _sessionClearStepper() {
+            const el = document.getElementById('coaching-drill-session');
+            if (el) { try { el.remove(); } catch (_) {} }
+        }
+
+        function _startDrillAll() {
+            const nd = (typeof window !== 'undefined') ? window.noteDetect : null;
+            if (!nd || typeof nd.startDrill !== 'function') return;
+            const queue = _drillableHotspots();
+            if (!queue.length) return;
+            // Collapse the feedback panel so the highway is visible for the run.
+            try { const p = document.getElementById('coaching-summary-panel'); if (p) p.remove(); } catch (_) {}
+            _sessionStop();
+            _session = { queue, idx: 0, ended: false, sawDrilling: false, timer: null, advTimer: null };
+            _sessionStartSpot(0);
+        }
+
+        function _sessionStartSpot(i) {
+            const nd = window.noteDetect;
+            const s = _session;
+            if (!s || !nd) return;
+            s.idx = i;
+            s.sawDrilling = false;
+            const n = s.queue.length;
+            const h = s.queue[i];
+            const args = drillArgsFromDataset({
+                loopA: h.drill.loopA, loopB: h.drill.loopB,
+                speedMul: h.drill.speedMul, goal: h.drill.goal,
+                key: 'Spot ' + (i + 1) + '/' + n,
+            });
+            _sessionRenderStepper('🎯 Drilling spot <b>' + (i + 1) + '</b> of ' + n + '…', { showSkip: true });
+            Promise.resolve(args ? nd.startDrill(args.start, args.end, args.opts) : false).then((ok) => {
+                if (!_session || _session !== s) return;
+                if (!ok) { _sessionAdvance(); return; }   // couldn't arm this spot — skip it
+                _sessionStartPoll();
+            }).catch(() => { if (_session === s) _sessionAdvance(); });
+        }
+
+        function _sessionStartPoll() {
+            const s = _session;
+            if (!s) return;
+            if (s.timer) { clearInterval(s.timer); s.timer = null; }
+            s.timer = setInterval(() => {
+                const nd = window.noteDetect;
+                if (!_session || _session !== s || !nd) return;
+                const drilling = (typeof nd.isDrilling === 'function') ? nd.isDrilling() : false;
+                if (drilling) { s.sawDrilling = true; return; }
+                if (s.sawDrilling) {   // was drilling, now stopped → this spot ended (nailed or closed)
+                    clearInterval(s.timer); s.timer = null;
+                    _sessionSpotEnded();
+                }
+            }, 600);
+        }
+
+        function _sessionSpotEnded() {
+            const s = _session;
+            if (!s || s.ended) return;
+            if (s.idx + 1 >= s.queue.length) { _sessionFinish(); return; }
+            _sessionRenderStepper('✓ Spot ' + (s.idx + 1) + ' done — next in a moment…', { showSkip: false });
+            s.advTimer = setTimeout(() => { if (_session === s && !s.ended) _sessionAdvance(); }, 1100);
+        }
+
+        function _sessionAdvance() {
+            const s = _session;
+            if (!s || s.ended) return;
+            if (s.advTimer) { clearTimeout(s.advTimer); s.advTimer = null; }
+            const next = s.idx + 1;
+            if (next >= s.queue.length) { _sessionFinish(); return; }
+            _sessionStartSpot(next);
+        }
+
+        function _sessionSkip() {
+            const nd = window.noteDetect;
+            try { if (nd && typeof nd.endDrill === 'function') nd.endDrill('session-skip'); } catch (_) {}
+            const s = _session;
+            if (!s) return;
+            if (s.timer) { clearInterval(s.timer); s.timer = null; }
+            _sessionAdvance();
+        }
+
+        function _sessionFinish() {
+            const s = _session;
+            if (!s) return;
+            if (s.timer) { clearInterval(s.timer); s.timer = null; }
+            if (s.advTimer) { clearTimeout(s.advTimer); s.advTimer = null; }
+            const n = s.queue.length;
+            s.ended = true;
+            _sessionRenderStepper('✓ Session done — drilled <b>' + n + '</b> spot' + (n === 1 ? '' : 's') + '.', { showAgain: true });
+            _session = null;
+        }
+
+        function _sessionEnd() {
+            const nd = window.noteDetect;
+            try { if (nd && typeof nd.endDrill === 'function') nd.endDrill('session-end'); } catch (_) {}
+            _sessionStop();
+            _sessionClearStepper();
+        }
+
+        function _sessionStop() {
+            const s = _session;
+            if (s) {
+                if (s.timer) { clearInterval(s.timer); s.timer = null; }
+                if (s.advTimer) { clearTimeout(s.advTimer); s.advTimer = null; }
+                s.ended = true;
+            }
+            _session = null;
+        }
+
         if (window.slopsmith && typeof window.slopsmith.on === 'function') {
             window.slopsmith.on('coaching:summary', (ev) => {
                 // feedBack's window.feedBack bus is an EventTarget: on()
@@ -1513,6 +1687,9 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
                 // the drill buttons without replaying.
                 showLast: () => _showFeedbackPanel(window.__coachingLastFeedback),
                 coachLast: () => _coachIfEnabled(window.__coachingLastFeedback),
+                // Kick the worst-first drill-all session for the last play.
+                drillAll: () => _startDrillAll(),
+                endDrillSession: () => _sessionEnd(),
             });
         } catch (_) {}
 
