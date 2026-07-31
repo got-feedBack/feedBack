@@ -164,20 +164,21 @@
 
                 host.querySelector('[data-is-cal]').addEventListener('click', () => {
                     if (hasDetector) {
-                        // Hide our own full-screen overlay while note_detect's
-                        // Calibration Wizard runs on top. That wizard goes
-                        // transparent (pointer-events:none) when it minimizes to
-                        // expose the Tuner; if our overlay stayed up it would show
-                        // through — covering the tuner with the still-mounted
-                        // "select your input" card and looking like a second
-                        // wizard at the input step. Restore it on done/cancel
-                        // (one of which always fires when that wizard closes).
+                        // Hide only the inner card while note_detect's Calibration
+                        // Wizard runs on top — keep the overlay element in the DOM
+                        // so its backdrop-blur stays active. The wizard goes
+                        // pointer-events:none when it minimizes to expose the Tuner;
+                        // hiding just the card prevents the "select your input" panel
+                        // from showing through without removing the background blur.
+                        // Restore on done/cancel (one always fires when wizard closes).
                         const ov = document.getElementById('input-setup-overlay');
-                        const prevDisplay = ov ? ov.style.display : '';
-                        if (ov) ov.style.display = 'none';
+                        const card = ov && ov.querySelector('[data-is-host]');
+                        const prevDisplay = card ? card.style.display : '';
+                        if (card) card.style.display = 'none';
                         const restore = () => {
                             const o = document.getElementById('input-setup-overlay');
-                            if (o) o.style.display = prevDisplay;
+                            const c = o && o.querySelector('[data-is-host]');
+                            if (c) c.style.display = prevDisplay;
                         };
                         window.noteDetect.launchCalibration({
                             instrument: inst,
