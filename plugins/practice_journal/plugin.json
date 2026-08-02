@@ -1,0 +1,12 @@
+{
+  "id": "practice_journal",
+  "name": "Practice Journal",
+  "version": "1.0.0",
+  "private": false,
+  "description": "Auto-tracks practice sessions and charts your time, streaks, and most-practiced songs.",
+  "category": "practice",
+  "nav": { "label": "Practice", "screen": "plugin-practice_journal" },
+  "screen": "screen.html",
+  "script": "screen.js",
+  "routes": "routes.py"
+}

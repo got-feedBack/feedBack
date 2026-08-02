@@ -1,0 +1,16 @@
+{
+  "id": "metronome_lock",
+  "name": "Metronome Lock",
+  "version": "0.2.0",
+  "description": "Lock every note to the click — a chart-free timing drill.",
+  "category": "game",
+  "script": "game.js",
+  "minigame": {
+    "title": "Metronome Lock",
+    "tagline": "Lock every note to the click",
+    "type": "chart-free",
+    "scoring": "pitch-continuous",
+    "skill": "timing",
+    "trains": ["late", "early"]
+  }
+}
