@@ -372,14 +372,20 @@ function findHotspots(mistakes, allJudgments, opts) {
         const pes = c.items.map(m => m.pitchErrorCents).filter(x => typeof x === 'number');
         const medT = tes.length ? _median(tes) : null;
         const medP = pes.length ? _median(pes) : null;
+        // A single-miss cluster is a POINT (startSec === endSec) → a zero-width
+        // loop that isn't drillable. `minWidthSec` guarantees a real window for
+        // the loop bounds (note_detect's startDrill still adds its own lead-in
+        // on top). Evidence keeps the true span; only the drill window widens.
+        const minW = (opts.minWidthSec != null) ? opts.minWidthSec : 0;
+        const drillEnd = (minW > 0 && (endSec - startSec) < minW) ? startSec + minW : endSec;
         out.push({
             key: (opts.song || '?') + '|' + (opts.arrangement || '?') + '|' + Math.round(startSec) + '-' + Math.round(endSec),
-            bounds: { startSec, endSec, section: null, bars: null },  // musical bars/section TODO (need getSections)
+            bounds: { startSec, endSec: drillEnd, section: null, bars: null },  // musical bars/section TODO (need getSections)
             mistakeIds: c.items.map(m => m.id),
             evidence: { missRate: Math.round(missRate * 100) / 100, noteCount, misses: c.items.length, plays: 1 },
             signal: { medianTimingMs: medT, medianPitchCents: medP, kind: _signalKind(tes, pes, medT, medP) },
             severity: Math.round(1000 * missRate * Math.min(1, c.items.length / 8)) / 1000,
-            drill: { loopA: startSec, loopB: endSec, speedMul: 0.7, goal: 0.85 },  // raw bounds; note_detect adds the lead-in
+            drill: { loopA: startSec, loopB: drillEnd, speedMul: 0.7, goal: 0.85 },  // raw bounds; note_detect adds the lead-in
         });
     }
     out.sort((a, b) => b.severity - a.severity);
@@ -489,6 +495,16 @@ function buildPlayFeedback(judgments, sessionMeta) {
     const heard = hits + playerMisses;   // notes the detector verified (hit or heard-but-wrong)
     const missByType = { late: 0, early: 0, sharp: 0, flat: 0, no_detection: 0, mute_fail: 0 };
     for (const m of mistakes) if (missByType[m.failureType] != null) missByType[m.failureType]++;
+    // Always-available drill targets: EVERY missed run, grouped tightly (1.2s,
+    // a single miss counts), worst-first, capped at 8. The rich hotspot/unheard/
+    // loose lists above each need ≥2 misses clustered within 3s, so a play with a
+    // few SCATTERED misses surfaced NO drill target at all (measured against the
+    // recording corpus: ~13% of real played-with-misses takes). This restores
+    // the original "drill any spot you missed" behaviour.
+    const missedSpots = findHotspots(mistakes, all,
+        { song: sessionMeta.song, arrangement: sessionMeta.arrangement, minMisses: 1, gapSec: 1.2, minWidthSec: 1.5 })
+        .slice(0, 8);
+
     return {
         schema: 'coaching.play_feedback.v1',
         session: {
@@ -516,6 +532,7 @@ function buildPlayFeedback(judgments, sessionMeta) {
         hotspots,
         looseHotspots,
         unheardSpots,
+        missedSpots,
         timing: _buildTimingReport(all),   // rush/drag histogram over all heard notes
     };
 }
@@ -1151,6 +1168,30 @@ function renderMissedNotesHtml(feedback) {
     </div>`;
 }
 
+// Fallback drill launcher: list EVERY missed run (worst-first, single miss OK)
+// as a 🎯 Drill button. Shown when the play had misses but none clustered into
+// the rich hotspot/unheard lists — so "I missed some" always yields a target.
+function renderMissedSpotsHtml(fb, mmss) {
+    const spots = Array.isArray(fb.missedSpots) ? fb.missedSpots : [];
+    if (!spots.length) return '';
+    const rows = spots.map((h) => {
+        const b = h.bounds || {}; const d = h.drill || {}; const ev = h.evidence || {};
+        const range = (Number.isFinite(b.startSec) ? mmss(b.startSec) : '?')
+            + '–' + (Number.isFinite(b.endSec) ? mmss(b.endSec) : '?');
+        const n = ev.misses || 1;
+        const drillable = d && Number.isFinite(d.loopA) && Number.isFinite(d.loopB) && d.loopB > d.loopA;
+        const btn = drillable
+            ? `<button class="coaching-drill-btn px-3 py-1.5 bg-accent hover:bg-accent-light text-white rounded-lg text-xs font-semibold transition"
+                   data-loop-a="${d.loopA}" data-loop-b="${d.loopB}" data-speed-mul="${d.speedMul}" data-goal="${d.goal}"
+                   data-focus="${escapeHtml(range)}" data-key="${escapeHtml(h.key || '')}">&#127919; Drill</button>`
+            : '';
+        return `<div class="flex items-center justify-between gap-2 py-1 border-t border-gray-800/50">`
+            + `<span class="text-xs text-gray-300">${escapeHtml(range)} · ${n} miss${n === 1 ? '' : 'es'}</span>${btn}</div>`;
+    }).join('');
+    return `<h3 class="text-base font-semibold text-gold mb-1 mt-3">Missed spots</h3>`
+        + `<p class="text-xs text-gray-500 mb-1">Drill any spot you missed — worst first.</p>` + rows;
+}
+
 function renderFeedbackHtml(feedback) {
     const fb = feedback || {};
     const hotspots = Array.isArray(fb.hotspots) ? fb.hotspots : [];
@@ -1188,7 +1229,11 @@ function renderFeedbackHtml(feedback) {
         } else {
             body = `No recurring trouble spots this play — nice. Keep going, or raise the difficulty.`;
         }
-        return head + `<p class="text-sm text-gray-300">${body}</p>` + unheardHtml;
+        // When nothing clustered into unheard runs either, fall back to the
+        // per-miss "Missed spots" launcher so scattered misses still get a
+        // drill target (the reported "I missed some, no drill" gap).
+        const missedHtml = unheardCount ? '' : renderMissedSpotsHtml(fb, mmss);
+        return head + `<p class="text-sm text-gray-300">${body}</p>` + missedHtml + unheardHtml;
     }
     const items = hotspots.map((h, i) => {
         const b = h.bounds || {}; const d = h.drill || {}; const ev = h.evidence || {};
@@ -1518,11 +1563,27 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
 
         function _drillableHotspots() {
             const fb = (typeof window !== 'undefined') ? window.__coachingLastFeedback : null;
-            const hs = (fb && Array.isArray(fb.hotspots)) ? fb.hotspots : [];
-            // findHotspots already sorts by severity desc → worst-first.
-            return hs.filter((h) => h && h.drill
-                && Number.isFinite(h.drill.loopA) && Number.isFinite(h.drill.loopB)
-                && h.drill.loopB > h.drill.loopA);
+            if (!fb) return [];
+            // Aggregate EVERY drillable spot type — not just player hotspots.
+            // Bass takes are mostly "unheard" runs and scattered misses land in
+            // missedSpots; a hotspots-only Drill-all starved those takes.
+            const lists = [fb.hotspots, fb.unheardSpots, fb.looseHotspots, fb.missedSpots];
+            const seen = new Set();
+            const out = [];
+            for (const list of lists) {
+                if (!Array.isArray(list)) continue;
+                for (const h of list) {
+                    if (!h || !h.drill) continue;
+                    const a = h.drill.loopA, b = h.drill.loopB;
+                    if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a) continue;
+                    const key = Math.round(a * 10) + '-' + Math.round(b * 10);
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    out.push(h);
+                }
+            }
+            out.sort((x, y) => (y.severity || 0) - (x.severity || 0));   // worst-first
+            return out;
         }
 
         function _sessionStepperEl() {

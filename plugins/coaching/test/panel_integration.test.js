@@ -178,12 +178,24 @@ test('no-key: clicking Practice this calls noteDetect.startDrill with the drill 
     assert.ok(call.opts.goal === 0.85 || call.opts.goal === undefined);
 });
 
-test('no-key: a clean play shows the panel but no drill button', () => {
+test('no-key: a single scattered miss still yields a drill target', () => {
     const { host, fireWin } = harness();
-    // Fewer than minMisses → no hotspot, but the panel still appears.
+    // One miss — too few to cluster into a hotspot — but "drill any spot you
+    // missed" means it MUST still surface a drillable Missed-spots target
+    // (previously it showed the panel with NO button; ~13% of real takes hit
+    // this dead end).
     fireWin('notedetect:miss', missJudgment(20.0));
+    fireWin('notedetect:session', { song: 'Sparse', arrangement: 'bass', sections: [] });
+    const panel = host._children.find(c => c.id === 'coaching-summary-panel');
+    assert.ok(panel, 'panel shown');
+    assert.equal(panel.querySelectorAll('.coaching-drill-btn').length, 1, 'the single miss is drillable');
+});
+
+test('no-key: a truly clean play shows the panel with no drill button', () => {
+    const { host, fireWin } = harness();
+    fireWin('notedetect:hit', { hit: true, noteTime: 20, note: { s: 1, f: 5 }, clean: true });
     fireWin('notedetect:session', { song: 'Clean', arrangement: 'bass', sections: [] });
     const panel = host._children.find(c => c.id === 'coaching-summary-panel');
-    assert.ok(panel, 'panel still shown on a near-clean play');
-    assert.equal(panel.querySelectorAll('.coaching-drill-btn').length, 0, 'no drill button without a hotspot');
+    assert.ok(panel, 'panel still shown on a clean play');
+    assert.equal(panel.querySelectorAll('.coaching-drill-btn').length, 0, 'no drill button when nothing was missed');
 });
