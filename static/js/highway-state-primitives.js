@@ -92,11 +92,35 @@ export function _paintGemGlow(hwState, cx, cy, r, stringIdx, ns) {
     if (!ns || !hwState.ctx) return;
     hwState.ctx.save();
     if (ns.state === 'miss') {
-        hwState.ctx.globalAlpha = 0.4 * ns.alpha;
-        hwState.ctx.fillStyle = '#ff2828';
+        // Bold, unmissable red so a missed note reads at a glance the whole way
+        // down (persistent misses arrive via the note-state provider with
+        // alpha 1). A radial glow spilling well past the gem + a crisp ring,
+        // with only a light tint at the center so the note colour + fret number
+        // (drawn on top by the caller) stay readable.
+        const a = ns.alpha;
+        // Color is provider-driven (default purple — deliberately NOT red, which
+        // collides with the E string). Parse "#rrggbb" → rgb so the radial glow
+        // can vary alpha per stop.
+        const raw = String(ns.color || '#c04bff');
+        const valid = /^#?[0-9a-fA-F]{6}$/.test(raw);
+        const hexColor = valid ? (raw[0] === '#' ? raw : '#' + raw) : '#c04bff';
+        const h = hexColor.slice(1);
+        const rgb = `${parseInt(h.slice(0, 2), 16)},${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)}`;
+        const glow = hwState.ctx.createRadialGradient(cx, cy, r * 0.2, cx, cy, r * 2.1);
+        glow.addColorStop(0, `rgba(${rgb},${0.32 * a})`);
+        glow.addColorStop(0.55, `rgba(${rgb},${0.55 * a})`);
+        glow.addColorStop(1, `rgba(${rgb},0)`);
+        hwState.ctx.globalAlpha = 1;
+        hwState.ctx.fillStyle = glow;
         hwState.ctx.beginPath();
-        hwState.ctx.arc(cx, cy, r * 1.05, 0, Math.PI * 2);
+        hwState.ctx.arc(cx, cy, r * 2.1, 0, Math.PI * 2);
         hwState.ctx.fill();
+        hwState.ctx.globalAlpha = 0.9 * a;
+        hwState.ctx.strokeStyle = hexColor;
+        hwState.ctx.lineWidth = Math.max(1.5, r * 0.16);
+        hwState.ctx.beginPath();
+        hwState.ctx.arc(cx, cy, r * 1.2, 0, Math.PI * 2);
+        hwState.ctx.stroke();
         hwState.ctx.restore();
         return;
     }
