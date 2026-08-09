@@ -3828,7 +3828,10 @@
         // A library scan / DLC-folder change marked the grid stale — re-fetch
         // from scratch instead of restoring a cached (possibly empty, pre-DLC)
         // snapshot. Must win over every fast-path below.
-        if (_libraryDirty) { _libraryDirty = false; await reload(); return; }
+        if (_libraryDirty) {
+            _libraryDirty = false;
+            if (state.built) { await reload(); return; }
+        }
         // Keep the entry-point gates current (a Settings visit may have
         // toggled artist pages / external links). Fire-and-forget.
         refreshArtistPageGates();
@@ -3905,6 +3908,58 @@
             if (state.view === 'grid') requestWindowRender();
         }
         _clearLibraryScrollSnapshot();
+    }
+
+    // Coalesce duplicate delivery into the current entry, but retain one real
+    // re-entry request that arrives while it is still running.
+    function createSongsEntryCoordinator(enter) {
+        let inFlight = null;
+        let rerun = false;
+        return function runSongsEntry() {
+            if (inFlight) {
+                rerun = true;
+                return inFlight;
+            }
+            inFlight = Promise.resolve()
+                .then(async () => {
+                    do {
+                        rerun = false;
+                        await enter();
+                    } while (rerun);
+                })
+                .finally(() => {
+                    inFlight = null;
+                    rerun = false;
+                });
+            return inFlight;
+        };
+    }
+
+    function createSongsEntryLifecycle(enter, isActive) {
+        const runEntry = createSongsEntryCoordinator(enter);
+        let wasActive = false;
+        return {
+            onScreenChanged(e) {
+                const id = e && e.detail && e.detail.id;
+                if (id === 'v3-songs') {
+                    // showScreen changes classes before emitting, so mark the
+                    // edge consumed before the one-time active check runs.
+                    wasActive = true;
+                    return runEntry();
+                }
+                wasActive = !!isActive();
+                return null;
+            },
+            syncActiveClass() {
+                const active = !!isActive();
+                if (active && !wasActive) {
+                    wasActive = true;
+                    return runEntry();
+                }
+                wasActive = active;
+                return null;
+            },
+        };
     }
 
     // After an upload click-through (which reuses the legacy uploader +
@@ -4380,10 +4435,27 @@
         else if (e.key === 'ArrowUp') _gpMove(-cols);
     });
 
+    const songsScreen = document.getElementById('v3-songs');
+    const songsEntryLifecycle = createSongsEntryLifecycle(
+        onV3SongsScreenEnter,
+        () => !!(songsScreen && songsScreen.classList.contains('active')),
+    );
+
+    // screen:changed is the primary navigation contract. The one-time active
+    // check covers a screen activated before this later defer script registered.
+    if (songsScreen) {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => songsEntryLifecycle.syncActiveClass(), { once: true });
+        } else {
+            songsEntryLifecycle.syncActiveClass();
+        }
+    }
+
     if (sm && typeof sm.on === 'function') {
         sm.on('screen:changed', (e) => {
             const id = e && e.detail && e.detail.id;
-            if (id === 'v3-songs') { onV3SongsScreenEnter(); return; }
+            songsEntryLifecycle.onScreenChanged(e);
+            if (id === 'v3-songs') return;
             // Leaving Songs: tear down select mode + the body-mounted batch bar,
             // so an active multi-selection doesn't leave a floating bar (and
             // stale selection) visible on unrelated screens.
