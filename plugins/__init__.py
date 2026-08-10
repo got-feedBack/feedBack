@@ -983,6 +983,16 @@ def _install_requirements(plugin_dir: Path, plugin_id: str):
     if not req_file.exists():
         return True
 
+    # Packaged/distributed hosts (e.g. slopsmith-desktop) set
+    # SLOPSMITH_SKIP_PLUGIN_INSTALL to skip the blocking startup pip install:
+    # heavy optional deps (torch/whisperx/demucs) would otherwise download for
+    # minutes and hang the backend past the host app's readiness window. The
+    # plugin still loads and degrades gracefully when its optional deps are
+    # absent.
+    if os.environ.get("SLOPSMITH_SKIP_PLUGIN_INSTALL", "").strip().lower() not in ("", "0", "false", "no"):
+        log.info("Skipping requirement install for plugin %r (SLOPSMITH_SKIP_PLUGIN_INSTALL set)", plugin_id)
+        return True
+
     _PIP_TARGET.mkdir(parents=True, exist_ok=True)
     pip_target = str(_PIP_TARGET)
 
@@ -995,9 +1005,32 @@ def _install_requirements(plugin_dir: Path, plugin_id: str):
     # (PYTHONHASHSEED), so the marker would never match on restart and
     # pip would re-resolve every plugin's requirements on every boot.
     marker = _PIP_TARGET / f".installed_{plugin_id}"
+    fail_marker = _PIP_TARGET / f".failed_{plugin_id}"
     req_hash = hashlib.sha256(req_file.read_bytes()).hexdigest()
-    if marker.exists() and marker.read_text().strip() == req_hash:
+
+    def _marker_matches(m):
+        # Tolerate an unreadable/transiently-broken marker (permissions, I/O):
+        # treat it as "no match" and fall through to a normal install attempt
+        # rather than letting read_text() raise out of this function.
+        try:
+            return m.exists() and m.read_text().strip() == req_hash
+        except OSError:
+            return False
+
+    if _marker_matches(marker):
         return True  # Already installed, same requirements
+    # A previous install of these exact requirements already failed. Don't
+    # re-attempt on every boot: that re-blocks startup for the full pip timeout
+    # each launch. Retry only when requirements.txt changes (new hash) or the
+    # .failed_ marker is cleared.
+    if _marker_matches(fail_marker):
+        return False
+
+    def _record_failure():
+        try:
+            fail_marker.write_text(req_hash)
+        except OSError:
+            pass  # read-only target: nothing to persist
 
     log.info("Installing requirements for plugin %r (this can take a while for large deps)...", plugin_id)
     try:
@@ -1009,7 +1042,20 @@ def _install_requirements(plugin_dir: Path, plugin_id: str):
             capture_output=True, text=True, timeout=1800,
         )
         if result.returncode == 0:
-            marker.write_text(req_hash)
+            # Persisting markers is best-effort and must NOT fall through to the
+            # outer `except` (which would call _record_failure() and make a
+            # SUCCESSFUL install look like a sticky failure). The two writes are
+            # independent: clearing a stale .failed_ marker must still happen
+            # even if writing the success marker fails — otherwise a real
+            # success would stay recorded as a failure on the next boot.
+            try:
+                marker.write_text(req_hash)
+            except OSError:
+                pass
+            try:
+                fail_marker.unlink()  # clear any stale failure record
+            except OSError:
+                pass
             log.info("Requirements installed for plugin %r", plugin_id)
             return True
         else:
@@ -1023,6 +1069,7 @@ def _install_requirements(plugin_dir: Path, plugin_id: str):
                 )
             else:
                 log.warning("Plugin %r: failed to install requirements: %s", plugin_id, result.stderr[:300])
+            _record_failure()
             return False
     except Exception as e:
         err_lower = str(e).lower()
@@ -1035,6 +1082,7 @@ def _install_requirements(plugin_dir: Path, plugin_id: str):
             )
         else:
             log.warning("Plugin %r: error installing requirements: %s", plugin_id, e)
+        _record_failure()
         return False
 
 
