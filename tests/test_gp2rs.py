@@ -876,6 +876,7 @@ def test_tied_note_without_predecessor_is_silently_dropped():
     (guitarpro.models.BeatStrokeDirection.none, -1),
 ])
 def test_gp_pick_stroke_direction_mapping(direction, expected):
+    """Map each PyGuitarPro pick-stroke enum to the feedBack wire value."""
     effect = SimpleNamespace(
         pickStroke=direction,
         stroke=SimpleNamespace(
@@ -885,6 +886,7 @@ def test_gp_pick_stroke_direction_mapping(direction, expected):
 
 
 def test_gp_legacy_beat_stroke_is_fallback():
+    """Use the legacy beat stroke when no explicit pick stroke is authored."""
     effect = SimpleNamespace(
         pickStroke=guitarpro.models.BeatStrokeDirection.none,
         stroke=SimpleNamespace(
@@ -898,6 +900,7 @@ def test_gp_legacy_beat_stroke_is_fallback():
     (guitarpro.models.BeatStrokeDirection.up, "1"),
 ])
 def test_convert_track_preserves_pick_direction(direction, expected):
+    """Serialize an authored pick direction on a converted standalone note."""
     beat = _ct_beat(
         tick=0,
         dur_value=4,
@@ -909,6 +912,7 @@ def test_convert_track_preserves_pick_direction(direction, expected):
 
 
 def test_convert_track_preserves_pick_direction_on_every_chord_note():
+    """Serialize the beat's pick direction on every converted chord note."""
     beat = _ct_beat(
         tick=0,
         dur_value=4,

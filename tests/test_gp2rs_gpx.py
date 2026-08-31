@@ -683,6 +683,7 @@ def test_convert_file_gp8_tremolo_beat_flags_note(tmp_path, monkeypatch):
 
 
 def test_convert_file_gp8_preserves_stroke_direction(tmp_path, monkeypatch):
+    """Preserve GPIF stroke direction without assigning it to other beats."""
     gpif = _GPIF_GUITAR_TREMOLO.replace(
         '<Tremolo>1/8</Tremolo>',
         '<Stroke><Direction>Up</Direction></Stroke>',
@@ -916,12 +917,14 @@ def test_beat_tremolo_independent_of_whammy_trembar():
     ("Sideways", -1),
 ])
 def test_gpif_pick_direction_mapping(token, expected):
+    """Map supported GPIF direction tokens and reject unknown directions."""
     beat = ET.fromstring(
         f'<Beat id="1"><Stroke><Direction>{token}</Direction></Stroke></Beat>')
     assert _gpif_pick_direction(beat) == expected
 
 
 def test_gpif_pick_direction_absent_is_unset():
+    """Leave pick direction unset when a GPIF beat has no stroke element."""
     assert _gpif_pick_direction(ET.fromstring('<Beat id="1"/>')) == -1
 
 
