@@ -72,6 +72,9 @@ class RsNote:
     tremolo: bool = False
     tap: bool = False
     link_next: bool = False
+    # Teaching mark (§6.2.2): 0 down-stroke, 1 up-stroke, -1 unset.
+    # Display only — never used for grading.
+    pick_direction: int = -1
     # Teaching mark (§6.2.2): fret-hand finger (-1 unset, 0 thumb..4 pinky).
     # Display only — never used for grading.
     fret_finger: int = -1
@@ -266,6 +269,30 @@ def _finger_xml_attrs(n: "RsNote") -> dict:
     if getattr(n, "fret_finger", -1) != -1:
         return {"fretFinger": str(int(n.fret_finger))}
     return {}
+
+
+def _pick_direction_xml_attrs(n: "RsNote") -> dict:
+    """Optional ``pickDirection`` XML attribute for a converted note."""
+    if getattr(n, "pick_direction", -1) in (0, 1):
+        return {"pickDirection": str(int(n.pick_direction))}
+    return {}
+
+
+def _gp_beat_pick_direction(beat_effect) -> int:
+    """Map a PyGuitarPro beat's authored stroke to the feedBack convention.
+
+    PyGuitarPro represents a pick stroke directly as ``pickStroke`` and older
+    brush/strum effects as ``stroke.direction``. Both use ``up=1, down=2``;
+    feedBack/RS XML uses ``down=0, up=1``. Prefer the explicit pick stroke and
+    fall back to the legacy beat stroke. Missing/unknown values stay unset.
+    """
+    if beat_effect is None:
+        return -1
+    direction = getattr(beat_effect, "pickStroke", None)
+    if getattr(direction, "name", "none").lower() == "none":
+        direction = getattr(getattr(beat_effect, "stroke", None), "direction", None)
+    name = getattr(direction, "name", "").lower()
+    return {"down": 0, "up": 1}.get(name, -1)
 
 
 def _tempo_at_tick(tick: int, tempo_map: list[TempoEvent]) -> float:
@@ -796,6 +823,7 @@ def convert_track(
                     + entry.output_start_secs + audio_offset
                 tempo = _tempo_at_tick(beat.start, tempo_map)
                 dur = _duration_to_seconds(beat.duration, tempo)
+                pick_direction = _gp_beat_pick_direction(beat.effect)
 
                 beat_notes = []
                 for note in beat.notes:
@@ -820,6 +848,7 @@ def convert_track(
                         fret=fret,
                         sustain=dur if dur > 0.2 else 0.0,
                         mute=note.type == guitarpro.NoteType.dead,
+                        pick_direction=pick_direction,
                     )
 
                     # Techniques
@@ -1213,6 +1242,7 @@ def _build_xml(
         }
         attrs.update(_bend_shape_xml_attrs(n))
         attrs.update(_finger_xml_attrs(n))
+        attrs.update(_pick_direction_xml_attrs(n))
         ET.SubElement(notes_el, "note", **attrs)
 
     # Chords
@@ -1246,6 +1276,7 @@ def _build_xml(
             }
             cn_attrs.update(_bend_shape_xml_attrs(cn))
             cn_attrs.update(_finger_xml_attrs(cn))
+            cn_attrs.update(_pick_direction_xml_attrs(cn))
             ET.SubElement(chord_el, "chordNote", **cn_attrs)
 
     # Anchors

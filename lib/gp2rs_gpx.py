@@ -903,6 +903,17 @@ def _beat_has_tremolo(beat_el: ET.Element) -> bool:
     return beat_el.find('Tremolo') is not None
 
 
+def _gpif_pick_direction(beat_el: ET.Element) -> int:
+    """Map GPIF ``Stroke/Direction`` to feedBack's pick-direction values.
+
+    GPIF writes the direction as a case-insensitive ``Up`` or ``Down`` token.
+    feedBack/RS XML uses ``0`` for down and ``1`` for up; absent or unknown
+    tokens remain ``-1`` (unset) rather than fabricating a direction.
+    """
+    raw = (beat_el.findtext('Stroke/Direction') or '').strip().lower()
+    return {'down': 0, 'up': 1}.get(raw, -1)
+
+
 # ---------------------------------------------------------------------------
 # list_tracks — mirrors gp2rs.list_tracks interface
 # ---------------------------------------------------------------------------
@@ -1771,6 +1782,7 @@ def convert_file(
 
                             dur = _beat_dur_secs(beat_el, rhythms_dict, _cur_tempo)
                             t = voice_time + audio_offset
+                            pick_direction = _gpif_pick_direction(beat_el)
 
                             notes_text = beat_el.findtext('Notes', '').strip()
                             if notes_text:
@@ -1856,6 +1868,9 @@ def convert_file(
                                         string=rs_str,
                                         fret=rs_fret,
                                         sustain=sustain,
+                                        pick_direction=(
+                                            pick_direction if not (is_drum or is_keys) else -1
+                                        ),
                                     )
 
                                     # Techniques — GPIF stores these as <Property>
