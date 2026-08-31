@@ -54,3 +54,22 @@ test('highway public API exposes hasPhraseData', () => {
         'hasPhraseData must reference _phrases',
     );
 });
+
+test('mastery filter falls through when no phrase contains levels', () => {
+    const src = fs.readFileSync(highwayJs, 'utf8');
+    const start = src.indexOf('function _rebuildMasteryFilter()');
+    const end = src.indexOf('function _clearChartTransformStage()', start);
+    assert.ok(start >= 0 && end > start, 'must locate _rebuildMasteryFilter');
+
+    const block = src.slice(start, end);
+    assert.match(
+        block,
+        /_phrases\.some\(\s*p\s*=>\s*p\.levels\.length\s*>\s*0\s*\)/,
+        'mastery filtering must detect whether any phrase contains levels',
+    );
+    assert.match(
+        block,
+        /if\s*\(\s*!hasPhraseLevels\s*\)/,
+        'phrases without levels must use the flat-array fallback',
+    );
+});

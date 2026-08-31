@@ -313,6 +313,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine (`app.js`, `highway.js`, `playSong`, `showScreen`, the capability registry).
 
 ### Fixed
+- **Highways no longer render blank for metadata-only phrase lists (#832).**
+  When a chart includes `phrases` but none of them contains authored difficulty
+  `levels`, mastery filtering now falls through to the arrangement's flat notes,
+  chords, anchors, and handshapes instead of replacing them with empty arrays.
 - **Count-in follows the song's meter and its pickup measure.** The count-in
   (loop wrap, section practice, and the "Countdown before song" setting) always
   clicked exactly four beats, so a 3/4 song was counted in 4/4, and a song

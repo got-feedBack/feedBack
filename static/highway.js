@@ -1486,12 +1486,12 @@ function createHighway() {
     // chords are time-sorted already (PR 1's parser sorts them), so
     // concatenation preserves the order. No explicit sort needed.
     function _rebuildMasteryFilter() {
-        // Null OR empty → fall through to flat arrays. The server's
-        // chunked emission invariant means _phrases should never land
-        // at `[]` in practice (it'd require the `phrases` message to
-        // fire with zero data), but the defensive guard means a bug
-        // on the way in wouldn't blank the chart.
-        if (hwState._phrases === null || hwState._phrases.length === 0) {
+        // Missing phrases, an empty list, or metadata-only phrases with
+        // no authored levels all mean there is no difficulty ladder to
+        // filter. Fall through to the flat arrangement-root arrays.
+        const hasPhraseLevels = hwState._phrases !== null
+            && hwState._phrases.some(p => p.levels.length > 0);
+        if (!hasPhraseLevels) {
             hwState._filteredNotes = null;
             hwState._filteredChords = null;
             hwState._filteredAnchors = null;
