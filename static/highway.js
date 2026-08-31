@@ -581,9 +581,10 @@ function createHighway() {
         // signal to fall back to legacy MIDI-encoded drums.
         b.drumTab = hwState.drumTab;
 
-        // Master-difficulty (feedBack#48)
+        // Master-difficulty (feedBack#48). This reports authored ladder
+        // availability; timing-only phrases remain available separately.
         b.mastery = hwState._mastery;
-        b.hasPhraseData = !!(hwState._phrases && hwState._phrases.length > 0);
+        b.hasPhraseData = _hasAuthoredPhraseLevels();
         // When phrase data authored ANY handshape, respect the filtered
         // list strictly (even when this difficulty leaves it empty) —
         // otherwise low-mastery levels would surface arp hints that
@@ -1476,22 +1477,23 @@ function createHighway() {
         hwState._chordRenderCacheTemplates = null;
     }
 
-    // Rebuild the mastery-filtered note/chord arrays from _phrases +
-    // _mastery. Called on `ready` and on every setMastery(). When
-    // _phrases is null (slider-disabled source), we clear the filtered
-    // arrays — drawNotes/drawChords fall through to the flat arrays.
-    //
-    // Output arrays are pre-sorted by time because phrase iterations
-    // arrive in chronological order and within each level the notes/
-    // chords are time-sorted already (PR 1's parser sorts them), so
-    // concatenation preserves the order. No explicit sort needed.
+    /** Return whether any phrase contains an authored difficulty level. */
+    function _hasAuthoredPhraseLevels(phrases = hwState._phrases) {
+        return Array.isArray(phrases)
+            && phrases.some(p => Array.isArray(p?.levels) && p.levels.length > 0);
+    }
+
+    /**
+     * Rebuild mastery-filtered chart arrays, falling back to the flat chart
+     * when no authored difficulty ladder exists. Called on `ready` and every
+     * setMastery(). Phrase and level order already preserves timeline order.
+     */
     function _rebuildMasteryFilter() {
-        // Null OR empty → fall through to flat arrays. The server's
-        // chunked emission invariant means _phrases should never land
-        // at `[]` in practice (it'd require the `phrases` message to
-        // fire with zero data), but the defensive guard means a bug
-        // on the way in wouldn't blank the chart.
-        if (hwState._phrases === null || hwState._phrases.length === 0) {
+        // Missing phrases, an empty list, or metadata-only phrases with
+        // no authored levels all mean there is no difficulty ladder to
+        // filter. Fall through to the flat arrangement-root arrays.
+        const hasPhraseLevels = _hasAuthoredPhraseLevels();
+        if (!hasPhraseLevels) {
             hwState._filteredNotes = null;
             hwState._filteredChords = null;
             hwState._filteredAnchors = null;
@@ -1512,14 +1514,15 @@ function createHighway() {
         // back to the flat arrangement-root list (DLC pattern).
         let anyHandShapeInPhrases = false;
         for (const p of hwState._phrases) {
-            const n = p.levels.length;
+            const levels = Array.isArray(p?.levels) ? p.levels : [];
+            const n = levels.length;
             if (n === 0) continue;
             // Map slider fraction to a level index. `n` already equals
             // `max_difficulty + 1` for fully-authored phrases, and
             // equals the authored-level count otherwise — so indexing
-            // into p.levels.length is both correct and defensive.
+            // into the normalized levels length is both correct and defensive.
             const idx = Math.min(n - 1, Math.floor(hwState._mastery * n));
-            const lv = p.levels[idx];
+            const lv = levels[idx];
             for (const x of lv.notes)   outNotes.push(x);
             for (const x of lv.chords)  outChords.push(x);
             // Anchors drive the fret zoom / pan. Keeping max-mastery
@@ -1529,7 +1532,7 @@ function createHighway() {
             for (const x of lv.anchors) outAnchors.push(x);
             for (const x of (lv.handshapes || [])) outHandShapes.push(x);
             if (!anyHandShapeInPhrases) {
-                for (const level of p.levels) {
+                for (const level of levels) {
                     if (level.handshapes && level.handshapes.length > 0) {
                         anyHandShapeInPhrases = true;
                         break;
@@ -1843,12 +1846,9 @@ function createHighway() {
             _rebuildMasteryFilter();
         },
         getMastery() { return hwState._mastery; },
-        // Align with _rebuildMasteryFilter's own "null OR empty → fall
-        // through" check. If we returned true for _phrases = [], the
-        // slider would be enabled (via song:ready's hasPhraseData) but
-        // dragging it would do nothing (filter stays null). Same
-        // sentinel, same check, single source of truth.
-        hasPhraseData() { return !!(hwState._phrases && hwState._phrases.length > 0); },
+        // Difficulty-ladder availability for mastery controls. Timing-only
+        // phrase windows remain available through the separate phrase getter.
+        hasPhraseData() { return _hasAuthoredPhraseLevels(); },
         // Lightweight phrase windows for Section Practice — timing only, no note payloads.
         getPracticePhrases() {
             if (!hwState._phrases || !hwState._phrases.length) return null;
@@ -2671,8 +2671,9 @@ function createHighway() {
         // WS connection — mirrors getBeats()/getSections().
         getLyrics() { return hwState.lyrics; },
         // Phrase timing windows for plugins — `[{ index, start_time, end_time, max_difficulty }]`.
-        // Returns null when the current song has no phrase data (GP imports, single-difficulty
-        // charts). Gate phrase-aware logic with hasPhraseData() first. Read-only; do not mutate.
+        // Returns null only when no phrase timing data exists. This remains available for
+        // metadata-only phrases even when hasPhraseData() reports no authored difficulty ladder.
+        // Read-only; do not mutate.
         getPhrases() {
             if (!hwState._phrases || !hwState._phrases.length) return null;
             return hwState._phrases.map((p, index) => ({
