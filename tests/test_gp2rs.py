@@ -25,6 +25,7 @@ from gp2rs import (
     _compute_tuning,
     _extract_year,
     _gp_bend_shape,
+    _gp_beat_pick_direction,
     _gp_string_to_rs,
     _is_bass_track,
     _standard_tuning_for,
@@ -867,6 +868,60 @@ def test_tied_note_without_predecessor_is_silently_dropped():
     root = ET.fromstring(xml_str)  # noqa: S314
     notes = root.findall(".//notes/note")
     assert len(notes) == 0
+
+
+@pytest.mark.parametrize("direction, expected", [
+    (guitarpro.models.BeatStrokeDirection.down, 0),
+    (guitarpro.models.BeatStrokeDirection.up, 1),
+    (guitarpro.models.BeatStrokeDirection.none, -1),
+])
+def test_gp_pick_stroke_direction_mapping(direction, expected):
+    effect = SimpleNamespace(
+        pickStroke=direction,
+        stroke=SimpleNamespace(
+            direction=guitarpro.models.BeatStrokeDirection.none),
+    )
+    assert _gp_beat_pick_direction(effect) == expected
+
+
+def test_gp_legacy_beat_stroke_is_fallback():
+    effect = SimpleNamespace(
+        pickStroke=guitarpro.models.BeatStrokeDirection.none,
+        stroke=SimpleNamespace(
+            direction=guitarpro.models.BeatStrokeDirection.up),
+    )
+    assert _gp_beat_pick_direction(effect) == 1
+
+
+@pytest.mark.parametrize("direction, expected", [
+    (guitarpro.models.BeatStrokeDirection.down, "0"),
+    (guitarpro.models.BeatStrokeDirection.up, "1"),
+])
+def test_convert_track_preserves_pick_direction(direction, expected):
+    beat = _ct_beat(
+        tick=0,
+        dur_value=4,
+        notes=[_ct_note(guitarpro.NoteType.normal, gp_string=1, fret=5)],
+    )
+    beat.effect.pickStroke = direction
+    root = ET.fromstring(convert_track(_ct_song([beat]), track_index=0))  # noqa: S314
+    assert root.find(".//notes/note").get("pickDirection") == expected
+
+
+def test_convert_track_preserves_pick_direction_on_every_chord_note():
+    beat = _ct_beat(
+        tick=0,
+        dur_value=4,
+        notes=[
+            _ct_note(guitarpro.NoteType.normal, gp_string=1, fret=3),
+            _ct_note(guitarpro.NoteType.normal, gp_string=2, fret=2),
+        ],
+    )
+    beat.effect.pickStroke = guitarpro.models.BeatStrokeDirection.down
+    root = ET.fromstring(convert_track(_ct_song([beat]), track_index=0))  # noqa: S314
+    chord_notes = root.findall(".//chords/chord/chordNote")
+    assert len(chord_notes) == 2
+    assert {note.get("pickDirection") for note in chord_notes} == {"0"}
 
 
 # ── convert_track: bend shape (bn / bt / bnv, §6.2.1) ────────────────────────

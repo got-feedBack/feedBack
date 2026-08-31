@@ -22,6 +22,7 @@ from gp2rs_gpx import (
     _note_is_tie,
     _note_has_vibrato,
     _beat_has_tremolo,
+    _gpif_pick_direction,
     _note_midi,
     _gpx_percussion_midis,
     _gpx_tuning,
@@ -681,6 +682,25 @@ def test_convert_file_gp8_tremolo_beat_flags_note(tmp_path, monkeypatch):
     assert tremolo_by_string[5] == "0"
 
 
+def test_convert_file_gp8_preserves_stroke_direction(tmp_path, monkeypatch):
+    gpif = _GPIF_GUITAR_TREMOLO.replace(
+        '<Tremolo>1/8</Tremolo>',
+        '<Stroke><Direction>Up</Direction></Stroke>',
+    )
+    monkeypatch.setattr(gp2rs_gpx, "_load_gpif", lambda _p: ET.fromstring(gpif))
+    out_files = convert_file(
+        "dummy.gp", str(tmp_path),
+        track_indices=[0], arrangement_names={0: "Lead"},
+    )
+    root = ET.parse(out_files[0]).getroot()
+    direction_by_string = {
+        int(note.get("string")): note.get("pickDirection")
+        for note in root.iter() if note.tag == "note"
+    }
+    assert direction_by_string[0] == "1"
+    assert direction_by_string[5] is None
+
+
 def test_vocal_pitch_sidecar_sorts_multi_voice_by_time():
     # Two voices in one bar. Voice 0 (traversed first) emits its lyric note at
     # t=0.5 (a no-lyric quarter precedes it); voice 1 (traversed second) emits
@@ -887,6 +907,22 @@ def test_beat_tremolo_independent_of_whammy_trembar():
                       '<Property name="VibratoWTremBar"><Strength>Slight</Strength></Property>'
                       '</Properties></Beat>')
     assert _beat_has_tremolo(b) is False
+
+
+@pytest.mark.parametrize("token, expected", [
+    ("Down", 0),
+    ("Up", 1),
+    ("down", 0),
+    ("Sideways", -1),
+])
+def test_gpif_pick_direction_mapping(token, expected):
+    beat = ET.fromstring(
+        f'<Beat id="1"><Stroke><Direction>{token}</Direction></Stroke></Beat>')
+    assert _gpif_pick_direction(beat) == expected
+
+
+def test_gpif_pick_direction_absent_is_unset():
+    assert _gpif_pick_direction(ET.fromstring('<Beat id="1"/>')) == -1
 
 
 # ── _gpif_left_fingering (GP7/GP8 per-note fret-hand finger -> fg) ───────────
