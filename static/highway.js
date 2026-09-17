@@ -209,6 +209,9 @@ function createHighway() {
     hwState._domVisCached = false;
     hwState._domVisSampledFrame = NaN;
     hwState.animFrame = null;
+    // Normal highways schedule their own rAF. An embedding layout can opt in
+    // to driving several instances from one callback through renderFrame().
+    hwState._externalFrameDriver = false;
     hwState._lastPausedDrawAt = 0;
     hwState._connectOpts = {};
     hwState._resizeContainer = null;
@@ -535,7 +538,7 @@ function createHighway() {
     // (e.g. highway_3d's merge caches) rely on that invariant.
     const _bundleReused = {};
 
-    function _makeBundle() {
+    function _makeBundle(frameTime, frameId) {
         // Snapshot of current factory state passed to each renderer call.
         // Arrays and songInfo are LIVE references, not copies — the
         // bundle's `notes`, `chords`, `anchors`, `beats`, etc. point at
@@ -557,8 +560,17 @@ function createHighway() {
         // back to raw instead of extrapolating forward against a frozen
         // audio sample. Undefined on downlevel hosts → those renderers
         // keep their own staleness-based fallback.
+        const renderNow = Number.isFinite(frameTime) ? frameTime : performance.now();
         b.isPlaying = !Number.isNaN(hwState._chartAnchorPerfNow)
-            && (performance.now() - hwState._chartLastAdvanceAt) <= _CHART_MAX_INTERP_MS;
+            && (renderNow - hwState._chartLastAdvanceAt) <= _CHART_MAX_INTERP_MS;
+        // A render host may drive several highways from one rAF callback
+        // (Split Screen does this).  Keep that callback's timestamp and id in
+        // the bundle so a renderer can make one deterministic decision for a
+        // whole visual frame instead of sampling performance.now() separately
+        // in every panel.  They are undefined during lifecycle calls such as
+        // init(), where there is intentionally no render frame.
+        b.frameTime = frameTime;
+        b.frameId = frameId;
 
         // Chart content (filter-aware — difficulty-filtered arrays
         // preferred; raw arrays are the fallback when no ladder data).
@@ -1211,10 +1223,14 @@ function createHighway() {
         try { return r.needsContinuousFrames() === true; } catch (_) { return false; }
     }
 
+    // Render exactly one frame. `frameTime`/`frameId` are supplied by the
+    // browser rAF loop in normal play, or by an embedding host that wants to
+    // render a group of highways as one deterministic visual frame.
     function draw() {
-        hwState.animFrame = requestAnimationFrame(draw);
+        const frameTime = hwState._frameTime;
+        const frameId = hwState._frameId;
         if (!hwState.canvas || !hwState._renderer) return;
-        hwState._frameIdx = (hwState._frameIdx + 1) | 0;
+        hwState._frameIdx = Number.isFinite(frameId) ? frameId : ((hwState._frameIdx + 1) | 0);
         // Visibility-aware skip (#246). Run BEFORE the !ready bail so
         // hide/show transitions during the loading / reconnect window
         // still propagate to listeners (a splitscreen-driven hide that
@@ -1272,7 +1288,10 @@ function createHighway() {
         // (clock advancing) is never throttled.
         let _paused = false;
         if (!Number.isNaN(hwState._chartAnchorPerfNow)) {
-            const _nowP = performance.now();
+            // Use the coordinator's rAF timestamp when supplied. That makes
+            // pause/throttle decisions identical for every panel in a shared
+            // frame instead of depending on the order their draw calls ran.
+            const _nowP = Number.isFinite(frameTime) ? frameTime : performance.now();
             if (_nowP - hwState._chartLastAdvanceAt > _CHART_MAX_INTERP_MS) {
                 _paused = true;
                 // ...unless the renderer says its picture is NOT static while
@@ -1291,7 +1310,7 @@ function createHighway() {
         // it reads closure state directly and ignores the bundle.
         // _makeBundle at 60fps was a steady GC churn for the common
         // case where no custom renderer is installed.
-        const bundle = hwState._renderer === _defaultRenderer ? undefined : _makeBundle();
+        const bundle = hwState._renderer === _defaultRenderer ? undefined : _makeBundle(frameTime, hwState._frameIdx);
         try {
             const _drawStart = performance.now();
             hwState._renderer.draw(bundle);
@@ -1319,6 +1338,20 @@ function createHighway() {
                 _emitVizReverted('draw-failure');
             }
         }
+    }
+
+    function _scheduleDraw(frameTime) {
+        // An external frame host owns scheduling while enabled. A callback
+        // that was queued just before the hand-off is harmless and must not
+        // restart the private loop.
+        if (hwState._externalFrameDriver) {
+            hwState.animFrame = null;
+            return;
+        }
+        hwState.animFrame = requestAnimationFrame(_scheduleDraw);
+        hwState._frameTime = frameTime;
+        hwState._frameId = undefined;
+        draw();
     }
 
     function drawHighway(W, H) {
@@ -2454,7 +2487,7 @@ function createHighway() {
                             // Wait for the off-chain JUCE routing (if any) to settle
                             // so _juceMode is correctly set before _onReady and song:ready fire.
                             await hwState._juceRoutingPromise.catch(() => {});
-                            if (!hwState.animFrame) draw();
+                            if (!hwState.animFrame) _scheduleDraw();
                             if (api._onReady) await Promise.resolve(api._onReady()).catch((err) => console.error('[highway] _onReady error:', err));
                             // Broadcast to interested listeners (e.g. the
                             // difficulty-slider disabled-state update in
@@ -2931,6 +2964,36 @@ function createHighway() {
          * renderer; they're a 2D-only contract.
          */
         setRenderer(r) { _setRenderer(r); },
+        /**
+         * Switch between the private rAF loop and an external frame host.
+         * External callers must invoke renderFrame(timestamp, frameId) once
+         * per visual frame. This is deliberately opt-in so existing plugins
+         * retain their historical scheduling behaviour.
+         */
+        setExternalFrameDriver(enabled) {
+            const next = enabled === true;
+            if (hwState._externalFrameDriver === next) return;
+            hwState._externalFrameDriver = next;
+            if (next) {
+                if (hwState.animFrame) {
+                    cancelAnimationFrame(hwState.animFrame);
+                    hwState.animFrame = null;
+                }
+            } else if (hwState.ready && !hwState.animFrame) {
+                _scheduleDraw();
+            }
+        },
+        /**
+         * Render one externally scheduled frame. `frameTime` should be the
+         * timestamp received by requestAnimationFrame; `frameId` is optional
+         * but lets a coordinator give every panel the same frame identity.
+         */
+        renderFrame(frameTime, frameId) {
+            if (!hwState._externalFrameDriver) return;
+            hwState._frameTime = frameTime;
+            hwState._frameId = frameId;
+            draw();
+        },
         /**
          * True when the built-in 2D canvas highway is the active renderer
          * (or none has been installed yet — that resolves to the default
