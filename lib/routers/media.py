@@ -9,6 +9,7 @@ appstate.static_dir, SLOPPAK_CACHE_DIR->appstate.sloppak_cache_dir).
 
 import ipaddress
 import re
+import subprocess
 
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -16,6 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse
 import appstate
 import sloppak as sloppak_mod
 from dlc_paths import _get_dlc_dir, _resolve_dlc_path
+from browser_audio import browser_playback_copy
 
 import logging
 log = logging.getLogger("feedBack.server")
@@ -65,18 +67,23 @@ def _resolve_sloppak_local_file(filename: str, rel_path: str):
 
 
 @router.get("/api/sloppak/{filename:path}/file/{rel_path:path}")
-def serve_sloppak_file(filename: str, rel_path: str):
+def serve_sloppak_file(filename: str, rel_path: str, playback: str | None = None):
     """Serve a file from inside a sloppak (stems, cover, etc.)."""
     result = _resolve_sloppak_local_file(filename, rel_path)
     if isinstance(result, tuple):
         error, status = result
         return JSONResponse({"error": error}, status)
     target = result
+    if playback in ("pcm", "webm"):
+        try:
+            target = browser_playback_copy(target, appstate.audio_cache_dir, prefer_webm=playback == "webm")
+        except (OSError, RuntimeError, subprocess.SubprocessError):
+            log.warning("Could not prepare seek-stable browser audio; serving original", exc_info=True)
     ext = target.suffix.lower()
     mt = {
         ".ogg": "audio/ogg", ".opus": "audio/ogg", ".oga": "audio/ogg",
         ".mp3": "audio/mpeg", ".wav": "audio/wav", ".flac": "audio/flac",
-        ".m4a": "audio/mp4",
+        ".m4a": "audio/mp4", ".webm": "audio/webm",
         ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
         ".png": "image/png", ".webp": "image/webp",
         ".json": "application/json",
@@ -146,7 +153,7 @@ def audio_local_path(url: str, request: Request):
 
 
 @router.get("/audio/{filename:path}")
-def serve_audio(filename: str):
+def serve_audio(filename: str, playback: str | None = None):
     """Serve audio files from the writable audio cache directory."""
     # Reject traversal attempts and absolute-path components
     if ".." in filename.split("/") or filename.startswith("/") or "\\" in filename:
@@ -158,5 +165,10 @@ def serve_audio(filename: str):
         except ValueError:
             continue
         if candidate.is_file():
-            return FileResponse(str(candidate))
+            if playback in ("pcm", "webm"):
+                try:
+                    candidate = browser_playback_copy(candidate, appstate.audio_cache_dir, prefer_webm=playback == "webm")
+                except (OSError, RuntimeError, subprocess.SubprocessError):
+                    log.warning("Could not prepare seek-stable browser audio; serving original", exc_info=True)
+            return FileResponse(str(candidate), media_type="audio/webm" if candidate.suffix == ".webm" else None)
     return JSONResponse({"error": "not found"}, status_code=404)

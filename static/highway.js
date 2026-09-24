@@ -2,6 +2,7 @@
  * Canvas-based note highway renderer.
  * Receives note data via WebSocket, renders on requestAnimationFrame.
  */
+import { browserAudioUrl } from './js/browser-audio-url.js';
 import {
     BG,
     CHAIN_GAP_THRESHOLD,
@@ -69,6 +70,7 @@ import {
     strumGroupBuckets,
 } from './js/highway-draw.js';
 
+/** Create one highway renderer with its own playback and chart state. */
 function createHighway() {
   // R3c: per-instance mutable state in one object, so extracted renderer/ws
   // modules can close over it as a factory arg without cross-panel sharing.
@@ -2240,7 +2242,7 @@ function createHighway() {
                                                 if (gen !== hwState._wsGen) return; // stale
                                                 window._juceMode = false;
                                                 window._juceAudioUrl = null;
-                                                audio.src = audioUrl;
+                                                audio.src = browserAudioUrl(audioUrl);
                                                 _reportAudioRoute('html5', pathLabel === '<missing>' ? 'available' : 'degraded', pathLabel === '<missing>' ? '' : 'JUCE fallback');
                                                 if (typeof window.feedBack?.audio?.applySongVolume === 'function') {
                                                     void window.feedBack.audio.applySongVolume();
@@ -2267,7 +2269,7 @@ function createHighway() {
                                             // running concurrently here is harmless.
                                             window._juceMode = false;
                                             window._juceAudioUrl = null;
-                                            audio.src = msg.audio_url;
+                                            audio.src = browserAudioUrl(msg.audio_url);
                                             _reportAudioRoute(isAudioUrl ? 'html5' : 'stems', 'available');
                                             if (typeof window.feedBack?.audio?.applySongVolume === 'function') {
                                                 void window.feedBack.audio.applySongVolume();
