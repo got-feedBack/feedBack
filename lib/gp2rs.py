@@ -75,6 +75,9 @@ class RsNote:
     # Teaching mark (§6.2.2): fret-hand finger (-1 unset, 0 thumb..4 pinky).
     # Display only — never used for grading.
     fret_finger: int = -1
+    # Strum direction (-1 unset, 0 down, 1 up) — mirrors song.py's Note.pick_direction
+    # convention (see _gp_pick_direction below for the GP enum mapping).
+    pick_direction: int = -1
 
 
 @dataclass
@@ -265,6 +268,46 @@ def _finger_xml_attrs(n: "RsNote") -> dict:
     never used for grading (§6.2.2)."""
     if getattr(n, "fret_finger", -1) != -1:
         return {"fretFinger": str(int(n.fret_finger))}
+    return {}
+
+
+def _gp_pick_direction(effect) -> int:
+    """Read a beat's strum/pick direction off a pyguitarpro BeatEffect and map
+    it to feedBack's Note.pick_direction convention (-1 unset, 0 down, 1 up —
+    see song.py's Note.pick_direction / the editor's _editorCyclePickDirection).
+
+    GP5 binary actually encodes TWO independent fields here, read by
+    different flag bits (guitarpro/gp4.py's readBeatEffects): `effect.stroke`
+    (a BeatStroke(direction, value) — the "brush"/arpeggio chord-strum GP's
+    own UI writes when you drag across a chord, `value` being its speed) and
+    `effect.pickStroke` (a bare BeatStrokeDirection — a separate, rarer
+    marking). Verified against real chart files: every one of a sample GP5's
+    24 authored chord strums used `.stroke.direction`; none used
+    `.pickStroke` at all. So `.stroke` is checked first — it's what "chord
+    strumming" actually means in practice — falling back to `.pickStroke`
+    only when `.stroke` is unset, since it's still a real, distinct field
+    some files may use. Both share the same BeatStrokeDirection enum
+    (none=0, up=1, down=2), so a single mapping covers either source.
+    """
+    if effect is None:
+        return -1
+    stroke = getattr(effect, "stroke", None)
+    direction = getattr(stroke, "direction", None) if stroke is not None else None
+    if direction is None or direction == guitarpro.BeatStrokeDirection.none:
+        direction = getattr(effect, "pickStroke", None)
+    if direction == guitarpro.BeatStrokeDirection.down:
+        return 0
+    if direction == guitarpro.BeatStrokeDirection.up:
+        return 1
+    return -1
+
+
+def _pick_direction_xml_attrs(n: "RsNote") -> dict:
+    """Optional `pickDirection` XML attribute for a <note>/<chordNote>, default-
+    omitted (!= -1 only). `_parse_note` (lib/song.py) reads it back as `pkd` on
+    the wire, so a GP-authored up/down stroke survives import → wire → highway."""
+    if getattr(n, "pick_direction", -1) != -1:
+        return {"pickDirection": str(int(n.pick_direction))}
     return {}
 
 
@@ -797,6 +840,11 @@ def convert_track(
                 tempo = _tempo_at_tick(beat.start, tempo_map)
                 dur = _duration_to_seconds(beat.duration, tempo)
 
+                # A stroke is one pick gesture across the whole beat (all
+                # strings struck together share a direction), so read it
+                # once per beat rather than per note.
+                _beat_pick_dir = _gp_pick_direction(beat.effect)
+
                 beat_notes = []
                 for note in beat.notes:
                     if note.type == guitarpro.NoteType.rest:
@@ -820,6 +868,7 @@ def convert_track(
                         fret=fret,
                         sustain=dur if dur > 0.2 else 0.0,
                         mute=note.type == guitarpro.NoteType.dead,
+                        pick_direction=_beat_pick_dir,
                     )
 
                     # Techniques
@@ -1100,13 +1149,24 @@ def convert_track(
         chord_templates=chord_templates,
         anchors=anchors,
         tempo=song.tempo,
+        capo=_gp_track_capo(track),
     )
+
+
+def _gp_track_capo(track) -> int:
+    """GP3/4/5 per-track capo fret. pyguitarpro exposes it as Track.offset.
+    Returns 0 (no capo) on any missing/malformed attribute — never fabricates
+    a capo, matching the fail-safe posture used throughout this module."""
+    try:
+        return max(0, int(getattr(track, "offset", 0) or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _build_xml(
     title, artist, album, year, arrangement, tuning, num_strings,
     song_length, audio_offset, beats, sections, notes, chords,
-    chord_templates, anchors, tempo,
+    chord_templates, anchors, tempo, capo=0,
 ) -> str:
     root = ET.Element("song", version="7")
 
@@ -1137,7 +1197,14 @@ def _build_xml(
     tuning_el.set("stringCount", str(len(tuning)))
     for i in range(max(6, len(tuning))):
         tuning_el.set(f"string{i}", str(tuning[i] if i < len(tuning) else 0))
-    ET.SubElement(root, "capo").text = "0"
+    # Was hardcoded to "0" regardless of the source file's actual capo —
+    # every downstream consumer (editor, feedpakr) either silently imported
+    # capo=0 or had to independently patch it back in post-conversion (see
+    # feedpakr_pipeline.py's _capo_for_track/_gpif_capo_lookup, written
+    # because THIS was never fixed at the source). Fixed at the source now;
+    # callers pass the real value via the `capo` param (default 0 for the
+    # piano/drum paths, where GP has no capo concept at all).
+    ET.SubElement(root, "capo").text = str(int(capo))
 
     # Ebeats — write beat times at MICROSECOND (6-decimal) precision, not
     # millisecond (3-decimal). The editor/timeline DERIVES per-bar BPM from beat
@@ -1213,15 +1280,21 @@ def _build_xml(
         }
         attrs.update(_bend_shape_xml_attrs(n))
         attrs.update(_finger_xml_attrs(n))
+        attrs.update(_pick_direction_xml_attrs(n))
         ET.SubElement(notes_el, "note", **attrs)
 
     # Chords
     chords_el = ET.SubElement(level, "chords", count=str(len(chords)))
     for ch in chords:
+        # No chord-level `strum` attribute: song.py's parser never reads one
+        # (each chordNote carries its own pickDirection instead, since GP's
+        # stroke direction is really a per-beat property applied per note —
+        # see _gp_pick_direction) — a prior hardcoded `strum="down"` here was
+        # dead, unread output that just looked like a real value.
         chord_el = ET.SubElement(chords_el, "chord",
                                  time=f"{ch.time:.3f}",
                                  chordId=str(ch.template_idx),
-                                 highDensity="0", strum="down")
+                                 highDensity="0")
         for cn in ch.notes:
             cn_attrs = {
                 "time": f"{cn.time:.3f}",
@@ -1246,6 +1319,7 @@ def _build_xml(
             }
             cn_attrs.update(_bend_shape_xml_attrs(cn))
             cn_attrs.update(_finger_xml_attrs(cn))
+            cn_attrs.update(_pick_direction_xml_attrs(cn))
             ET.SubElement(chord_el, "chordNote", **cn_attrs)
 
     # Anchors

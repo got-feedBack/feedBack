@@ -650,6 +650,59 @@ def _gpif_left_fingering(note_el) -> int:
     return _GPIF_LEFT_FINGERING_MAP.get(raw, -1)
 
 
+def _gpif_pick_direction(beat_el) -> int:
+    """Read a GPIF <Beat>'s chord-strum direction -> RS pick_direction int
+    (-1 unset, 0 down, 1 up — mirrors gp2rs.py's _gp_pick_direction /
+    song.py's Note.pick_direction).
+
+    Verified against real GP8 exports (unlike the first cut of this helper,
+    which guessed a <Stroke><Direction> child that doesn't exist in any real
+    file). The actual chord-strum marking is
+    <Properties><Property name="Brush"><Direction>Down|Up</Direction>
+    </Property></Properties> — direct GPIF equivalent of GP4/5's
+    beat.effect.stroke, the "brush" GP's own UI writes when you drag across
+    a chord (see gp2rs.py's _gp_pick_direction for the GP4/5-side finding).
+    <Arpeggio>Down|Up</Arpeggio> (a direct <Beat> child, not a Property) is a
+    related-but-distinct articulation — a broken chord rather than a single
+    brush gesture — checked as a fallback only when Brush is absent, since
+    it still carries a real, chord-wide up/down direction.
+
+    Returns -1 (unset) when neither is present or the text is unrecognised —
+    never fabricates a direction, same posture as _gpif_left_fingering."""
+    raw = ''
+    props = beat_el.find('Properties')
+    if props is not None:
+        for p in props.findall('Property'):
+            if p.get('name') == 'Brush':
+                raw = (p.findtext('Direction') or '').strip().lower()
+                break
+    if not raw:
+        raw = (beat_el.findtext('Arpeggio') or '').strip().lower()
+    if raw == 'down':
+        return 0
+    if raw == 'up':
+        return 1
+    return -1
+
+
+def _gpif_track_capo(track_el) -> int:
+    """GPIF per-track capo fret, at Track/Staves/Staff/Properties/
+    Property[@name='CapoFret']/Fret. GP6/7/8 GPIF has no Track.offset
+    equivalent to read here (unlike GP3-5's pyguitarpro Track.offset, see
+    gp2rs.py's _gp_track_capo) — this is the format's own field for it.
+
+    Returns 0 (no capo) when absent/malformed — never fabricates a capo."""
+    if track_el is None:
+        return 0
+    fret_el = track_el.find(".//Staves/Staff/Properties/Property[@name='CapoFret']/Fret")
+    if fret_el is None or not (fret_el.text or '').strip():
+        return 0
+    try:
+        return max(0, int(float(fret_el.text)))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _rs_string_order(string_pitches: list[int]) -> dict[int, int]:
     """Map each GPIF string index → RS string index (0 = lowest pitch).
 
@@ -1771,6 +1824,10 @@ def convert_file(
 
                             dur = _beat_dur_secs(beat_el, rhythms_dict, _cur_tempo)
                             t = voice_time + audio_offset
+                            # A stroke is one pick gesture across the whole
+                            # beat, so read it once per beat rather than per
+                            # note — mirrors gp2rs.py's per-beat pickStroke.
+                            _beat_pick_dir = _gpif_pick_direction(beat_el)
 
                             notes_text = beat_el.findtext('Notes', '').strip()
                             if notes_text:
@@ -1856,6 +1913,7 @@ def convert_file(
                                         string=rs_str,
                                         fret=rs_fret,
                                         sustain=sustain,
+                                        pick_direction=_beat_pick_dir if not (is_drum or is_keys) else -1,
                                     )
 
                                     # Techniques — GPIF stores these as <Property>
@@ -2092,6 +2150,9 @@ def convert_file(
             chord_templates=chord_templates,
             anchors=anchors,
             tempo=int(tempo_bpm),
+            # No capo concept for drums/keys (same reasoning as pick_direction
+            # above) — only guitar/bass tracks get a real lookup.
+            capo=0 if (is_drum or is_keys) else _gpif_track_capo(track.get('_el')),
         )
 
         # Inject tone change markers for guitar/bass tracks
@@ -2469,12 +2530,29 @@ def _auto_select_gpx(tracks: list[dict]) -> tuple[list[int], dict[int, str]]:
 
         is_bass = (t['string_pitches'] and max(t['string_pitches']) <= 48) \
             or t['midi_program'] in BASS_PROGS
-        is_guitar = bool(t['string_pitches']) and not is_bass
+        # GP6+ often notates piano/keys parts on a fretted string template, so
+        # string_pitches alone can't distinguish a keyboard part from a real
+        # guitar (feedBack: "Combo" mislabeled piano arrangement). Gate only
+        # the midi_program heuristic on `not string_pitches` (to avoid
+        # grabbing real guitars); a name/arrangement keyword forces keys
+        # regardless, so a track explicitly named "Keys ..." isn't swept into
+        # the unhinted-guitar Lead/Rhythm/Combo bucket just because it has
+        # string tuning data. This mirrors convert_gpif's sibling is_keys rule
+        # above (line ~1682) exactly, including its accepted trade-off: a
+        # genuinely fretted guitar whose name merely *contains* "piano"/
+        # "keys"/"organ" as a substring (e.g. "Keys of the Kingdom") is a
+        # false positive here too, same as there — the name match is the
+        # only signal these two functions have for a fretted keyboard part,
+        # so it has to win. Check is_keys before is_guitar so the keys match
+        # actually takes effect.
         is_keys = (not t['string_pitches'] and t['midi_program'] in KEYS_PROGS) \
-            or any(kw in name_l for kw in ('piano', 'keys', 'organ'))
+            or any(kw in name_l for kw in ('piano', 'keys', 'keyboard', 'organ'))
+        is_guitar = bool(t['string_pitches']) and not is_bass and not is_keys
 
         if is_bass:
             selected.append((i, 'bass'))
+        elif is_keys:
+            selected.append((i, 'keys'))
         elif is_guitar:
             # Honor "lead"/"rhythm" in the GP track name so two guitars keep
             # the author's roles instead of being labelled by appearance order
@@ -2485,8 +2563,6 @@ def _auto_select_gpx(tracks: list[dict]) -> tuple[list[int], dict[int, str]]:
                 selected.append((i, 'guitar_rhythm'))
             else:
                 selected.append((i, 'guitar'))
-        elif is_keys:
-            selected.append((i, 'keys'))
 
     if not selected:
         for i, t in enumerate(tracks):

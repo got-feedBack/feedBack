@@ -358,6 +358,12 @@ export async function togglePlay() {
             // leave the button showing Play while the song keeps playing — the
             // "two clicks to pause on the first song after a fresh load" bug.
             if (window._juceRerouteInProgress) return;
+            // Same shape of race, HTML5 -> stems-plugin Web-Audio takeover
+            // (get-flashbacks/feedBack#39): the stems plugin deliberately
+            // pauses the core element while it builds its own multi-stem
+            // transport, then dispatches a synthetic 'play' once that
+            // transport actually starts. Don't stomp the button in between.
+            if (window._stemsRerouteInProgress) return;
             console.error('[app] audio.play() rejected:', err);
             S.isPlaying = false;
             setPlayButtonState(false);

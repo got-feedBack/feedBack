@@ -803,6 +803,14 @@ def compute_smart_names(arrangements: list[Arrangement]) -> list[str | None]:
             return "path_rhythm", bool(a.bonus_arr)
         if a.path_bass:
             return "path_bass", bool(a.bonus_arr)
+        # The manifest `type` field (sloppak.py:942) is authoritative when
+        # present — trust it over name-sniffing. A "keys"/"piano"/"vocals"/
+        # "drums" arrangement is never part of the Lead/Rhythm/Bass grouping,
+        # even if its display name happens to collide with the name-fallback
+        # table below (e.g. a keys arrangement literally named "Combo").
+        arr_type = (a.type or "").strip().lower() if isinstance(a.type, str) else ""
+        if arr_type in ("keys", "piano", "vocals", "drums"):
+            return None, bool(a.bonus_arr)
         name = a.name if isinstance(a.name, str) else ""
         entry = _NAME_FALLBACK.get(name.strip().lower())
         if entry is None:

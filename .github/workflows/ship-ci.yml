@@ -6,6 +6,9 @@ name: ship-ci
 # workflow_call — it never runs standalone, which would emit unprefixed
 # "<job>" checks that the rulesets can't match.
 on:
+  # Keeps the wrapper discoverable and lets maintainers rerun the exact
+  # required-check workflow while diagnosing PR event delivery.
+  workflow_dispatch:
   pull_request:
     branches: [main, 'release/**']
   # Trunk-based: post-merge CI on main catches semantic conflicts between

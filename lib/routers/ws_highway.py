@@ -496,6 +496,11 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
                 "name": a.name,
                 "smart_name": smart_names[i],
                 "notes": len(a.notes) + sum(len(c.notes) for c in a.chords),
+                # Manifest `type` (sloppak.py:942) — authoritative instrument
+                # classification, independent of the display name. Lets viz
+                # auto-selection (e.g. the piano viz's matchesArrangement)
+                # match on real type instead of name-sniffing.
+                "type": (a.type or "").strip().lower() if isinstance(a.type, str) else "",
             }
             for i, a in enumerate(song.arrangements)
         ]
@@ -508,6 +513,9 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
             "arrangement": arr.name,
             "arrangement_smart_name": smart_names[best],
             "arrangement_index": best,
+            # Named distinctly from the top-level "type" (WS message
+            # discriminator, = "song_info") to avoid colliding with it.
+            "arrangement_type": (arr.type or "").strip().lower() if isinstance(arr.type, str) else "",
             # Echo the resolved naming mode so highway.js doesn't have to
             # re-read localStorage (which can be unavailable / disagree with
             # app.js's in-memory cache when storage writes fail).

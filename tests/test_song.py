@@ -1235,7 +1235,7 @@ def test_arrangement_is_bass_signal_safety():
 # ── compute_smart_names ───────────────────────────────────────────────────────
 
 def _sarr(path_lead=False, path_rhythm=False, path_bass=False,
-          bonus_arr=False, represent=0, name="Combo") -> Arrangement:
+          bonus_arr=False, represent=0, name="Combo", type="") -> Arrangement:
     return Arrangement(
         name=name,
         path_lead=path_lead,
@@ -1243,6 +1243,7 @@ def _sarr(path_lead=False, path_rhythm=False, path_bass=False,
         path_bass=path_bass,
         bonus_arr=bonus_arr,
         represent=represent,
+        type=type,
     )
 
 
@@ -1326,6 +1327,18 @@ def test_smart_names_combo_treated_as_lead():
     # "Combo" is a guitar arrangement — treated as Lead type for smart naming
     arrs = [_sarr(name="Combo")]
     assert compute_smart_names(arrs) == ["Lead"]
+
+
+def test_smart_names_piano_typed_combo_not_treated_as_lead():
+    # Kilo Code Review finding on feedBack#42: the manifest `type` guard
+    # checked "keys"/"vocals"/"drums" but omitted "piano" (also a first-class
+    # Arrangement.type value, per song.py's own docstring and progression.py's
+    # arr_type in ("piano", "keys") check) — a piano-typed arrangement
+    # literally named "Combo" fell through to the name fallback and was
+    # grouped as Lead, the exact GP-import misclassification this guard
+    # exists to prevent.
+    arrs = [_sarr(name="Combo", type="piano")]
+    assert compute_smart_names(arrs) == [None]
 
 
 def test_smart_names_recognises_display_names_from_load_song():

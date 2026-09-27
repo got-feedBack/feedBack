@@ -1001,6 +1001,7 @@ audio.addEventListener('play', () => {
     // migration step — playback genuinely continues, so don't emit song:play or
     // flip feedBack.isPlaying (the watcher keeps the canonical state itself).
     if (window._juceRerouteInProgress) return;
+    if (window._stemsRerouteInProgress) return;
     window.feedBack.isPlaying = true;
     const payload = _songEventPayload();
     window.feedBack.emit('song:play', payload);
@@ -1011,6 +1012,7 @@ audio.addEventListener('pause', () => {
     // Same as above: suppress the song:pause emitted by a reroute's deliberate
     // audio.pause() — the migration is transparent to plugin play-state.
     if (window._juceRerouteInProgress) return;
+    if (window._stemsRerouteInProgress) return;
     window.feedBack.isPlaying = false;
     window.feedBack.emit('song:pause', _songEventPayload());
 });
