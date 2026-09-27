@@ -456,7 +456,15 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
                     tmp_suffix = uuid.uuid4().hex[:8]
                     tmp_base = appstate.audio_cache_dir / f"audio_{audio_id}.{tmp_suffix}"
                     try:
-                        produced = convert_wem(str(wem_resolved), str(tmp_base))
+                        # convert_wem shells out to vgmstream-cli/ffmpeg via
+                        # subprocess.run (up to 120s timeout) — bare-calling it
+                        # here would block the whole event loop, stalling every
+                        # other concurrent connection's WebSocket traffic for
+                        # as long as the conversion takes.
+                        produced = await loop.run_in_executor(
+                            None,
+                            lambda: _ctx.run(convert_wem, str(wem_resolved), str(tmp_base)),
+                        )
                         ext = Path(produced).suffix
                         final_path = appstate.audio_cache_dir / f"audio_{audio_id}{ext}"
                         os.replace(produced, final_path)
@@ -478,7 +486,13 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
                 audio_error = "No WEM audio files were found inside this archive."
             else:
                 try:
-                    audio_path = convert_wem(wem_files[0], os.path.join(tmp, "audio"))
+                    # Same reasoning as the loose-folder conversion above:
+                    # convert_wem is a blocking subprocess call and must not
+                    # run inline on the event loop.
+                    audio_path = await loop.run_in_executor(
+                        None,
+                        lambda: _ctx.run(convert_wem, wem_files[0], os.path.join(tmp, "audio")),
+                    )
                     ext = Path(audio_path).suffix
                     audio_dest = appstate.audio_cache_dir / f"audio_{audio_id}{ext}"
                     shutil.copy2(audio_path, audio_dest)
