@@ -149,4 +149,135 @@ test.describe('Resume last session', () => {
     const remaining = await page.evaluate((k) => localStorage.getItem(k), RESUME_KEY);
     expect(remaining).toBeNull();
   });
+
+  test('resumeLastSession() still restores position through a playSong wrapper that drops options', async ({ page }) => {
+    // Regression test: every real ecosystem playSong wrapper (splitscreen,
+    // section_map, ...) forwards only (filename, arrangement) to the next
+    // link in the chain — see static/js/session.js's comment at the
+    // window.playSong call in resumeLastSession(). Simulate that shape
+    // here instead of asserting against the unwrapped path, which would
+    // pass even if the pre-arm fix regressed.
+    await installMockSong(page);
+    await page.evaluate((k) => {
+      const snap = { f: 'mock-song.sloppak', a: 0, t: 30, sp: 1, title: 'Mock Song', ts: Date.now() };
+      localStorage.setItem(k, JSON.stringify(snap));
+    }, RESUME_KEY);
+    await page.evaluate(() => {
+      const orig = window.playSong;
+      // @ts-ignore
+      window.playSong = async function (f, a) { return await orig(f, a); };
+    });
+
+    await page.evaluate(async () => { /* @ts-ignore */ await window.resumeLastSession(); });
+    await page.waitForSelector('#player.active', { timeout: 5000 });
+
+    // If the resume options were dropped and not honored, playback starts
+    // from 0 instead of seeking to the saved position.
+    await expect
+      .poll(async () => page.evaluate(() => (document.getElementById('audio') as HTMLAudioElement).currentTime), {
+        timeout: 5000,
+      })
+      .toBeGreaterThan(20);
+  });
+
+  test('a resume whose chart never becomes ready does not leak its saved position onto the next unrelated song', async ({ page }) => {
+    // Regression test for a bug caught in review of the wrapper-routing fix
+    // above: playSong() never awaits chart readiness before resolving, so a
+    // WS-level load failure for the resumed song neither rejects
+    // resumeLastSession() (its catch never runs) nor clears S.pendingResume
+    // (only song:ready consumes it). Without the fix (tagging the armed
+    // value with the resumed filename, and only preserving it in playSong()
+    // when that tag matches the filename being loaded), the stale value
+    // would get inherited by the very next fresh play and wrongly seek an
+    // unrelated song to the old saved position.
+    await page.evaluate(() => {
+      // A WebSocket that connects but never emits any message — the chart
+      // never becomes ready, mirroring a stuck/failed load.
+      class StuckWebSocket {
+        static CONNECTING = 0; static OPEN = 1; static CLOSING = 2; static CLOSED = 3;
+        readyState = StuckWebSocket.CONNECTING;
+        onopen = null; onmessage = null; onerror = null; onclose = null; url;
+        constructor(url) { this.url = url; }
+        send() {}
+        close() { this.readyState = StuckWebSocket.CLOSED; }
+      }
+      // @ts-ignore
+      window.WebSocket = StuckWebSocket;
+    });
+    await page.evaluate((k) => {
+      const snap = { f: 'stuck-song.sloppak', a: 0, t: 30, sp: 1, title: 'Stuck Song', ts: Date.now() };
+      localStorage.setItem(k, JSON.stringify(snap));
+    }, RESUME_KEY);
+
+    // Resolves after playSong()'s fixed ~500ms wait, without the stuck
+    // song's chart ever reaching song:ready — S.pendingResume stays armed.
+    await page.evaluate(async () => { /* @ts-ignore */ await window.resumeLastSession(); });
+
+    // Now an entirely unrelated fresh play, exactly the kind of call this
+    // PR routes through window.playSong (a library click, transport start,
+    // ...) — no resume option, a different song.
+    await installMockSong(page);
+    await page.evaluate(async () => { /* @ts-ignore */ await window.playSong('mock-song.sloppak'); });
+    await page.waitForSelector('#player.active', { timeout: 5000 });
+    await expect(page.locator('#hud-title')).toHaveText('Mock Song', { timeout: 5000 });
+
+    // Must start from 0, not seek to the stuck song's saved position of 30.
+    const t = await page.evaluate(() => (document.getElementById('audio') as HTMLAudioElement).currentTime);
+    expect(t).toBeLessThan(5);
+  });
+
+  test('a resume whose chart never becomes ready does not leak its position onto a LATER normal play of the SAME song', async ({ page }) => {
+    // A stricter variant of the test above, catching a bug found in review
+    // of that fix: a bare filename match isn't unique enough. If a later
+    // play reuses the exact same filename as the stalled resume (a plain
+    // library re-click, no resume intent), the filename-only check would
+    // wrongly match and inherit the stale position. S._pendingResumeArmed
+    // is the one-shot gate that closes this: it's consumed by the first
+    // playSong() call that reads it, so it can't satisfy a second one.
+    //
+    // The stalled resume is issued through a dropping wrapper — like the
+    // "still restores position through a playSong wrapper" test above —
+    // because without one, resumeLastSession()'s own options.resume
+    // survives intact and takes the FIRST branch in session.js's playSong,
+    // which unconditionally clears S._pendingResumeArmed itself. That
+    // would make this test pass even if the actual preserve-branch (the
+    // one guarded by S._pendingResumeArmed, which is what a real dropped-
+    // options wrapper hits) regressed — this needs to exercise that branch
+    // specifically, per review.
+    await page.evaluate(() => {
+      class StuckWebSocket {
+        static CONNECTING = 0; static OPEN = 1; static CLOSING = 2; static CLOSED = 3;
+        readyState = StuckWebSocket.CONNECTING;
+        onopen = null; onmessage = null; onerror = null; onclose = null; url;
+        constructor(url) { this.url = url; }
+        send() {}
+        close() { this.readyState = StuckWebSocket.CLOSED; }
+      }
+      // @ts-ignore
+      window.WebSocket = StuckWebSocket;
+    });
+    await page.evaluate((k) => {
+      const snap = { f: 'mock-song.sloppak', a: 0, t: 30, sp: 1, title: 'Mock Song', ts: Date.now() };
+      localStorage.setItem(k, JSON.stringify(snap));
+    }, RESUME_KEY);
+    await page.evaluate(() => {
+      const orig = window.playSong;
+      // @ts-ignore
+      window.playSong = async function (f, a) { return await orig(f, a); };
+    });
+
+    // Stalled resume of mock-song.sloppak, routed through the dropping
+    // wrapper — never reaches song:ready.
+    await page.evaluate(async () => { /* @ts-ignore */ await window.resumeLastSession(); });
+
+    // A later, ordinary play of the SAME filename — no resume intent.
+    await installMockSong(page);
+    await page.evaluate(async () => { /* @ts-ignore */ await window.playSong('mock-song.sloppak'); });
+    await page.waitForSelector('#player.active', { timeout: 5000 });
+    await expect(page.locator('#hud-title')).toHaveText('Mock Song', { timeout: 5000 });
+
+    // Must start from 0, not seek to the stalled resume's saved position of 30.
+    const t = await page.evaluate(() => (document.getElementById('audio') as HTMLAudioElement).currentTime);
+    expect(t).toBeLessThan(5);
+  });
 });

@@ -39,4 +39,16 @@ export const S = {
      * export.
      */
     pendingResume: null,
+
+    /**
+     * One-shot gate for playSong()'s wrapper-dropped-options preserve path
+     * (see the comment there). resume-session.js sets this true in the same
+     * synchronous span where it pre-arms pendingResume; playSong() consumes
+     * it (sets false) the first time ANY call reads it, whether or not that
+     * call's filename matched. Without this, a resume whose chart never
+     * reaches song:ready leaves pendingResume permanently armed, and a bare
+     * filename match would let a later, unrelated normal play of the SAME
+     * song inherit the stale saved position.
+     */
+    _pendingResumeArmed: false,
 };

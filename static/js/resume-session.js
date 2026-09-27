@@ -80,9 +80,48 @@ export async function resumeLastSession() {
     if (!snap) { _hideResumePill(); return false; }
     _hideResumePill();
     try {
-        await host.playSong(snap.f, snap.a, {
-            resume: { position: Number(snap.t) || 0, speed: Number(snap.sp) || 1 },
-        });
+        // window.playSong, not host.playSong: the host seam hands across the
+        // bare session.js binding, which a plugin's playSong wrapper (several
+        // reset per-song state there) never sees. Resuming a session is a
+        // fresh play like any other click/shortcut-driven one, so it needs
+        // the same wrapper-chain visibility — see the comment on the
+        // transport adapter's playSong call in app.js for the fuller
+        // rationale.
+        //
+        // A wrapping plugin (splitscreen, section_map, ...) forwards only
+        // (filename, arrangement) to the real playSong, dropping this options
+        // object entirely — core's own playSong would then see options===
+        // undefined and clobber S.pendingResume to null on the very call
+        // meant to restore it, discarding position/speed. Pre-arm
+        // S.pendingResume directly, synchronously, right before the call (no
+        // await in between, so nothing else can touch it first) — core's
+        // playSong preserves an already-armed S.pendingResume when its own
+        // options.resume is missing. The options.resume below is kept too,
+        // for the unwrapped path and any direct caller.
+        //
+        // Tagged with `f` (the resumed filename): playSong() never awaits
+        // chart readiness before resolving, so a WS-level load failure for
+        // THIS song neither rejects here (the catch below never runs) nor
+        // clears the armed value — nothing else does either, since
+        // consumption only happens at song:ready. Without the tag, a stale
+        // pre-armed value would silently get inherited by the next
+        // unrelated fresh play (a library click, transport start — anything
+        // else routed through window.playSong) and seek that new song to
+        // this one's saved position. playSong() only preserves a pre-armed
+        // S.pendingResume when its `f` matches the filename actually being
+        // loaded, so a stale tag for a different song is discarded instead.
+        //
+        // The filename tag alone still isn't enough: if THIS resume's own
+        // load stalls (never reaches song:ready), a later *normal* play of
+        // the SAME filename would also match on `f` and wrongly inherit the
+        // stale position. _pendingResumeArmed is a one-shot flag consumed
+        // by the very next playSong() call that reads it (matched or not)
+        // — see the comment in session.js's playSong() — so it can only
+        // ever gate the single call this arm was meant for.
+        const resume = { position: Number(snap.t) || 0, speed: Number(snap.sp) || 1, f: snap.f };
+        S.pendingResume = resume;
+        S._pendingResumeArmed = true;
+        await window.playSong(snap.f, snap.a, { resume });
     } catch (err) {
         // A transient load/connect failure must not strand the user: keep the
         // snapshot so the pill can re-offer it on the next non-player screen,

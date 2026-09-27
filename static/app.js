@@ -855,7 +855,16 @@ function _installPlaybackTransportAdapter() {
             const shouldSeekStart = Number.isFinite(Number(args && args.startTime));
             const expectedSeekGen = audioSeekGen() + 1;
             const ready = shouldSeekStart ? _waitForSongReady(expectedSeekGen) : null;
-            await playSong(playbackFilename, args && args.arrangement, { bridge: false });
+            // window.playSong, not the bare imported playSong: a plugin that
+            // wraps window.playSong (splitscreen, sectionmap, piano, tabview,
+            // staffview all do, to reset per-song state) never sees a call
+            // that goes straight to the closed-over session.js binding — this
+            // is exactly the class of bypass feedBack#923/#924 fixed for
+            // showScreen by moving plugins onto an event instead of a
+            // monkey-patchable global; playSong has no such event yet, so
+            // routing every fresh-play entry point through window.playSong
+            // is the next best thing.
+            await window.playSong(playbackFilename, args && args.arrangement, { bridge: false });
             const becameReady = ready ? await ready : true;
             if (shouldSeekStart && !becameReady) {
                 throw new Error('Playback did not become ready before applying startTime');
@@ -2053,7 +2062,9 @@ async function syncLibrarySong(providerId, songId, options = {}) {
     if (!providerId || !songId) return;
     const currentState = _librarySyncState(providerId, songId);
     if (currentState && currentState.status === 'synced' && currentState.localFilename) {
-        if (playWhenReady) playSong(encodeURIComponent(currentState.localFilename), undefined, { bridge: false });
+        // window.playSong so a plugin's playSong wrapper sees this play too —
+        // see the comment on the transport adapter's playSong call above.
+        if (playWhenReady) window.playSong(encodeURIComponent(currentState.localFilename), undefined, { bridge: false });
         return currentState.result || { filename: currentState.localFilename };
     }
     if (currentState && currentState.status === 'syncing') return null;
@@ -2083,7 +2094,7 @@ async function syncLibrarySong(providerId, songId, options = {}) {
         L.tuningNames = null;
         L.libEpoch++;
         await loadLibrary(0);
-        if (playWhenReady && localFilename) playSong(encodeURIComponent(localFilename), undefined, { bridge: false });
+        if (playWhenReady && localFilename) window.playSong(encodeURIComponent(localFilename), undefined, { bridge: false });
         return data;
     } catch (error) {
         _setLibrarySyncState(providerId, songId, { status: 'error', message: error.message || 'Unknown error' });
@@ -2141,7 +2152,7 @@ document.addEventListener('click', e => {
     const card = e.target.closest('[data-play]');
     if (card && !e.target.closest('button')) {
         _setLibSelection(card, { focus: false });
-        playSong(card.dataset.play, undefined, { bridge: false });
+        window.playSong(card.dataset.play, undefined, { bridge: false });
     }
 });
 
@@ -2324,7 +2335,6 @@ configureHost({
     // is ever dropped.
     syncLibrarySong,
     handleSliderInput,
-    playSong,
     // count-in is a module now, so section-practice reaches it through the seam too —
     // these are simply count-in's own exports, handed across.
     startCountIn,

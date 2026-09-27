@@ -32,9 +32,6 @@ import {
     _trapFocusInModal,
     esc,
 } from './dom.js';
-import {
-    playSong,
-} from './session.js';
 import { host } from './host.js';
 // ── Global keyboard shortcuts ─────────────────────────────────────────────
 //
@@ -217,8 +214,12 @@ export function _handleLibArrowNav(e) {
             // Song row OR card → play it. Pass `dataset.play` raw to
             // match the click delegate; `playSong` handles decoding
             // internally so decoding here would double-decode and
-            // throw `URIError` on filenames containing `%`.
-            playSong(currentTarget.dataset.play, undefined, { bridge: false });
+            // throw `URIError` on filenames containing `%`. Goes through
+            // window.playSong (not a direct import) so a plugin's playSong
+            // wrapper sees this Enter-to-play the same as a mouse click —
+            // see the comment on the transport adapter's playSong call in
+            // app.js for the fuller rationale.
+            window.playSong(currentTarget.dataset.play, undefined, { bridge: false });
         } else if (currentTarget.classList.contains('artist-header') ||
                    currentTarget.classList.contains('album-header')) {
             // Header row → toggle the parent open/closed and re-derive

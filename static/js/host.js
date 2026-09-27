@@ -8,7 +8,7 @@
 // app.js to do it, because app.js imports the module, and that closes a cycle the
 // import-x/no-cycle gate (rightly) rejects.
 //
-// So app.js hands its functions DOWN, once, at boot: `configureHost({ playSong, … })`.
+// So app.js hands its functions DOWN, once, at boot: `configureHost({ syncLibrarySong, … })`.
 //
 // ─── THE FAILURE MODE THIS IS BUILT TO PREVENT ───────────────────────────────
 //
@@ -22,9 +22,9 @@
 // Two layers stop that here, and the second is the one that actually closes it:
 //
 //   1. RUNTIME — reading an unwired hook THROWS. There are no defaults and no
-//      stubs. `host.playSong` either is the real function or it is a loud error.
-//      An unwired hook cannot degrade into a no-op, because there is nothing for
-//      it to degrade INTO.
+//      stubs. `host.syncLibrarySong` either is the real function or it is a loud
+//      error. An unwired hook cannot degrade into a no-op, because there is
+//      nothing for it to degrade INTO.
 //
 //   2. STATIC — tests/js/host_contract.test.js asserts that the set of hooks the
 //      modules USE is exactly the set app.js WIRES. This is the important one:

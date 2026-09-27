@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Several core-driven plays bypassed the `playSong` wrapper chain plugins
+  rely on to reset per-song state.** `window.playSong` is the documented
+  extension point (Constitution II) plugins wrap to hook playback, and it
+  already routes through the wrapper correctly for e.g. the play-queue —
+  but the resume pill, the transport adapter (external playback control),
+  the library click delegate, the arrow-key library nav, and remote-library
+  sync's "play when ready" all called the closed-over `playSong` binding
+  imported directly from `session.js`, so a wrapping plugin (splitscreen,
+  section_map, piano, tabview, staffview all wrap it today) never saw those
+  plays at all — same bypass class as the one `showScreen` had (#923/#924),
+  fixed there by moving plugins onto an event instead of a monkey-patchable
+  global. `playSong` has no such event yet, so every one of these entry
+  points now goes through `window.playSong` instead, matching the pattern
+  the play-queue already used. Removed the now-unused `playSong` host-seam
+  wiring (`resume-session.js` was its only reader).
+- **The above fix broke resume itself whenever a `playSong`-wrapping plugin
+  was installed** — the exact audience it was meant to serve. Every real
+  wrapper (splitscreen, section_map, ...) forwards only `(filename,
+  arrangement)` to the next link in the chain, dropping the options object
+  resume's `{ resume: { position, speed } }` travels in — so a resume
+  routed through the wrapper chain reached core's `playSong()` with
+  `options === undefined`, which clobbered `S.pendingResume` to `null` on
+  the very call meant to restore it: the song played from the top and the
+  saved-position snapshot was discarded. `resumeLastSession()` now pre-arms
+  `S.pendingResume` directly, synchronously, immediately before calling
+  `window.playSong` (nothing else can touch it before the wrapped call
+  reads it), and `playSong()` preserves an already-armed `S.pendingResume`
+  instead of nulling it when its own `options.resume` is absent.
+- **The above fix could leak a resume's saved position onto the next,
+  unrelated song.** `playSong()` never awaits chart readiness before
+  resolving — it only fires off `window.highway.connect(...)` and returns —
+  so if the resumed song's chart never reached `song:ready` (a stuck/failed
+  WebSocket load), `resumeLastSession()`'s `catch` never ran and nothing
+  else cleared the pre-armed `S.pendingResume` (only the `song:ready`
+  consumer does). The next, completely unrelated fresh play (a library
+  click, transport start — anything else now routed through
+  `window.playSong`) would then inherit the stale value and get seeked to
+  the old song's saved position with autostart suppressed. Fixed by tagging
+  the armed value with the resumed filename (`f`) and only preserving it in
+  `playSong()` when that tag matches the filename actually being loaded;
+  anything stale for a different song now falls through to a normal clear.
+- **The filename tag above still wasn't unique enough.** A bare filename
+  match let a stalled resume's stale position leak onto a *later, ordinary*
+  play of the *same* song (e.g. a plain library re-click with no resume
+  intent) — not just an unrelated one. Added `S._pendingResumeArmed`, a
+  one-shot gate set alongside the filename tag and consumed (forced false)
+  by the very first `playSong()` call that reads it, matched or not, so it
+  can only ever satisfy the single call it was armed for.
+
 ### Added
 - **Core reader for source rigs (feedpak 1.18.0).** A pack can declare what a
   MIDI part should sound like by binding a rig; core now reads that binding and
