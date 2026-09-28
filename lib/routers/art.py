@@ -139,7 +139,7 @@ async def get_song_art(filename: str, request: Request = None, source: str = "")
             art = None
         if art is not None:
             data, mt = art
-            etag = f'"{hashlib.sha1(data).hexdigest()}"'
+            etag = f'"{hashlib.sha256(data).hexdigest()}"'
             headers, not_modified = _art_conditional(etag, request)
             if not_modified:
                 return Response(status_code=304, headers=headers)

@@ -102,6 +102,46 @@ from asgi_correlation_id import CorrelationIdMiddleware
 # opaque proxy-generated hex strings, not just RFC-4122 UUIDs.
 app.add_middleware(CorrelationIdMiddleware, validator=None)
 
+# Baseline security headers (security audit, issue #47) — defense-in-depth
+# against any future/residual XSS, clickjacking, and MIME-sniffing, applied
+# to every response. The CSP can't go stricter than 'unsafe-inline' for
+# script-src/style-src without a large rewrite: the v3 UI's own HTML uses
+# `onclick="..."` attributes throughout (static/v3/index.html), and inline
+# <script>/<style> blocks — none of that is nonce'd or externalized today.
+# script-src/style-src still restrict *which origins* may be loaded from to
+# 'self' plus https:, so an injected `<script src="http://evil...">` (or any
+# non-https origin) stays blocked; only inline execution remains open, same
+# as before this header existed. https: is intentionally broad rather than
+# an explicit CDN allowlist: plugins are user-installed and each may load
+# from a different CDN (see feedBack-plugin-piano/-staffview/-tabview),
+# which a fixed allowlist can't anticipate.
+_SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Content-Security-Policy": (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https:; "
+        "style-src 'self' 'unsafe-inline' https:; "
+        "img-src 'self' data: blob: https:; "
+        "font-src 'self' data: https:; "
+        "media-src 'self' blob: https:; "
+        "worker-src 'self' blob:; "
+        "connect-src 'self' https: wss: ws:; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
+        "frame-ancestors 'none'"
+    ),
+}
+
+
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    response = await call_next(request)
+    for header, value in _SECURITY_HEADERS.items():
+        response.headers.setdefault(header, value)
+    return response
+
 STATIC_DIR = Path(__file__).parent / "static"
 try:
     STATIC_DIR.mkdir(exist_ok=True)

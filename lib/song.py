@@ -8,6 +8,8 @@ import logging
 import math
 import xml.etree.ElementTree as ET
 
+from safe_xml import safe_parse
+
 log = logging.getLogger("feedBack.lib.song")
 
 
@@ -1118,7 +1120,7 @@ def _parse_note(n) -> Note:
 
 def parse_arrangement(xml_path: str) -> Arrangement:
     """Parse a chart arrangement XML file."""
-    tree = ET.parse(xml_path)
+    tree = safe_parse(xml_path)
     root = tree.getroot()
 
     # Name
@@ -1566,7 +1568,7 @@ def load_song(extracted_dir: str) -> Song:
     metadata_loaded = False
     for xml_path in xml_files:
         try:
-            tree = ET.parse(xml_path)
+            tree = safe_parse(xml_path)
             root = tree.getroot()
         except ET.ParseError:
             continue

@@ -351,19 +351,53 @@ def _unpack_lock_for(filename: str) -> threading.Lock:
         return lk
 
 
+
+# Bounds a single zip's total DECOMPRESSED size during extraction — a highly
+# compressed malicious/corrupt .sloppak could otherwise exhaust disk space
+# (a "zip bomb") before anyone notices, independent of the unpack-cache
+# eviction above (which only bounds the aggregate cache after the fact, not
+# a single extraction in progress). Default 8 GB is generous for a real
+# multi-stem pack while still bounding the worst case. Override with
+# FEEDBACK_SLOPPAK_MAX_UNPACK_MB (0 disables the cap).
+def _unpack_max_bytes() -> int:
+    raw = os.environ.get("FEEDBACK_SLOPPAK_MAX_UNPACK_MB", "").strip()
+    try:
+        mb = int(raw) if raw else 8192
+    except ValueError:
+        mb = 8192
+    return max(0, mb) * 1024 * 1024
+
+
 def _unpack_zip(zip_path: Path, dest: Path) -> None:
     """Extract a sloppak zip archive into dest, replacing any previous contents.
 
     Members whose names escape ``dest`` via ``..`` segments, absolute paths, or
     Windows-style separators are skipped with a warning so a crafted sloppak
     can't write outside the unpack cache (zip-slip).
+
+    Raises ValueError if the archive's total declared decompressed size
+    exceeds the cap, aborting and cleaning up any partial extraction.
     """
     if dest.exists():
         shutil.rmtree(dest, ignore_errors=True)
     dest.mkdir(parents=True, exist_ok=True)
     dest_resolved = dest.resolve()
+    max_bytes = _unpack_max_bytes()
+    written = 0
     with zipfile.ZipFile(str(zip_path), "r") as zf:
         for member in zf.infolist():
+            # Declared size from the central directory — no decompression
+            # needed, so an oversized archive is caught before doing any
+            # real work on it.
+            if max_bytes and not member.is_dir():
+                written += member.file_size
+                if written > max_bytes:
+                    shutil.rmtree(dest, ignore_errors=True)
+                    raise ValueError(
+                        f"sloppak archive exceeds the {max_bytes} byte decompressed-size "
+                        f"cap (FEEDBACK_SLOPPAK_MAX_UNPACK_MB) — refusing to extract "
+                        f"what looks like a corrupt or malicious pack"
+                    )
             target = safe_join(dest_resolved, member.filename)
             if target is None:
                 log.warning("sloppak: rejected unsafe zip member %r", member.filename)

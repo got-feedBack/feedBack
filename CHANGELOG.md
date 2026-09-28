@@ -7,7 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Fixed stored XSS in the retune modal.** `retuneSong()` injected
+  `title`/`target`/`msg.filename`/`msg.error` into a modal's `innerHTML` via
+  unescaped template literals. `song.title` is attacker-influenceable
+  (imported GP/MusicXML/sloppak metadata) and reaches this sink directly
+  from the library card's "Convert to E Standard" menu action. Wrapped all
+  four values in the existing `esc()` helper, matching the escaping pattern
+  used everywhere else in the file.
+- **Hardened GP/arrangement XML parsing against entity-expansion ("billion
+  laughs") DoS** (#45). `xml.etree.ElementTree` has no built-in protection
+  against maliciously nested XML entities on untrusted input; a crafted
+  imported GP or arrangement XML file could exhaust memory/CPU on the
+  request thread. Added `lib/safe_xml.py`, a shared hardened-parse helper
+  using `defusedxml` (now a `requirements.txt` dependency, falling back to
+  stdlib with a logged warning if somehow absent), and switched every
+  untrusted-XML parse call site (`lib/gp2rs_gpx.py`, `lib/loosefolder.py`,
+  `lib/song.py`, `lib/routers/ws_highway.py`) to use it. Rejections are
+  normalised to `ET.ParseError` so existing `except ET.ParseError:` call
+  sites keep working unmodified.
+- **Capped decompressed size on sloppak zip extraction** (#46). Nothing
+  bounded a `.sloppak` zip's total decompressed size during extraction — a
+  highly-compressed malicious/corrupt pack could exhaust disk space (a "zip
+  bomb"), independent of the unpack-cache LRU eviction (which only bounds
+  the aggregate cache after the fact). `_unpack_zip()` now sums each
+  member's declared size against an 8 GB default cap (no decompression
+  needed to check it), aborting and cleaning up any partial extraction if
+  exceeded. Override with `FEEDBACK_SLOPPAK_MAX_UNPACK_MB` (`0` disables).
+- **Added baseline security headers to every response** (#47):
+  `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+  `Referrer-Policy: strict-origin-when-cross-origin`, and a
+  `Content-Security-Policy` restricting `object-src`, `base-uri`, and
+  `frame-ancestors`, and requiring `'self'` or `https:` for
+  script/style/media/connect origins. `script-src`/`style-src` still permit
+  `'unsafe-inline'` — the v3 UI's own HTML uses `onclick="..."` attributes
+  throughout and inline `<script>`/`<style>` blocks, none of it nonce'd or
+  externalized today, so a stricter policy would need that rewritten first.
+  Defense-in-depth: this would have limited the blast radius of the retune
+  XSS above (and any future/residual one) even before that fix landed.
+- **CSP now allows `blob:` workers, fixing a blank Tab View / Staff View
+  render.** The baseline CSP added above (#47) covered
+  `script-src`/`style-src`/`img-src`/`font-src`/`media-src`/`connect-src`
+  but never set `worker-src`. Per CSP fallback rules, a worker without an
+  explicit `worker-src` falls back to `script-src`'s policy, which allows
+  `'self'`/`'unsafe-inline'`/`https:` but not `blob:` — and alphaTab (used
+  by the `tabview` and `staffview` plugins) spawns its rendering worker
+  from a `blob:` URL. Without `worker-src`, browsers silently blocked that
+  worker, rendering a blank canvas for every song. Added
+  `worker-src 'self' blob:;`, matching the `blob:` allowance already
+  granted to `img-src`/`media-src` for the same plugin-CDN-asset reason.
+
 ### Added
+- Library card actions can now provide per-song label and icon callbacks, so
+  plugins can render dynamic card badges without DOM patching.
 - **Core reader for source rigs (feedpak 1.18.0).** A pack can declare what a
   MIDI part should sound like by binding a rig; core now reads that binding and
   hands it to the client instead of dropping it. Three parts: the

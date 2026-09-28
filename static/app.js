@@ -645,8 +645,8 @@ function retuneSong(filename, title, tuning, target) {
     modal.className = 'fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm';
     modal.innerHTML = `
         <div class="bg-dark-700 border border-gray-700 rounded-2xl p-8 w-full max-w-md mx-4 shadow-2xl">
-            <h3 class="text-lg font-bold text-white mb-1">Converting to ${target}</h3>
-            <p class="text-sm text-gray-400 mb-5">${title}</p>
+            <h3 class="text-lg font-bold text-white mb-1">Converting to ${esc(target)}</h3>
+            <p class="text-sm text-gray-400 mb-5">${esc(title)}</p>
             <div class="progress-bar mb-3"><div class="fill" id="retune-bar" style="width:0%"></div></div>
             <p class="text-xs text-gray-500" id="retune-stage">Connecting...</p>
         </div>`;
@@ -666,7 +666,7 @@ function retuneSong(filename, title, tuning, target) {
                 <div class="text-center">
                     <div class="text-3xl mb-3">✓</div>
                     <h3 class="text-lg font-bold text-white mb-1">Done!</h3>
-                    <p class="text-sm text-gray-400 mb-5">${msg.filename}</p>
+                    <p class="text-sm text-gray-400 mb-5">${esc(msg.filename)}</p>
                     <button onclick="document.getElementById('retune-modal').remove();loadLibrary()"
                         class="bg-accent hover:bg-accent-light px-6 py-2 rounded-xl text-sm font-semibold text-white transition">OK</button>
                 </div>`;
@@ -676,7 +676,7 @@ function retuneSong(filename, title, tuning, target) {
                 <div class="text-center">
                     <div class="text-3xl mb-3">✕</div>
                     <h3 class="text-lg font-bold text-red-400 mb-1">Failed</h3>
-                    <p class="text-sm text-gray-400 mb-5">${msg.error}</p>
+                    <p class="text-sm text-gray-400 mb-5">${esc(msg.error)}</p>
                     <button onclick="document.getElementById('retune-modal').remove()"
                         class="bg-dark-600 hover:bg-dark-500 px-6 py-2 rounded-xl text-sm text-gray-300 transition">Close</button>
                 </div>`;

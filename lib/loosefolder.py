@@ -23,8 +23,9 @@ manifest.json fields (all optional — XML metadata fills in gaps):
 
 import json
 import math
-import xml.etree.ElementTree as ET
 from pathlib import Path
+
+from safe_xml import safe_parse
 
 AUDIO_NAMES = ["audio.wem", "song.wem"]
 # Match every extension server.get_song_art is prepared to serve
@@ -109,7 +110,7 @@ def is_loose_song(path: Path) -> bool:
         return False
     for xml in _iter_local_xmls(path):
         try:
-            root_tag = ET.parse(str(xml)).getroot().tag
+            root_tag = safe_parse(str(xml)).getroot().tag
         except Exception:
             continue
         if root_tag == "song":
@@ -178,7 +179,7 @@ def _arr_type_from_filename(stem: str) -> tuple:
 def _parse_xml_meta(xml_path: Path) -> dict:
     """Parse a chart arrangement XML and return song-level metadata."""
     try:
-        root = ET.parse(str(xml_path)).getroot()
+        root = safe_parse(str(xml_path)).getroot()
         if root.tag != "song":
             return {}
 
@@ -299,7 +300,7 @@ def _has_lyrics(path: Path) -> bool:
     """Return True if any XML in the folder is a vocals track."""
     for xml in _iter_local_xmls(path):
         try:
-            if ET.parse(str(xml)).getroot().tag == "vocals":
+            if safe_parse(str(xml)).getroot().tag == "vocals":
                 return True
         except Exception:
             pass

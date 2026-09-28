@@ -251,11 +251,17 @@ def _maybe_start_drain():
 
 
 def _chart_key(chart):
-    """Stable per-chart counter key — a sha1 digest of the chart id. NOT the
+    """Stable per-chart counter key — a sha256 digest of the chart id. NOT the
     builtin hash(), whose str hashing is salted per process (PYTHONHASHSEED), so
     the same chart would land on a different counter after every restart and the
-    Encore Feat could never accumulate across sessions."""
-    return "chart_plays:" + hashlib.sha1(str(chart).encode("utf-8")).hexdigest()[:16]
+    Encore Feat could never accumulate across sessions.
+
+    `v2` marks the digest generation: the sha1→sha256 swap orphaned every
+    `chart_plays:<sha1[:16]>` key in place (no migration — the chart id isn't
+    stored in the counter row), a one-time per-chart reset. The persisted
+    `chart_encore_max` aggregate survives it, so already-earned Encore Feats
+    keep their tier; only per-chart tallies restart."""
+    return "chart_plays:v2:" + hashlib.sha256(str(chart).encode("utf-8")).hexdigest()[:16]
 
 
 def _read_counters(conn):

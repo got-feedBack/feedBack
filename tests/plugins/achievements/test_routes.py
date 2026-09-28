@@ -78,8 +78,8 @@ def test_witching_not_unlocked_before_seven(client):
 def test_chart_key_is_stable_not_builtin_hash(client):
     import hashlib
     import routes
-    # Deterministic across processes (sha1-based), unlike the salted builtin hash().
-    assert routes._chart_key("song.sloppak") == "chart_plays:" + hashlib.sha1(b"song.sloppak").hexdigest()[:16]
+    # Deterministic across processes (sha256-based), unlike the salted builtin hash().
+    assert routes._chart_key("song.sloppak") == "chart_plays:v2:" + hashlib.sha256(b"song.sloppak").hexdigest()[:16]
     assert routes._chart_key("a") != routes._chart_key("b")
 
 

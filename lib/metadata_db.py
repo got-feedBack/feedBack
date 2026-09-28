@@ -989,6 +989,9 @@ class MetadataDB:
         # One-time repair of pre-fix rows written under URL-encoded filenames
         # (idempotent: a no-op once every row is canonical).
         self._migrate_decode_stat_filenames()
+        # One-time re-stamp of pre-sha256 enrichment hashes (idempotent: a
+        # no-op once every live row carries the current algorithm).
+        self._migrate_enrichment_hash_sha256()
 
     def _song_exists(self, filename: str) -> bool:
         return self.conn.execute(
@@ -1071,6 +1074,40 @@ class MetadataDB:
             except Exception:
                 self.conn.rollback()
                 raise
+
+    def _migrate_enrichment_hash_sha256(self):
+        """Re-stamp `song_enrichment.content_hash` rows written with the legacy
+        SHA-1 digest after the identity hash moved to SHA-256. Without this,
+        every stored hash would mismatch the freshly computed value on the first
+        run after upgrade, re-queueing the whole library for matching and
+        silently dropping settled `matched`/`review`/`failed` rows back to
+        `unscanned` (attempts reset) — breaking the "unchanged hash makes
+        re-enrichment a no-op" idempotence contract. A SHA-1 digest is 40 hex
+        chars (SHA-256 is 64), so legacy rows are detected by length. Only rows
+        whose stored digest matches the current metadata's SHA-1 identity are
+        re-stamped IN PLACE; mismatches stay untouched for the normal identity-
+        change path. match_state, attempts, backoff, and canonical fields are
+        untouched. Orphan rows with no matching `songs` row are left alone."""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT e.filename, e.content_hash, s.artist, s.title, s.album, s.duration "
+                "FROM song_enrichment e JOIN songs s ON s.filename = e.filename "
+                "WHERE length(e.content_hash) = 40").fetchall()
+            if not rows:
+                return
+            updates = []
+            for fn, stored_hash, artist, title, album, duration in rows:
+                legacy_hash = self._enrichment_content_hash(
+                    artist, title, album, duration, "sha1")
+                if stored_hash == legacy_hash:
+                    updates.append((self.enrichment_content_hash(
+                        artist, title, album, duration), fn))
+            if not updates:
+                return
+            self.conn.executemany(
+                "UPDATE song_enrichment SET content_hash = ? WHERE filename = ?",
+                updates)
+            self.conn.commit()
 
     def is_favorite(self, filename: str) -> bool:
         return self.conn.execute("SELECT 1 FROM favorites WHERE filename = ?", (filename,)).fetchone() is not None
@@ -3131,6 +3168,10 @@ class MetadataDB:
         hash makes re-enrichment a no-op (idempotent). Whitespace/case-folded
         so trivial edits don't invalidate a match; duration is rounded to whole
         seconds for the same reason."""
+        return MetadataDB._enrichment_content_hash(artist, title, album, duration, "sha256")
+
+    @staticmethod
+    def _enrichment_content_hash(artist, title, album, duration, algorithm) -> str:
         def norm(s):
             return " ".join(str(s or "").lower().split())
         try:
@@ -3138,7 +3179,7 @@ class MetadataDB:
         except (TypeError, ValueError):
             dur = "0"
         raw = "|".join([norm(artist), norm(title), norm(album), dur])
-        return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+        return hashlib.new(algorithm, raw.encode("utf-8")).hexdigest()
 
     def enrichment_pending(self, limit: int = 500,
                            allowed_keys: frozenset | None = None) -> list[dict]:

@@ -19,6 +19,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from safepath import safe_join
+from safe_xml import safe_fromstring
 
 _log = logging.getLogger("feedBack.lib.gp2rs_gpx")
 
@@ -158,7 +159,7 @@ def _load_gpif(gp_path: str) -> ET.Element:
         with zipfile.ZipFile(_io.BytesIO(raw)) as zf:
             if 'Content/score.gpif' not in zf.namelist():
                 raise ValueError("Content/score.gpif not found in GP7/GP8 ZIP container")
-            return ET.fromstring(zf.read('Content/score.gpif'))
+            return safe_fromstring(zf.read('Content/score.gpif'))
 
     # GP6 (.gpx): BCFZ compressed or raw BCFS
     if raw[:4] == b'BCFZ':
@@ -173,7 +174,7 @@ def _load_gpif(gp_path: str) -> ET.Element:
     fs = _parse_bcfs(bcfs)
     if 'score.gpif' not in fs:
         raise ValueError("score.gpif not found in GPX container")
-    return ET.fromstring(fs['score.gpif'])
+    return safe_fromstring(fs['score.gpif'])
 
 
 # ---------------------------------------------------------------------------
