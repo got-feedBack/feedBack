@@ -34,24 +34,23 @@ RUN cmake -S /tmp/vgmstream -B /tmp/vgmstream/build \
 # its unfixed HIGH CVEs). Alpine is used because it's tiny and the
 # download tools don't need any of Debian's TLS baggage.
 #
-# Source: BtbN/FFmpeg-Builds (GPL static build, 7.1 series).
+# Source: BtbN/FFmpeg-Builds (GPL static build, 8.1 series).
 # BtbN publishes dated release tags (autobuild-YYYY-MM-DD-HH-MM) that
-# yield immutable URLs — the versioned tarballs never disappear, unlike
-# JVS rolling releases. Includes libvorbis (confirmed --enable-libvorbis
-# in the configure line), so Sloppak's .ogg output path is unaffected.
+# yield versioned URLs; CI checks that the assets remain available, unlike
+# JVS rolling releases. The pinned archive is checked against its SHA-256.
 #
 # To bump: pick a new autobuild-* tag from
 #   https://github.com/BtbN/FFmpeg-Builds/releases
-# download the two linux gpl-7.1 tarballs, re-run
-#   sha256sum ffmpeg-*-linux{64,arm64}-gpl-7.1.tar.xz
+# download the two linux gpl-8.1 tarballs, re-run
+#   sha256sum ffmpeg-*-linux{64,arm64}-gpl-8.1.tar.xz
 # and update FFMPEG_RELEASE + both SHA256 ARGs below.
 FROM alpine:3.20 AS ffmpeg-fetcher
 ARG TARGETARCH
-ARG FFMPEG_RELEASE=autobuild-2026-07-03-13-21
-ARG FFMPEG_BUILD_AMD64=ffmpeg-n7.1.5-1-g7d0e842004-linux64-gpl-7.1.tar.xz
-ARG FFMPEG_BUILD_ARM64=ffmpeg-n7.1.5-1-g7d0e842004-linuxarm64-gpl-7.1.tar.xz
-ARG FFMPEG_SHA256_AMD64=1390e1c320a1e38dae106d6d0b05a6f08eb8b30f732bc1aa0d45a4aa17f13795
-ARG FFMPEG_SHA256_ARM64=53b2e30df04d56932b7782234c9bc97abfe0bb242192ca50346474a41b100ab0
+ARG FFMPEG_RELEASE=autobuild-2026-09-23-14-55
+ARG FFMPEG_BUILD_AMD64=ffmpeg-n8.1.3-linux64-gpl-8.1.tar.xz
+ARG FFMPEG_BUILD_ARM64=ffmpeg-n8.1.3-linuxarm64-gpl-8.1.tar.xz
+ARG FFMPEG_SHA256_AMD64=8f8d9df68e0b12f401047c244f50ff411f533eb2d306173e73d6a16fb29b320d
+ARG FFMPEG_SHA256_ARM64=cf0ff6547cc76197fdd5f8377e0b53c9bdd8006d082113149d8909e3b5f36643
 RUN apk add --no-cache curl xz \
     && arch="${TARGETARCH:-$(apk --print-arch)}" \
     && case "$arch" in \
@@ -94,9 +93,9 @@ FROM python:3.12-slim
 # Re-declare the ffmpeg ARGs so their values are available to LABEL below.
 # ARG values don't cross stage boundaries in multi-stage builds; defaults
 # must be repeated here to take effect when no --build-arg is supplied.
-ARG FFMPEG_RELEASE=autobuild-2026-07-03-13-21
-ARG FFMPEG_BUILD_AMD64=ffmpeg-n7.1.5-1-g7d0e842004-linux64-gpl-7.1.tar.xz
-ARG FFMPEG_BUILD_ARM64=ffmpeg-n7.1.5-1-g7d0e842004-linuxarm64-gpl-7.1.tar.xz
+ARG FFMPEG_RELEASE=autobuild-2026-09-23-14-55
+ARG FFMPEG_BUILD_AMD64=ffmpeg-n8.1.3-linux64-gpl-8.1.tar.xz
+ARG FFMPEG_BUILD_ARM64=ffmpeg-n8.1.3-linuxarm64-gpl-8.1.tar.xz
 
 # Apply latest security updates to base packages (clears glibc deb13u3 and
 # similar). Done first so any subsequent installs resolve against the

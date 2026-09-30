@@ -43,6 +43,29 @@ jobs:
             exit 1
           fi
 
+      - name: Verify pinned FFmpeg assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $dockerfile = Get-Content Dockerfile -Raw
+          $args = @{}
+          foreach ($name in 'FFMPEG_RELEASE', 'FFMPEG_BUILD_AMD64', 'FFMPEG_BUILD_ARM64', 'FFMPEG_SHA256_AMD64', 'FFMPEG_SHA256_ARM64') {
+            $values = @([regex]::Matches($dockerfile, "(?m)^ARG ${name}=([^\r\n]+)") | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)
+            if ($values.Count -ne 1) { throw "Dockerfile must pin one value for $name" }
+            $args[$name] = $values[0]
+          }
+          $uri = "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/tags/$($args.FFMPEG_RELEASE)"
+          $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; 'User-Agent' = 'feedBack-ci' }
+          $release = Invoke-RestMethod -Uri $uri -Headers $headers
+          foreach ($arch in 'AMD64', 'ARM64') {
+            $filename = $args["FFMPEG_BUILD_$arch"]
+            $expected = "sha256:$($args["FFMPEG_SHA256_$arch"])"
+            $asset = @($release.assets | Where-Object name -eq $filename)
+            if ($asset.Count -ne 1 -or $asset[0].digest -ne $expected) {
+              throw "Missing FFmpeg asset or SHA-256 mismatch: $filename ($expected)"
+            }
+          }
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
