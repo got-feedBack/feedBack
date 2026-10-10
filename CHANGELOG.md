@@ -313,6 +313,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine (`app.js`, `highway.js`, `playSong`, `showScreen`, the capability registry).
 
 ### Fixed
+- **Guitar Pro import: hand-position anchors sit on the chord and stop
+  flapping.** Anchors were computed per *note*, each placed one fret below the
+  note that triggered it (`fret - 1`), and the in-window test was off by one
+  (`fret .. fret + width` is five frets). So a chord at the 5th fret anchored
+  at 4 — every chord frame drawn from the anchor sat one fret too far left —
+  and a shape wider than the window (say 5..9) emitted two anchors per strum,
+  one for its low note and one for its high note, flipping the fret zoom back
+  and forth on every repeat. `_compute_anchors` (`lib/gp2rs.py`, now shared by
+  the GP3-5 and GP6/7/8 paths) treats each onset — a note or a whole chord —
+  as one event, puts the index finger on its lowest fretted note with no pad,
+  and when the hand must move picks the lowest fret that keeps as many
+  *upcoming* events as possible in one window, so a phrase gets one anchor
+  instead of a shift per note. A single shape wider than four frets widens its
+  anchor instead of splitting it; open strings are still ignored. Re-import a
+  GP file to pick this up. Tests: `tests/test_gp2rs.py`.
 - **Count-in follows the song's meter and its pickup measure.** The count-in
   (loop wrap, section practice, and the "Countdown before song" setting) always
   clicked exactly four beats, so a 3/4 song was counted in 4/4, and a song

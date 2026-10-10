@@ -1685,7 +1685,8 @@ def convert_file(
             continue
 
         # Iterate all masterbars and collect notes for this track
-        from gp2rs import RsNote, RsBeat, RsSection, RsAnchor, ChordTemplate, RsChord, _build_xml
+        from gp2rs import (RsNote, RsBeat, RsSection, RsAnchor, ChordTemplate, RsChord,
+                           _build_xml, _compute_anchors)
 
         rs_notes: list[RsNote] = []
         rs_chords: list[RsChord] = []
@@ -2000,20 +2001,7 @@ def convert_file(
         if is_drum or is_keys:
             anchors = [RsAnchor(time=audio_offset, fret=1, width=24)]
         else:
-            all_frets = [(n.time, n.fret) for n in rs_notes if n.fret > 0]
-            for c in rs_chords:
-                for cn in c.notes:
-                    if cn.fret > 0:
-                        all_frets.append((cn.time, cn.fret))
-            all_frets.sort()
-            first_fret = all_frets[0][1] if all_frets else 1
-            anchors = [RsAnchor(time=audio_offset, fret=max(1, first_fret - 1), width=4)]
-            for t_f, fret in all_frets:
-                lo = anchors[-1].fret
-                if fret < lo or fret > lo + anchors[-1].width:
-                    new_f = max(1, fret - 1)
-                    if new_f != anchors[-1].fret:
-                        anchors.append(RsAnchor(time=t_f, fret=new_f, width=4))
+            anchors = _compute_anchors(rs_notes, rs_chords, audio_offset)
 
         song_length = current_time + audio_offset
 

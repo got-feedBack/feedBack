@@ -675,6 +675,52 @@ def _compute_tuning(track: guitarpro.Track) -> list[int]:
     return offsets
 
 
+def _compute_anchors(rs_notes, rs_chords, audio_offset, width=4):
+    """Fret-hand anchors (window = index-finger fret .. fret + width - 1).
+
+    Each onset — a single note or a whole chord — is one event spanning its
+    lowest..highest fretted note, so a chord never splits the window and a
+    repeated chord can't flip the anchor back and forth. Open strings (fret 0)
+    are ignored: they're playable from any hand position. When an event falls
+    outside the current window the new anchor puts the index finger on the
+    lowest fret that keeps as many *upcoming* events as possible in one
+    window, with no "fret - 1" pad (which pushed the hand frame — and chord
+    frames drawn from it — one fret left of the shape). A single event wider
+    than ``width`` widens its anchor to cover the stretch.
+    """
+    by_t: dict[float, list[int]] = {}
+    for n in rs_notes:
+        if n.fret > 0:
+            by_t.setdefault(round(n.time, 4), []).append(n.fret)
+    for c in rs_chords:
+        for cn in c.notes:
+            if cn.fret > 0:
+                by_t.setdefault(round(c.time, 4), []).append(cn.fret)
+    events = [(t, min(fs), max(fs)) for t, fs in sorted(by_t.items())]
+    if not events:
+        return [RsAnchor(time=audio_offset, fret=1, width=width)]
+
+    def window_for(i):
+        # Grow the window over events i, i+1, ... while they still fit.
+        lo, hi = events[i][1], events[i][2]
+        for _, elo, ehi in events[i + 1:]:
+            nlo, nhi = min(lo, elo), max(hi, ehi)
+            if nhi - nlo + 1 > width:
+                break
+            lo, hi = nlo, nhi
+        return max(1, lo), max(width, hi - lo + 1)
+
+    fret, w = window_for(0)
+    anchors = [RsAnchor(time=audio_offset, fret=fret, width=w)]
+    for i, (t, lo, hi) in enumerate(events):
+        cur = anchors[-1]
+        if lo < cur.fret or hi > cur.fret + cur.width - 1:
+            fret, w = window_for(i)
+            if (fret, w) != (cur.fret, cur.width):
+                anchors.append(RsAnchor(time=t, fret=fret, width=w))
+    return anchors
+
+
 def convert_track(
     song: guitarpro.Song,
     track_index: int,
@@ -1046,27 +1092,7 @@ def convert_track(
                 _rn.slide_unpitch_to = _rn.fret + 5
 
     # ── Compute anchors ───────────────────────────────────────────────────
-    # Exclude open strings (fret 0) — they span the full highway and
-    # shouldn't cause the fret range to shift
-    anchors = []
-    all_timed_frets = [(n.time, n.fret) for n in rs_notes if n.fret > 0]
-    for c in rs_chords:
-        for cn in c.notes:
-            if cn.fret > 0:
-                all_timed_frets.append((cn.time, cn.fret))
-    all_timed_frets.sort()
-
-    # Always start with an anchor at the beginning
-    first_fret = all_timed_frets[0][1] if all_timed_frets else 1
-    anchors.append(RsAnchor(time=audio_offset, fret=max(1, first_fret - 1), width=4))
-
-    for t, fret in all_timed_frets:
-        anchor_lo = anchors[-1].fret
-        anchor_hi = anchor_lo + anchors[-1].width
-        if fret < anchor_lo or fret > anchor_hi:
-            new_fret = max(1, fret - 1)
-            if new_fret != anchors[-1].fret:
-                anchors.append(RsAnchor(time=t, fret=new_fret, width=4))
+    anchors = _compute_anchors(rs_notes, rs_chords, audio_offset)
 
     # ── Compute song length ───────────────────────────────────────────────
     # End of the final scheduled measure in *output* time. After expansion
