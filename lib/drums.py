@@ -211,7 +211,7 @@ def validate_drum_tab(data: object) -> tuple[bool, str]:
     return True, ""
 
 
-def hit_to_wire(hit: dict) -> dict | None:
+def hit_to_wire(hit: dict, *, top: bool = True) -> dict | None:
     """Normalise one hit dict into the short-key wire form streamed by
     `/ws/highway/{filename}`. Returns None on a malformed hit (missing `t`
     or `p`) so the loader can drop just that entry without aborting the
@@ -226,6 +226,16 @@ def hit_to_wire(hit: dict) -> dict | None:
         g  bool               ghost note
         f  bool               flam
         k  float seconds      cymbal-choke tail duration
+        a  bool               accent (feedpak 1.20.0). Never sent together
+                              with `g` — the spec forbids the pair, so a hit
+                              that sets both keeps the ghost and loses the
+                              accent rather than handing the client an
+                              impossible dynamic.
+        x2 bool               double-kick ("Expert+") note (1.20.0). Only on
+                              a `kick` hit and only when ``top`` is true: the
+                              spec makes `x2` meaningful in the top-level
+                              `hits[]` alone, so a `levels` entry never
+                              carries it on the wire.
     """
     if not isinstance(hit, dict):
         return None
@@ -252,17 +262,89 @@ def hit_to_wire(hit: dict) -> dict | None:
     k = hit.get("k")
     if not isinstance(k, bool) and isinstance(k, (int, float)) and math.isfinite(k) and k > 0:
         out["k"] = round(float(k), 3)
+    if bool(hit.get("a")) and "g" not in out:
+        out["a"] = True
+    if top and p == "kick" and bool(hit.get("x2")):
+        out["x2"] = True
     return out
 
 
-def hits_to_wire(hits: list[dict]) -> list[dict]:
-    """Vectorised `hit_to_wire` — drops malformed entries, sorts by time."""
+def hits_to_wire(hits: list[dict], *, top: bool = True) -> list[dict]:
+    """Vectorised `hit_to_wire` — drops malformed entries, sorts by time.
+
+    ``top=False`` encodes a `levels` entry's hits (no `x2`, see `hit_to_wire`).
+    """
     out: list[dict] = []
+    if not isinstance(hits, list):
+        return out
     for h in hits:
-        w = hit_to_wire(h)
+        w = hit_to_wire(h, top=top)
         if w is not None:
             out.append(w)
     out.sort(key=lambda h: h["t"])
+    return out
+
+
+# ── Drum gameplay metadata (feedpak 1.20.0) ───────────────────────────────────
+#
+# Optional top-level drum_tab keys describing the chart beyond its hits:
+# `star_power` / `fills` / `solos` range lists and the easier `levels`. Like
+# the hits they are sanitised here, at WS-stream time, so one malformed entry
+# drops alone instead of disqualifying the tab.
+
+RANGE_KEYS = ("star_power", "fills", "solos")
+LEVEL_IDS = ("easy", "medium", "hard")
+
+
+def _finite(v: object) -> float | None:
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    f = float(v)
+    return f if math.isfinite(f) else None
+
+
+def ranges_to_wire(ranges: object) -> list[dict]:
+    """Normalise a drum_tab range list (`star_power` / `fills` / `solos`).
+
+    Each entry becomes `{"start_time", "end_time"}` rounded to the hit
+    precision; entries that aren't objects, lack a finite pair, or end before
+    they start are dropped. Sorted by `start_time` (the spec asks Writers to
+    sort, Readers shouldn't depend on it). Returns [] for a missing/odd value.
+    """
+    out: list[dict] = []
+    if not isinstance(ranges, list):
+        return out
+    for r in ranges:
+        if not isinstance(r, dict):
+            continue
+        a = _finite(r.get("start_time"))
+        b = _finite(r.get("end_time"))
+        if a is None or b is None or b < a:
+            continue
+        out.append({"start_time": round(a, 3), "end_time": round(b, 3)})
+    out.sort(key=lambda r: (r["start_time"], r["end_time"]))
+    return out
+
+
+def levels_to_wire(levels: object) -> dict[str, dict]:
+    """Normalise a drum_tab `levels` object to `{id: {"hits", "generated"}}`.
+
+    Only the spec's closed ids (`easy`, `medium`, `hard`) survive — a Reader
+    MUST ignore any other id. A level whose `hits` isn't a list, or whose hits
+    are all malformed, is dropped: an empty level would offer the player a
+    difficulty with nothing to play. Hits go through `hits_to_wire(top=False)`.
+    """
+    out: dict[str, dict] = {}
+    if not isinstance(levels, dict):
+        return out
+    for lid in LEVEL_IDS:
+        lv = levels.get(lid)
+        if not isinstance(lv, dict) or not isinstance(lv.get("hits"), list):
+            continue
+        hits = hits_to_wire(lv["hits"], top=False)
+        if not hits:
+            continue
+        out[lid] = {"hits": hits, "generated": lv.get("generated") is True}
     return out
 
 

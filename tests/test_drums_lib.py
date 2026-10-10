@@ -181,3 +181,60 @@ def test_normalise_kit_dedupes_and_fills_names():
 def test_normalise_kit_handles_none():
     assert drums.normalise_kit(None) == []
     assert drums.normalise_kit("not a list") == []
+
+
+# ── Drum gameplay metadata (feedpak 1.20.0) ───────────────────────────────────
+
+
+def test_hit_to_wire_carries_accent_and_double_kick():
+    assert drums.hit_to_wire({"t": 1.0, "p": "crash_l", "a": True}) == {"t": 1.0, "p": "crash_l", "a": True}
+    assert drums.hit_to_wire({"t": 1.0, "p": "kick", "x2": True}) == {"t": 1.0, "p": "kick", "x2": True}
+    # absent / false flags stay off the wire (pre-1.20.0 frames unchanged)
+    assert drums.hit_to_wire({"t": 1.0, "p": "kick", "a": False, "x2": False}) == {"t": 1.0, "p": "kick"}
+
+
+def test_hit_to_wire_never_sends_accent_with_ghost():
+    # The spec forbids a hit that is both; the ghost wins, the accent drops.
+    assert drums.hit_to_wire({"t": 1.0, "p": "snare", "a": True, "g": True}) == {"t": 1.0, "p": "snare", "g": True}
+
+
+def test_hit_to_wire_x2_only_on_top_level_kicks():
+    assert "x2" not in drums.hit_to_wire({"t": 1.0, "p": "snare", "x2": True})
+    assert "x2" not in drums.hit_to_wire({"t": 1.0, "p": "kick", "x2": True}, top=False)
+
+
+def test_ranges_to_wire_sanitises_and_sorts():
+    out = drums.ranges_to_wire([
+        {"start_time": 8.0, "end_time": 9.5},
+        {"start_time": 1.00049, "end_time": 2.0},
+        {"start_time": 3.0, "end_time": 2.0},          # ends before it starts
+        {"start_time": "x", "end_time": 2.0},
+        {"start_time": True, "end_time": 2.0},          # bool is not a number
+        {"start_time": float("nan"), "end_time": 2.0},
+        {"end_time": 2.0},
+        "not a dict",
+        {"start_time": 4.0, "end_time": 4.0, "extra": 1},  # zero length is fine
+    ])
+    assert out == [
+        {"start_time": 1.0, "end_time": 2.0},
+        {"start_time": 4.0, "end_time": 4.0},
+        {"start_time": 8.0, "end_time": 9.5},
+    ]
+    assert drums.ranges_to_wire(None) == []
+    assert drums.ranges_to_wire({"start_time": 1, "end_time": 2}) == []
+
+
+def test_levels_to_wire_keeps_known_ids_and_drops_empty_levels():
+    out = drums.levels_to_wire({
+        "hard": {"hits": [{"t": 1.0, "p": "kick", "x2": True}, {"t": 0.5, "p": "snare", "a": True}]},
+        "easy": {"hits": [{"t": 0.5, "p": "crash_l"}], "generated": True},
+        "medium": {"hits": [{"t": 0.5}]},                 # every hit malformed -> no level
+        "expert": {"hits": [{"t": 0.5, "p": "kick"}]},    # not a v1 level id
+        "extreme": "nope",
+    })
+    assert out == {
+        "easy": {"hits": [{"t": 0.5, "p": "crash_l"}], "generated": True},
+        "hard": {"hits": [{"t": 0.5, "p": "snare", "a": True}, {"t": 1.0, "p": "kick"}], "generated": False},
+    }
+    assert drums.levels_to_wire(None) == {}
+    assert drums.levels_to_wire({"easy": {"hits": "x"}}) == {}

@@ -247,7 +247,12 @@ function createHighway() {
     // legacy guitar-encoded `notes` stream. Stays at the null sentinel
     // for non-drum-tab songs so plugins can distinguish "no drums" from
     // "drums loaded but empty".
-    hwState.drumTab = null;  // { version, name, kit: [...], hits: [...] }
+    // Drum gameplay metadata (feedpak 1.20.0) rides along when the tab has
+    // it: `star_power` / `fills` / `solos` as [{start_time, end_time}] and
+    // `levels` as {easy|medium|hard: {hits: [...], generated}} (each level's
+    // hits stream as `drum_level_hits` chunks). Absent keys mean the tab
+    // carries no such data — the fields are never synthesized.
+    hwState.drumTab = null;  // { version, name, kit: [...], hits: [...], star_power?, fills?, solos?, levels? }
     hwState.ready = false;
     // Master-difficulty (feedBack#48). _phrases stays null as a
     // "slider disabled" sentinel when the source chart has no ladder
@@ -2411,6 +2416,20 @@ function createHighway() {
                                 // bundle.drumTab.part_id.
                                 part_id: (typeof msg.part_id === 'string' && msg.part_id) ? msg.part_id : null,
                             };
+                            // Drum gameplay metadata (feedpak 1.20.0). Copied
+                            // only when the server sent it, so a pre-1.20.0
+                            // tab keeps the exact shape plugins knew.
+                            for (const k of ['star_power', 'fills', 'solos']) {
+                                if (Array.isArray(msg[k])) hwState.drumTab[k] = msg[k];
+                            }
+                            if (msg.levels && typeof msg.levels === 'object' && !Array.isArray(msg.levels)) {
+                                const levels = {};
+                                for (const id of ['easy', 'medium', 'hard']) {
+                                    const lv = msg.levels[id];
+                                    if (lv && typeof lv === 'object') levels[id] = { hits: [], generated: lv.generated === true };
+                                }
+                                hwState.drumTab.levels = levels;
+                            }
                             // Reflect the authoritative streaming part in the
                             // picker (the server resolves an unknown/absent
                             // selection to the primary, so this keeps the
@@ -2427,6 +2446,15 @@ function createHighway() {
                                 Array.prototype.push.apply(hwState.drumTab.hits, msg.data);
                             }
                             break;
+                        case 'drum_level_hits': {
+                            const lv = hwState.drumTab && hwState.drumTab.levels
+                                && typeof msg.level === 'string' && Object.prototype.hasOwnProperty.call(hwState.drumTab.levels, msg.level)
+                                ? hwState.drumTab.levels[msg.level] : null;
+                            if (lv && Array.isArray(msg.data)) {
+                                Array.prototype.push.apply(lv.hits, msg.data);
+                            }
+                            break;
+                        }
                         case 'phrases':
                             // Accumulate chunks but DON'T rebuild the filter
                             // until `ready` — rebuilding per chunk would

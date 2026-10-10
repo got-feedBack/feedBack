@@ -636,6 +636,25 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
             _wire_part_id = _drum_part_id_for_wire(loaded_slop.drum_parts, _dt_part_id)
             if _wire_part_id is not None:
                 _dt_msg["part_id"] = _wire_part_id
+            # Drum gameplay metadata (feedpak 1.20.0). The range lists are
+            # small and ride on the `drum_tab` frame itself; each key is sent
+            # only when the tab has entries, so a pre-1.20.0 tab keeps its
+            # exact old frame. `levels` here is just the index — {id:
+            # {total, generated}} — because a level is a whole chart: its hits
+            # stream after the top-level ones as `drum_level_hits` chunks,
+            # 500 per frame like `drum_hits`. A client that predates these
+            # keys ignores the unknown frame type and plays `hits[]` (the
+            # full part, x2 kicks included) as before.
+            for _key in drums_mod.RANGE_KEYS:
+                _ranges = drums_mod.ranges_to_wire(dt.get(_key))
+                if _ranges:
+                    _dt_msg[_key] = _ranges
+            levels_wire = drums_mod.levels_to_wire(dt.get("levels"))
+            if levels_wire:
+                _dt_msg["levels"] = {
+                    lid: {"total": len(lv["hits"]), "generated": lv["generated"]}
+                    for lid, lv in levels_wire.items()
+                }
             try:
                 await websocket.send_json(_dt_msg)
                 for i in range(0, len(hits_wire), 500):
@@ -644,6 +663,15 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
                         "data": hits_wire[i:i + 500],
                         "total": len(hits_wire),
                     })
+                for lid, lv in levels_wire.items():
+                    _lv_hits = lv["hits"]
+                    for i in range(0, len(_lv_hits), 500):
+                        await websocket.send_json({
+                            "type": "drum_level_hits",
+                            "level": lid,
+                            "data": _lv_hits[i:i + 500],
+                            "total": len(_lv_hits),
+                        })
             except WebSocketDisconnect:
                 return
 

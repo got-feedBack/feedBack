@@ -8,6 +8,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Drum gameplay metadata on the highway WebSocket (feedpak 1.20.0).** A
+  drums renderer can now play a chart the way a rhythm game does, not just
+  draw its hits: the `drum_tab` stream carries the 1.20.0 keys the importer
+  writes. Each hit in `drum_hits` keeps its accent (`a`) and double-kick
+  (`x2`) flag; the `drum_tab` frame carries the `star_power`, `fills` and
+  `solos` range lists and a `levels` index (`{id: {total, generated}}`), and
+  each easier level's hits follow as `drum_level_hits` chunks (`{level, data,
+  total}`, 500 per frame like `drum_hits`). The client stores all of it on
+  `bundle.drumTab`, so the drums plugin reads `star_power` / `fills` / `solos`
+  and `levels.<id>.hits` alongside `hits`. Everything is sanitised the way the
+  hits already are — a malformed range or hit drops alone, unknown level ids
+  are ignored, a hit never arrives both accented and ghosted, and `x2` only
+  appears on top-level kicks — and it is strictly additive: a tab without the
+  keys streams byte-for-byte the frames it did before, and a client that
+  predates them ignores the new frame type and plays `hits[]` (the full part,
+  double kicks included) as it always has.
+  Implementation in `lib/drums.py` (`ranges_to_wire`, `levels_to_wire`, the
+  `a`/`x2` wire keys), `lib/routers/ws_highway.py` and `static/highway.js`;
+  tests in `tests/test_drums_lib.py`, `tests/test_highway_ws_drum_metadata.py`
+  and `tests/js/drum_tab_metadata.test.js`.
+- **Import Rock Band / Clone Hero / YARG drum charts (feedpak 1.20.0).**
+  `scripts/ch_to_sloppak.py` turns a CH/YARG song folder (`notes.mid` PART
+  DRUMS or `notes.chart`, `song.ini`, audio) — or an `.sng` package — into a
+  drums pack: a `type: drums` arrangement whose `drum_tab.json` carries the
+  Expert part as 4-lane pro piece hits plus the chart's gameplay data in the
+  1.20.0 "drum gameplay metadata" shape — accents, double kicks (`x2`, so the
+  Expert / Expert+ split survives), star power, fills, solos, and the chart's
+  own Easy/Medium/Hard parts as `levels` — and a `song_timeline.json` with its
+  tempo map, beats and sections. song.ini `delay` is applied, so the hits line
+  up with the audio as YARG plays it. A chart with star power but no fills gets
+  YARG's generated activation fills, and a missing lower level is reduced from
+  Expert and marked `generated` so a player can tell it wasn't charted by hand.
+  `scripts/sloppak_to_ch.py` goes the other way for a pack's drum part (or
+  `--part <id>`), writing `notes.mid` + `song.ini` + OGG stems that YARG and
+  Clone Hero read, and the two round-trip. The parsing rules — tom markers,
+  5-lane → pro conversion, disco flip, dynamics, delay — are ported from
+  YARG.Core (LGPL-3.0, attributed in `lib/drumchart.py`); piece-ids come from
+  `lib/drums.py`, so the importer can't drift from the vocabulary the drums
+  plugin renders. This is the writer side only: the loader already plays the
+  tab's hits, and streaming the gameplay keys over the highway WS to a drums
+  renderer is a separate follow-up.
+  Implementation in `lib/drumchart.py`, `lib/drumchart_gen.py`, `lib/sngfile.py`;
+  tests in `tests/test_drumchart.py` and `tests/test_sloppak_to_ch.py`.
 - **Core reader for source rigs (feedpak 1.18.0).** A pack can declare what a
   MIDI part should sound like by binding a rig; core now reads that binding and
   hands it to the client instead of dropping it. Three parts: the
