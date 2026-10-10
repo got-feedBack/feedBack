@@ -44,6 +44,8 @@ function loadInspector(snapshot, options = {}) {
         ['capability-inspector-summary', makeElement('capability-inspector-summary')],
         ['capability-inspector-refresh', makeElement('capability-inspector-refresh')],
     ]);
+    if (options.screen) elements.set('plugin-capability_inspector', options.screen);
+    const busListeners = new Map();
     const window = {
         console,
         CustomEvent,
@@ -65,6 +67,14 @@ function loadInspector(snapshot, options = {}) {
             playback: options.playbackSnapshot ? {
                 snapshot: () => options.playbackSnapshot,
             } : undefined,
+            on(type, handler) {
+                const list = busListeners.get(type) || [];
+                list.push(handler);
+                busListeners.set(type, list);
+            },
+            emit(type, detail) {
+                for (const handler of (busListeners.get(type) || []).slice()) handler({ type, detail });
+            },
         },
         navigator: { clipboard: { writeText: async () => {} } },
         document: {
@@ -735,4 +745,61 @@ test('capability inspector renders audio-monitoring providers sessions direct mo
     assert.match(content, /Direct monitor: muted:supported:applied/);
     assert.match(content, /Monitoring bridges: audio-monitoring\.audio-barrier:overshadowed/);
     assert.match(content, /Failures: audio-monitoring:start:monitoring-02:timeout, audio-monitoring:start:note_detect:provider-selection-required/);
+});
+
+function countingSnapshot() {
+    const snapshot = () => {
+        snapshot.calls += 1;
+        return { pipelines: [], participants: [], compatibilityShims: [], expectedCompatibilityShims: [] };
+    };
+    snapshot.calls = 0;
+    return snapshot;
+}
+
+function changed(window) {
+    window.dispatchEvent(new window.CustomEvent('feedBack:capabilities:changed', { detail: {} }));
+}
+
+test('capability inspector skips change-driven renders while its screen is hidden', () => {
+    const screen = makeElement('plugin-capability_inspector');
+    const snapshot = countingSnapshot();
+    const { window } = loadInspector(snapshot, { screen });
+    const afterInstall = snapshot.calls;
+
+    for (let i = 0; i < 50; i++) changed(window);
+    assert.equal(snapshot.calls, afterInstall, 'no renders while hidden');
+
+    // Showing some other screen leaves it stale.
+    window.feedBack.emit('screen:changed', { id: 'player' });
+    assert.equal(snapshot.calls, afterInstall);
+
+    // Showing the inspector renders once, however many changes were missed.
+    screen.classList.add('active');
+    window.feedBack.emit('screen:changed', { id: 'plugin-capability_inspector', from: 'player' });
+    assert.equal(snapshot.calls, afterInstall + 1);
+
+    // Re-showing with nothing new doesn't re-render.
+    window.feedBack.emit('screen:changed', { id: 'plugin-capability_inspector' });
+    assert.equal(snapshot.calls, afterInstall + 1);
+});
+
+test('capability inspector still renders changes live while its screen is shown', () => {
+    const screen = makeElement('plugin-capability_inspector');
+    screen.classList.add('active');
+    const snapshot = countingSnapshot();
+    const { window } = loadInspector(snapshot, { screen });
+    const afterInstall = snapshot.calls;
+
+    changed(window);
+    changed(window);
+    assert.equal(snapshot.calls, afterInstall + 2);
+});
+
+test('capability inspector without a screen container renders every change as before', () => {
+    const snapshot = countingSnapshot();
+    const { window } = loadInspector(snapshot);
+    const afterInstall = snapshot.calls;
+
+    changed(window);
+    assert.equal(snapshot.calls, afterInstall + 1);
 });

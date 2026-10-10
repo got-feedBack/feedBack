@@ -313,6 +313,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine (`app.js`, `highway.js`, `playSong`, `showScreen`, the capability registry).
 
 ### Fixed
+- **Capability Inspector no longer re-renders while nobody is looking at it.**
+  The inspector's screen is mounted for every user (only its Plugins-menu entry
+  is opt-in), and it re-rendered on every `feedBack:capabilities:changed` — which
+  fires after each recorded capability decision, claim, shim and bridge hit, so
+  steadily during play. Each render re-snapshots the whole registry and rebuilds
+  the panel's markup and graphs, all for a hidden screen. A change while the
+  screen is hidden now just marks it stale, and opening the inspector renders
+  once; while it's open it still updates live, and the Refresh button is
+  unchanged.
 - **Count-in follows the song's meter and its pickup measure.** The count-in
   (loop wrap, section practice, and the "Countdown before song" setting) always
   clicked exactly four beats, so a 3/4 song was counted in 4/4, and a song

@@ -1655,7 +1655,36 @@
         });
     }
 
+    // Render only while the inspector screen is on display.
+    // feedBack:capabilities:changed fires after every recorded decision, claim,
+    // shim and bridge hit (coalesced per microtask, not per frame), and each
+    // render re-snapshots the whole registry and rebuilds the panel's DOM and
+    // graphs. The screen is mounted for every user but opened by almost none
+    // (its nav entry is opt-in), so while it's hidden a change only marks the
+    // view stale and showing the screen renders once. Without a screen
+    // container or the screen:changed event (tests, embedders) there's no way
+    // to learn when it's shown, so render as before.
+    const SCREEN_ID = 'plugin-capability_inspector';
+    let renderStale = false;
+
+    function screenHidden() {
+        if (!window.feedBack || typeof window.feedBack.on !== 'function') return false;
+        const screen = document.getElementById(SCREEN_ID);
+        return !!(screen && screen.classList && !screen.classList.contains('active'));
+    }
+
+    function onScreenChanged(event) {
+        const id = (event && event.detail && event.detail.id) || (event && event.id);
+        if (id !== SCREEN_ID || !renderStale) return;
+        renderStale = false;
+        scheduleRender();
+    }
+
     function scheduleRender() {
+        if (screenHidden()) {
+            renderStale = true;
+            return;
+        }
         if (renderScheduled) return;
         renderScheduled = true;
         const schedule = window.requestAnimationFrame ? window.requestAnimationFrame.bind(window) : callback => setTimeout(callback, 0);
@@ -1750,4 +1779,5 @@
     else install();
     window.addEventListener('feedBack:capabilities:ready', render);
     window.addEventListener('feedBack:capabilities:changed', scheduleRender);
+    if (window.feedBack && typeof window.feedBack.on === 'function') window.feedBack.on('screen:changed', onScreenChanged);
 })();
