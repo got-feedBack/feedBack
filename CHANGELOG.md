@@ -313,6 +313,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine (`app.js`, `highway.js`, `playSong`, `showScreen`, the capability registry).
 
 ### Fixed
+- **Songs no longer open on their drum part by default.** With no arrangement
+  requested, no instrument routing and no saved default arrangement, the
+  highway falls back to the arrangement with the most notes. Packs from GP
+  imports and older converters carry drums as a fretted arrangement named
+  "Drums" (GM drum numbers in place of frets), and a drum chart out-counts the
+  guitar parts on nearly every song — so those songs opened on Drums, drawn as
+  fret gems. The fallback now skips drum parts (Drums / Percussion / Drum Kit)
+  unless the song has nothing else; an explicit arrangement pick, bass routing
+  and the saved default are unchanged.
 - **Count-in follows the song's meter and its pickup measure.** The count-in
   (loop wrap, section practice, and the "Countdown before song" setting) always
   clicked exactly four beats, so a 3/4 song was counted in 4/4, and a song

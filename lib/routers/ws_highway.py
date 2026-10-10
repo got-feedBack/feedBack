@@ -16,6 +16,7 @@ import json
 import logging
 import math
 import os
+import re
 import shutil
 import uuid
 from pathlib import Path
@@ -98,6 +99,35 @@ def _pick_smart_arrangement(
     if sorted_pairs:
         return sorted_pairs[0][0]
     return 0
+
+
+# A drum part encoded as a fretted arrangement (GP imports via
+# gp2rs.convert_drum_track, older converters): notes are GM drum numbers, not
+# frets. Same name spellings gp2rs uses to recognise a drum track.
+_DRUMS_ARR_RE = re.compile(r"\b(?:drums?|percussion|drum\s*kit)\b", re.I)
+
+
+def _is_drums_arrangement(arr) -> bool:
+    return bool(_DRUMS_ARR_RE.search(getattr(arr, "name", "") or ""))
+
+
+def _most_notes_arrangement(arrangements: list) -> int:
+    """Fallback default arrangement: the one with the most notes (chord notes
+    count). A drum chart hits on nearly every subdivision, so it out-counts the
+    guitar parts on almost every song — drum parts only win when the song has
+    nothing else, otherwise every song with drums would open on them."""
+    only_drums = all(_is_drums_arrangement(a) for a in arrangements)
+    best, best_count = 0, 0
+    for i, a in enumerate(arrangements):
+        if not only_drums and _is_drums_arrangement(a):
+            continue
+        c = len(a.notes) + sum(len(ch.notes) for ch in a.chords)
+        if c > best_count:
+            best_count, best = c, i
+    if best_count == 0 and not only_drums:
+        # Nothing has notes — first non-drum part rather than a drum part at 0.
+        best = next(i for i, a in enumerate(arrangements) if not _is_drums_arrangement(a))
+    return best
 
 
 def _sanitized_song_offset(song) -> float:
@@ -309,14 +339,8 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
                             best = i
                             break
         if best < 0:
-            # Fallback: most notes
-            best = 0
-            best_count = 0
-            for i, a in enumerate(song.arrangements):
-                c = len(a.notes) + sum(len(ch.notes) for ch in a.chords)
-                if c > best_count:
-                    best_count = c
-                    best = i
+            # Fallback: most notes, never a drum part while another exists.
+            best = _most_notes_arrangement(song.arrangements)
         arr = song.arrangements[best]
 
         # Resolve the manifest arrangement id for notation lookup (Option B loader).
