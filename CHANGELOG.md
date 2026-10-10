@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Guitar-solo section detection — `scripts/solo_sections.py`.** Several
+  practice features key off a section named `solo` (the section map colours it
+  red, section practice lists it), but a pack imported from a Guitar Pro tab
+  only gets the sections its author marked — often none, or none for the solo.
+  The new script finds the one solo a song most likely has and writes a `solo`
+  section for it, with the section that was running resuming where the solo
+  ends. Detection (`lib/solo_sections.py`, pure and unit-tested) works per bar
+  of the lead part: runs of mostly-single-note bars that are high up the neck
+  or fast and whose pitch content doesn't repeat elsewhere (riffs repeat, solos
+  don't), mid-to-late in the song, with the rhythm part chording underneath
+  rather than doubling the line; at most one solo per song. Writes follow
+  feedpak-spec §6.1/§7.4 — into `song_timeline.json` when the manifest names
+  one, else into the arrangement JSON(s) carrying the song's sections — and no
+  manifest key is touched. It is a **dry run by default** (`--write` to
+  modify), works on directory- and zip-form packs (zip members keep their
+  original compression), never touches a song that already has a solo
+  section, and skips `.jsonc` targets rather than drop their comments. Tests in
+  `tests/test_solo_sections.py` and `tests/test_solo_sections_script.py`.
 - **Core reader for source rigs (feedpak 1.18.0).** A pack can declare what a
   MIDI part should sound like by binding a rig; core now reads that binding and
   hands it to the client instead of dropping it. Three parts: the
