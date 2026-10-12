@@ -175,6 +175,13 @@ test('offsetsToFreqs: all-zero 4-string bass is E Standard bass', () => {
     freqs.forEach((f, i) => assert.ok(Math.abs(f - expected[i]) < 0.5, `string ${i}: ${f} vs ${expected[i]}`));
 });
 
+test('offsetsToFreqs: all-zero 6-string bass is B E A D G C', () => {
+    const freqs = offsetsToFreqs([0, 0, 0, 0, 0, 0], true);
+    // B0 E1 A1 D2 G2 C3 = 30.87 41.20 55.00 73.42 98.00 130.81
+    const expected = [30.87, 41.20, 55.00, 73.42, 98.00, 130.81];
+    freqs.forEach((f, i) => assert.ok(Math.abs(f - expected[i]) < 0.5, `string ${i}: ${f} vs ${expected[i]}`));
+});
+
 // ── getTuningName ─────────────────────────────────────────────────────────────
 
 test('getTuningName: all zeros → "E Standard"', () => {

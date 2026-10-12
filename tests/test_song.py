@@ -365,6 +365,17 @@ def test_base_open_string_midis_bass_vs_guitar():
     assert base_open_string_midis(4, False)[0] == 40   # 4-string guitar voicing
 
 
+def test_base_open_string_midis_six_string_bass_is_b_e_a_d_g_c():
+    """A 6-string bass uses B E A D G C, the standard the GP importer writes its
+    tuning offsets against, not the guitar base (which mis-pitched every string)."""
+    import gp2rs
+    import tunings
+    assert base_open_string_midis(6, True) == [23, 28, 33, 38, 43, 48]
+    assert base_open_string_midis(6, True) == list(reversed(gp2rs.STANDARD_TUNING_BASS))
+    assert base_open_string_midis(6, True) == tunings.STANDARD_OPEN_MIDIS["bass-6"]
+    assert base_open_string_midis(6, False) == [40, 45, 50, 55, 59, 64]  # guitar unchanged
+
+
 def test_note_bend_values_rounded_on_wire():
     """`bnv` rounds `t` to 3 and `v` to 1, matching the scalar `bn` precision."""
     n = Note(

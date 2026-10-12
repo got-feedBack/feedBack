@@ -122,6 +122,8 @@ const _TUNING_BASE_MIDI = {
     7: [35, 40, 45, 50, 55, 59, 64],
     8: [30, 35, 40, 45, 50, 55, 59, 64],
 };
+// 6-string bass: B E A D G C (the GP importer's standard for its tuning offsets).
+const _TUNING_BASE_MIDI_BASS6 = [23, 28, 33, 38, 43, 48];
 
 const _TUNING_NOTE_SHARP = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 
@@ -136,6 +138,8 @@ function _tuningOffsetsToFreqs(offsets, isBass) {
     let base;
     if (len === 4 || len === 5) {
         base = isBass ? _TUNING_BASE_MIDI[len] : _TUNING_BASE_MIDI[6];
+    } else if (len === 6 && isBass) {
+        base = _TUNING_BASE_MIDI_BASS6;
     } else {
         base = _TUNING_BASE_MIDI[len] || _TUNING_BASE_MIDI[6];
     }

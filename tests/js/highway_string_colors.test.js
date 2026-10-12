@@ -194,6 +194,9 @@ test('translation table keeps Low E stable across string counts', () => {
     assert.deepEqual(_hwcSlotKeysForChart(4, true), ['lowE', 'A', 'D', 'G']);
     // 5-string bass: index 0 = Low B, then Low E A D G.
     assert.deepEqual(_hwcSlotKeysForChart(5, true), ['low7', 'lowE', 'A', 'D', 'G']);
+    // 6-string bass (B E A D G C): Low B, Low E A D G, and the high C takes the
+    // B slot (the string above G), so Low E keeps its colour here too.
+    assert.deepEqual(_hwcSlotKeysForChart(6, true), ['low7', 'lowE', 'A', 'D', 'G', 'B']);
     // High E is the top guitar slot for 6/7/8-string.
     for (const sc of [6, 7, 8]) {
         const keys = _hwcSlotKeysForChart(sc, false);

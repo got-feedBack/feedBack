@@ -472,6 +472,9 @@ _TUNING_BASE_MIDI = {
     7: [35, 40, 45, 50, 55, 59, 64],
     8: [30, 35, 40, 45, 50, 55, 59, 64],
 }
+# 6-string bass: B E A D G C, the standard the GP importer writes 6-string bass
+# tuning offsets against (gp2rs.STANDARD_TUNING_BASS; tunings.py "bass-6").
+_TUNING_BASE_MIDI_BASS6 = [23, 28, 33, 38, 43, 48]
 
 
 def base_open_string_midis(string_count: int, is_bass: bool) -> list[int]:
@@ -479,11 +482,13 @@ def base_open_string_midis(string_count: int, is_bass: bool) -> list[int]:
 
     Mirrors app.js `_tuningOffsetsToFreqs`: a 4/5-string *bass* uses its own low
     base, while a 4/5-string non-bass (a guitar voicing) borrows the low strings
-    of the 6-string base; 6/7/8 use their own. Unknown counts fall back to the
-    6-string base."""
+    of the 6-string base; a 6-string bass uses B E A D G C; 6/7/8 otherwise use
+    their own. Unknown counts fall back to the 6-string base."""
     n = int(string_count)
     if n in (4, 5):
         return _TUNING_BASE_MIDI[n] if is_bass else _TUNING_BASE_MIDI[6]
+    if n == 6 and is_bass:
+        return _TUNING_BASE_MIDI_BASS6
     return _TUNING_BASE_MIDI.get(n, _TUNING_BASE_MIDI[6])
 
 

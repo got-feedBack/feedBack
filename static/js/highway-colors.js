@@ -148,6 +148,9 @@ function _hwcSlotKeysForChart(sc, isBass) {
     if (isBass) {
         if (sc <= 4) return ['lowE', 'A', 'D', 'G'].slice(0, sc);
         if (sc === 5) return ['low7', 'lowE', 'A', 'D', 'G'];
+        // 6-string bass is B E A D G C: Low B below Low E, and the high C (the
+        // string above G) takes the B slot, as the string above G does on guitar.
+        if (sc === 6) return ['low7', 'lowE', 'A', 'D', 'G', 'B'];
         return ['low8', 'low7', 'lowE', 'A', 'D', 'G'].slice(0, sc);
     }
     if (sc <= 6) return ['lowE', 'A', 'D', 'G', 'B', 'highE'].slice(0, sc);
@@ -203,7 +206,8 @@ function _hwcMergedSlotColors() {
 // stock index order, so we leave the highways on their hand-tuned defaults
 // (byte-identical) unless the user set custom colors. Extended-range charts —
 // 7/8-string guitar and 5/6-string bass — prepend lower strings (Low B/F#),
-// shifting Low E up an index, so their defaults must be name-remapped too.
+// shifting Low E up an index, so their defaults must be name-remapped too
+// (a 6-string bass's high C also takes the B slot).
 function _hwcMappingIsIdentity(sc, isBass) {
     return isBass ? sc <= 4 : sc <= 6;
 }

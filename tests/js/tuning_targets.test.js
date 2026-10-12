@@ -62,6 +62,17 @@ test('displayTuningTargets: bass 4-string is low-to-high notes', () => {
     assert.equal(targets, 'E A D G');
 });
 
+test('displayTuningTargets: 6-string bass is B E A D G C, not guitar pitches', () => {
+    const ctx = { arrangement: 'Bass', stringCount: 6, tuningName: 'Custom Tuning' };
+    assert.equal(displayTuningTargets([0, 0, 0, 0, 0, 0], ctx), 'B E A D G C');
+    assert.equal(displayTuningTargets([-1, -1, -1, -1, -1, -1], { ...ctx, useFlats: true }), 'Bb Eb Ab Db Gb B');
+});
+
+test('displayTuningTargets: a 4-string bass padded to 6 offsets stays E A D G', () => {
+    // Bass tunings arrive padded to 6 entries; the server's stringCount (4) wins.
+    assert.equal(displayTuningTargets([0, 0, 0, 0, 0, 0], { arrangement: 'Bass', stringCount: 4 }), 'E A D G');
+});
+
 test('displayTuningTargetDetails: includes string number and octave in titles', () => {
     const details = displayTuningTargetDetails([-2, 0, 0, 0, -2, -2], LEAD_CTX);
     assert.equal(details.length, 6);

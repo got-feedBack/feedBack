@@ -22,12 +22,15 @@
         7: [35, 40, 45, 50, 55, 59, 64],      // guitar 7: B1 E2 A2 D3 G3 B3 E4
         8: [30, 35, 40, 45, 50, 55, 59, 64],  // guitar 8: F#1 B1 E2 A2 D3 G3 B3 E4
     };
+    const _BASS6_MIDI = [23, 28, 33, 38, 43, 48];  // bass 6: B0 E1 A1 D2 G2 C3
 
     function offsetsToFreqs(offsets, isBass) {
         const len = offsets.length;
         let base;
         if (len === 4 || len === 5) {
             base = isBass ? _BASE_MIDI[len] : _BASE_MIDI[6];
+        } else if (len === 6 && isBass) {
+            base = _BASS6_MIDI;
         } else {
             base = _BASE_MIDI[len] || _BASE_MIDI[6];
         }
