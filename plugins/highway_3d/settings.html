@@ -7,12 +7,12 @@
         (where the extra low strings use the Low B / Low F# slots).
     </p>
     <div class="flex gap-2 mb-3">
-        <select id="hwc-theme-select" onchange="window.hwcOnSelectTheme?.(this.value)"
+        <select id="hwc-theme-select"
             class="w-full bg-dark-700 border border-gray-800 rounded-lg px-3 py-2 text-xs text-gray-300 outline-none">
             <option value="">Default colors</option>
         </select>
-        <button type="button" onclick="window.hwcSaveTheme?.()" class="bg-dark-700 border border-gray-800 rounded-lg px-3 py-2 text-xs text-gray-300">Save as…</button>
-        <button type="button" onclick="window.hwcDeleteTheme?.()" class="bg-dark-700 border border-gray-800 rounded-lg px-3 py-2 text-xs text-gray-400">Delete</button>
+        <button type="button" data-hwc-action="save" class="bg-dark-700 border border-gray-800 rounded-lg px-3 py-2 text-xs text-gray-300">Save as…</button>
+        <button type="button" data-hwc-action="delete" class="bg-dark-700 border border-gray-800 rounded-lg px-3 py-2 text-xs text-gray-400">Delete</button>
     </div>
     <!-- One-click presets: apply a whole named palette to every string at once.
          Buttons are generated from window.feedBack.highwayColors.presets so the
@@ -25,26 +25,24 @@
     </div>
     <div id="hwc-pickers" class="mb-3" style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;"></div>
     <div class="flex items-center gap-2 mb-2">
-        <button type="button" onclick="window.hwcReset?.()" class="bg-dark-700 border border-gray-800 rounded-lg px-3 py-2 text-xs text-gray-300">Reset to defaults</button>
-        <button type="button" onclick="window.hwcCopyShare?.()" class="bg-dark-700 border border-gray-800 rounded-lg px-3 py-2 text-xs text-gray-300">Copy share code</button>
+        <button type="button" data-hwc-action="reset" class="bg-dark-700 border border-gray-800 rounded-lg px-3 py-2 text-xs text-gray-300">Reset to defaults</button>
+        <button type="button" data-hwc-action="copy" class="bg-dark-700 border border-gray-800 rounded-lg px-3 py-2 text-xs text-gray-300">Copy share code</button>
         <span id="hwc-status" class="text-xs text-gray-500"></span>
     </div>
     <div class="flex gap-2">
         <input type="text" id="hwc-import-code" placeholder="Paste a share code…"
             aria-label="Import highway color share code"
             class="w-full bg-dark-700 border border-gray-800 rounded-lg px-3 py-2 text-xs text-gray-300 outline-none">
-        <button type="button" onclick="window.hwcImport?.()" class="bg-dark-700 border border-gray-800 rounded-lg px-3 py-2 text-xs text-gray-300">Import</button>
+        <button type="button" data-hwc-action="import" class="bg-dark-700 border border-gray-800 rounded-lg px-3 py-2 text-xs text-gray-300">Import</button>
     </div>
     <script>
         // The String Colors UI markup lives here (in the 3D Highway plugin), but
         // the color manager (translation table, storage, share codec, apply to
-        // BOTH highways) lives in core app.js. Populate the pickers + saved-theme
-        // dropdown once this panel is injected. Guarded so an older core that
-        // lacks the manager simply renders an empty (inert) panel.
+        // BOTH highways) lives in core static/js/highway-colors.js. Core fills
+        // the pickers + saved-theme dropdown when Settings renders, and its
+        // delegated listener handles the data-hwc-action buttons and the
+        // dropdown. This script only renders the one-click presets.
         (function () {
-            if (typeof window.hwcInitSettingsUI === 'function') {
-                try { window.hwcInitSettingsUI(); } catch (e) { console.warn('[3D-Hwy] hwcInitSettingsUI failed', e); }
-            }
             // Render the one-click preset buttons from core's preset list.
             try {
                 const api = window.feedBack && window.feedBack.highwayColors;

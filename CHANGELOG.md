@@ -313,6 +313,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine (`app.js`, `highway.js`, `playSong`, `showScreen`, the capability registry).
 
 ### Fixed
+- **Highway String Colors buttons work again.** Reset to defaults, Save as…,
+  Delete, Copy share code, Import and the saved-theme dropdown silently did
+  nothing since the string-colour code moved into its own module (#883): the
+  3D Highway settings page still called them through inline
+  `onclick="window.hwc…()"` handlers that no longer existed. Core now handles
+  them with one delegated listener keyed by `data-hwc-action`.
 - **Count-in follows the song's meter and its pickup measure.** The count-in
   (loop wrap, section practice, and the "Countdown before song" setting) always
   clicked exactly four beats, so a 3/4 song was counted in 4/4, and a song

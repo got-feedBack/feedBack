@@ -10,9 +10,10 @@
 //
 // Exports exactly two entry points; the other 43 symbols (the HWC_* tables, the
 // theme store, the picker handlers, the window.feedBack facade) are used nowhere
-// else in core and stay private. The Settings buttons are wired by
-// addEventListener inside hwcInitSettingsUI — there are no inline on*= handlers
-// here, so nothing needs re-exposing on window.
+// else in core and stay private. The Settings buttons (markup in
+// plugins/highway_3d/settings.html) are wired by one delegated click/change
+// listener that initHighwayColors installs on the document, keyed by
+// data-hwc-action. No inline on*= handlers, so nothing is re-exposed on window.
 //
 // It does import uiPrompt from ./dom.js (the "name this theme" prompt) — which is
 // precisely why dom.js was carved out first: without it this module would have
@@ -375,6 +376,39 @@ export function initHighwayColors() {
         window.feedBack.on('song:ready', reapplyHighwayStringColors);
     }
     _hwcInstallFacade();
+    _hwcInstallSettingsDelegation();
+}
+
+// ── Settings buttons: delegated wiring ───────────────────────────────────
+// The String Colors controls live in the 3D Highway plugin's settings page,
+// which is injected asynchronously and re-injected on later visits, so binding
+// per element at a fixed moment is fragile. One document-level listener,
+// installed once at startup, handles every mount. Buttons carry
+// data-hwc-action; the saved-theme <select> is matched by id.
+const _HWC_CLICK_ACTIONS = {
+    save: () => hwcSaveTheme(),
+    delete: () => hwcDeleteTheme(),
+    reset: () => hwcReset(),
+    copy: () => hwcCopyShare(),
+    import: () => hwcImport(),
+};
+let _hwcDelegated = false;
+function _hwcInstallSettingsDelegation() {
+    if (_hwcDelegated || typeof document === 'undefined') return;
+    _hwcDelegated = true;
+    document.addEventListener('click', (e) => {
+        const btn = e.target && e.target.closest ? e.target.closest('[data-hwc-action]') : null;
+        const fn = btn && Object.prototype.hasOwnProperty.call(_HWC_CLICK_ACTIONS, btn.dataset.hwcAction)
+            ? _HWC_CLICK_ACTIONS[btn.dataset.hwcAction] : null;
+        if (fn) {
+            try { fn(); } catch (err) { console.error('[highwayColors] settings action failed', err); }
+        }
+    });
+    document.addEventListener('change', (e) => {
+        if (e.target && e.target.id === 'hwc-theme-select') {
+            try { hwcOnSelectTheme(e.target.value); } catch (err) { console.error('[highwayColors] theme select failed', err); }
+        }
+    });
 }
 
 // ── Public plugin API: window.feedBack.highwayColors ─────────────────────
