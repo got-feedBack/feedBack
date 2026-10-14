@@ -943,6 +943,11 @@ async function _renderTuningList() {
             const offs = window.parseRawTuningOffsets(t.offsets);
             const notes = offs ? window.displayTuningTargets(offs, { tuningName: t.name }) : '';
             if (notes) label = 'Custom · ' + notes;
+        } else if (t.offsets && typeof window.parseRawTuningOffsets === 'function') {
+            // A 7/8-string named tuning gets its own entry (keyed on offsets) —
+            // say so, or it reads as a duplicate of the 6-string one.
+            const offs = window.parseRawTuningOffsets(t.offsets);
+            if (offs && offs.length >= 7) label = t.name + ' · ' + offs.length + '-string';
         }
         const checked = _libFilters.tunings.includes(val);
         const row = document.createElement('label');

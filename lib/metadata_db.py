@@ -103,13 +103,20 @@ def _tuning_group_key_sql(alias: str, perspective: str = DEFAULT_PERSPECTIVE) ->
     subquery, where bare column names would resolve against the wrong scope."""
     persp = _perspective(perspective)
     name_sql, offsets_sql, _ = _effective_tuning_cols_sql(alias, perspective)
+    # 7/8-string tunings are named from their own low string (#1074), so a
+    # 7-string "Drop A" shares its NAME with the 6-string one but not its
+    # pitches. Key them on offsets like customs so the two never merge into
+    # one facet entry. The raw offsets are space-separated: 6+ spaces = 7+ strings.
+    raw_offsets = f"COALESCE({offsets_sql}, '')"
+    extended_sql = f"(LENGTH({raw_offsets}) - LENGTH(REPLACE({raw_offsets}, ' ', ''))) >= 6"
     if persp.column_prefix:
         # Fall back to the offsets string when the canonical key is absent
         # (a fallback row borrowing the guitar tuning, or a row scanned before
         # the key column existed) so a custom never groups under an empty key.
         offsets_sql = (f"COALESCE(NULLIF({alias}.{persp.column('key')}, ''), "
                        f"{offsets_sql})")
-    return (f"CASE WHEN {name_sql} = 'Custom Tuning' AND COALESCE({offsets_sql}, '') != '' "
+    return (f"CASE WHEN ({name_sql} = 'Custom Tuning' OR {extended_sql}) "
+            f"AND COALESCE({offsets_sql}, '') != '' "
             f"THEN {offsets_sql} ELSE {name_sql} END")
 
 

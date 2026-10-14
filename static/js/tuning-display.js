@@ -26,6 +26,20 @@ function _looksLikeRawTuningOffsets(str) {
 
 function _tuningNameFromOffsets(offsets) {
     if (!offsets || !offsets.length) return '';
+    // 7- and 8-string charts are rooted on low B / low F# (the feedpak
+    // extended-range convention), so the E-rooted names below would call a
+    // 7-string Drop A "Drop D". Name them from their real lowest string instead,
+    // matching plugins/tuner/utils/tuning-utils.js.
+    const extendedRoot = { 7: 7, 8: 2 }[offsets.length];
+    if (extendedRoot !== undefined) {
+        const noteNames = ['E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B', 'C', 'C#', 'D', 'Eb'];
+        const lowNote = (o) => noteNames[(((extendedRoot + o) % 12) + 12) % 12];
+        if (offsets.every((o) => o === offsets[0])) return lowNote(offsets[0]) + ' Standard';
+        if (offsets[0] === offsets[1] - 2 && offsets.slice(1).every((o) => o === offsets[1])) {
+            return 'Drop ' + lowNote(offsets[0]);
+        }
+        return 'Custom Tuning';
+    }
     const standard = {
         0: 'E Standard', '-1': 'Eb Standard', '-2': 'D Standard',
         '-3': 'C# Standard', '-4': 'C Standard', '-5': 'B Standard',

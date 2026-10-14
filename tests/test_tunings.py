@@ -101,29 +101,34 @@ def test_fallback_with_seven_strings():
     assert tuning_name([-5, 0, 0, 0, 0, 0, 0]) == "Custom Tuning"
 
 
-# ── 7+-string regression tests (#43) ─────────────────────────────────────────
+# ── 7+-string regression tests (#43, #1074) ──────────────────────────────────
 # The 6-string naming conventions (E Standard, Drop D, Double Drop D, etc.)
-# don't generalize — a 7-string all-zeros has a low B, not an E. All three
-# pattern checks are gated on len == 6; 7+ falls through to the numeric fallback.
+# don't generalize — a 7-string all-zeros has a low B, not an E (#43). 7- and
+# 8-string charts are named from their real low string instead (B / F#, #1074):
+# never with the E-rooted label they used to get.
 
-SEVEN_STRING_FALLBACK_CASES = [
+EXTENDED_RANGE_CASES = [
     # Previously mislabeled "E Standard" because len >= 6 + all-same matched.
-    ([0, 0, 0, 0, 0, 0, 0], "Custom Tuning"),
+    ([0, 0, 0, 0, 0, 0, 0], "B Standard"),
     # Previously mislabeled "Eb Standard".
-    ([-1, -1, -1, -1, -1, -1, -1], "Custom Tuning"),
+    ([-1, -1, -1, -1, -1, -1, -1], "Bb Standard"),
     # Previously mislabeled "Drop D" because the drop auto-generator matched
-    # (offsets[0] == offsets[1] - 2, rest all equal).
-    ([-2, 0, 0, 0, 0, 0, 0], "Custom Tuning"),
+    # (offsets[0] == offsets[1] - 2, rest all equal). Low B dropped = Drop A.
+    ([-2, 0, 0, 0, 0, 0, 0], "Drop A"),
     # Previously mislabeled "Drop C" similarly.
-    ([-4, -2, -2, -2, -2, -2, -2], "Custom Tuning"),
+    ([-4, -2, -2, -2, -2, -2, -2], "Drop G"),
     # Previously mislabeled "Double Drop D" because the named-dict lookup used
     # tuple(offsets[:6]) which silently truncated the seventh offset.
     ([-2, -2, 0, 0, 0, 0, 0], "Custom Tuning"),
+    # 8-string base is F# B E A D G B E.
+    ([0, 0, 0, 0, 0, 0, 0, 0], "F# Standard"),
+    ([-2, 0, 0, 0, 0, 0, 0, 0], "Drop E"),
+    ([-2, -2, 0, 0, 0, 0, 0, 0], "Custom Tuning"),
 ]
 
 
-@pytest.mark.parametrize("offsets,expected", SEVEN_STRING_FALLBACK_CASES)
-def test_seven_string_falls_through_to_fallback(offsets, expected):
+@pytest.mark.parametrize("offsets,expected", EXTENDED_RANGE_CASES)
+def test_extended_range_named_from_low_string(offsets, expected):
     assert tuning_name(offsets) == expected
 
 

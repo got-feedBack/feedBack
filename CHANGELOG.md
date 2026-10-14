@@ -313,6 +313,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine (`app.js`, `highway.js`, `playSong`, `showScreen`, the capability registry).
 
 ### Fixed
+- **7- and 8-string tunings get their real names (#1074).** The player HUD
+  named every chart as if its lowest string were a low E, so a 7-string Drop A
+  (`[-2,0,0,0,0,0,0]`) read "Drop D", and the library indexed every 7/8-string
+  chart as "Custom Tuning". Both the client and the library scanner now name
+  7- and 8-string charts from their low B / low F#, the same way the tuner
+  plugin already does. In the Tuning filter they stay separate from the
+  6-string tuning of the same name (labelled e.g. "Drop A · 7-string"). Run a
+  Full Rescan to pick up the new names for songs already in the library.
 - **Count-in follows the song's meter and its pickup measure.** The count-in
   (loop wrap, section practice, and the "Countdown before song" setting) always
   clicked exactly four beats, so a 3/4 song was counted in 4/4, and a song

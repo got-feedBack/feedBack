@@ -644,8 +644,20 @@ def bass_tuning_key(offsets: list[int]) -> str:
 def tuning_name(offsets: list[int]) -> str:
     # The pattern checks below are gated on `len(offsets)` being 6 or 4. The
     # naming conventions are E-standard-rooted — e.g. a 7-string all-zeros
-    # tuning has a low B, not an E, so labeling it "E Standard" would be wrong.
-    # 7+-string community content falls through to the numeric fallback (#43).
+    # tuning has a low B, not an E, so labeling it "E Standard" would be wrong
+    # (#43). 7- and 8-string charts are instead named from their real low
+    # string (B / F#, the feedpak extended-range base), matching the client's
+    # tuning-display.js and the tuner plugin (#1074); anything else on them is
+    # "Custom Tuning".
+    extended_root = {7: 7, 8: 2}.get(len(offsets))
+    if extended_root is not None:
+        note_names = ["E", "F", "F#", "G", "Ab", "A", "Bb", "B", "C", "C#", "D", "Eb"]
+        low = note_names[(extended_root + offsets[0]) % 12]
+        if all(o == offsets[0] for o in offsets):
+            return f"{low} Standard"
+        if offsets[0] == offsets[1] - 2 and all(o == offsets[1] for o in offsets[1:]):
+            return f"Drop {low}"
+        return "Custom Tuning"
     #
     # Length 4 is accepted because a bass's open strings (EADG) are the low
     # four of the guitar, so the same standard/drop names apply at the same

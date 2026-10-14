@@ -80,6 +80,18 @@ test('displayTuningName derives readable names from offsets when value missing',
     assert.equal(displayTuningName(undefined, [-2, 0, 0, 0, 0, 0]), 'Drop D');
 });
 
+test('displayTuningName names 7/8-string tunings from their low B / F# (feedBack#1074)', () => {
+    // 7-string base is B E A D G B E: dropping the low B two semitones is Drop A.
+    assert.equal(displayTuningName(null, [-2, 0, 0, 0, 0, 0, 0]), 'Drop A');
+    assert.equal(displayTuningName('-2 0 0 0 0 0 0'), 'Drop A');
+    assert.equal(displayTuningName(null, [0, 0, 0, 0, 0, 0, 0]), 'B Standard');
+    assert.equal(displayTuningName(null, [-1, -1, -1, -1, -1, -1, -1]), 'Bb Standard');
+    // 8-string base is F# B E A D G B E.
+    assert.equal(displayTuningName(null, [-2, 0, 0, 0, 0, 0, 0, 0]), 'Drop E');
+    assert.equal(displayTuningName(null, [0, 0, 0, 0, 0, 0, 0, 0]), 'F# Standard');
+    assert.equal(displayTuningName(null, [-2, 0, 0, 0, -2, 0, 0]), 'Custom Tuning');
+});
+
 test('displayTuningName returns Custom Tuning for unknown offsets', () => {
     assert.equal(displayTuningName(null, [-2, 0, 0, 0, -2]), 'Custom Tuning');
     assert.equal(displayTuningName('-2 0 0 0 -2', [-2, 0, 0, 0, -2]), 'Custom Tuning');
