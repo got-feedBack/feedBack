@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Tuning chip in the Songs list view (#987).** The tree view row now shows
+  the song's tuning next to its arrangement chips, so you can see (and build
+  playlists by) tuning without opening each song. It reads the same label as
+  the grid card's tuning chip, including the bass/rhythm perspective, and a
+  Custom Tuning spells out its notes on hover.
 - **Core reader for source rigs (feedpak 1.18.0).** A pack can declare what a
   MIDI part should sound like by binding a rig; core now reads that binding and
   hands it to the client instead of dropping it. Three parts: the

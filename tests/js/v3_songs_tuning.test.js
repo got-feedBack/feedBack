@@ -114,3 +114,62 @@ test('missing tuning hides badge', () => {
     const html = renderSongCardBadge({ tuning_name: '' }, helpers);
     assert.equal(html, '');
 });
+
+// The tree (list) view row gets its own tuning chip (feedBack#987). Run the real
+// helper out of songs.js against the real tuning-display helpers.
+function loadTreeTuningChip(perspectiveField = null) {
+    const src = fs.readFileSync(SONGS_JS, 'utf8');
+    const block = [
+        extractBlock(src, 'function treeTuningChipHtml('),
+        extractBlock(src, 'function shownTuningName('),
+        extractBlock(src, 'function shownTuningOffsets('),
+    ].join('\n');
+    const sandbox = {
+        window: {
+            displayTuningName: helpers.displayTuningName,
+            displayTuningTargets: helpers.displayTuningTargets,
+            parseRawTuningOffsets: helpers.parseRawTuningOffsets,
+        },
+        perspectiveTuningField: () => perspectiveField,
+        esc: (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
+            { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])),
+        exports: {},
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(block + '\nexports.treeTuningChipHtml = treeTuningChipHtml;', sandbox);
+    return sandbox.exports.treeTuningChipHtml;
+}
+
+test('tree row renders the tuning chip (feedBack#987)', () => {
+    const src = fs.readFileSync(SONGS_JS, 'utf8');
+    const row = extractBlock(src, 'function treeSongRowHtml(');
+    assert.match(row, /const tuningChip = treeTuningChipHtml\(s\);/);
+    // ...and the chip is actually concatenated into the returned markup.
+    assert.match(row, /\+\s*tuningChip\s*\+/);
+});
+
+test('tree tuning chip shows the named tuning', () => {
+    const chip = loadTreeTuningChip();
+    const html = chip({ tuning_name: 'Drop D' });
+    assert.match(html, /data-tree-tuning/);
+    assert.match(html, />Drop D</);
+});
+
+test('tree tuning chip names raw offsets and spells out custom notes in its title', () => {
+    const chip = loadTreeTuningChip();
+    assert.match(chip({ tuning_name: '-1 -1 -1 -1 -1 -1' }), />Eb Standard</);
+    const custom = chip({ tuning_name: '-2 0 0 0 -2 0 1', tuning_offsets: '-2 0 0 0 -2 0 1' });
+    assert.match(custom, />Custom Tuning</);
+    assert.match(custom, /title="Custom Tuning: /);
+    assert.doesNotMatch(custom, />-2 0 0 0 -2 0 1</);
+});
+
+test('tree tuning chip follows the bass perspective like the card', () => {
+    const chip = loadTreeTuningChip('bass_tuning_name');
+    const html = chip({ tuning_name: 'E Standard', bass_tuning_name: 'Drop D' });
+    assert.match(html, />Drop D</);
+});
+
+test('tree tuning chip is hidden when the song has no tuning', () => {
+    assert.equal(loadTreeTuningChip()({ tuning_name: '' }), '');
+});

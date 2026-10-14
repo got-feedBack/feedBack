@@ -2480,8 +2480,28 @@
     // One list-row of a song — shared by the tree view and the artist page's
     // song list, so wireCards() gives both the same play/chips/fav/save/⋮
     // behaviour from one markup source.
+    // Tuning chip for a list row — the grid card shows the tuning on its art,
+    // but the tree view had no way to see it without opening the song (#987).
+    // Same label + perspective as the card, so the two views agree.
+    function treeTuningChipHtml(s) {
+        const shownTuning = shownTuningName(s);
+        const label = (typeof window.displayTuningName === 'function')
+            ? window.displayTuningName(shownTuning) : (shownTuning || '');
+        if (!label) return '';
+        let title = label;
+        if (label === 'Custom Tuning' && typeof window.parseRawTuningOffsets === 'function'
+                && typeof window.displayTuningTargets === 'function') {
+            const offs = window.parseRawTuningOffsets(shownTuningOffsets(s))
+                || window.parseRawTuningOffsets(shownTuning);
+            const notes = offs ? window.displayTuningTargets(offs, { tuningName: label }) : '';
+            if (notes) title = 'Custom Tuning: ' + notes;
+        }
+        return '<span data-tree-tuning class="text-[0.5625rem] font-bold px-1 py-0.5 rounded shrink-0 bg-fb-mid text-black" title="' + esc(title) + '">' + esc(label) + '</span>';
+    }
+
     function treeSongRowHtml(s) {
         const k = cardKey(s); const fl = fmtLabel(s); const chips = arrChipsHtml(s); const sel = state.selected.has(k);
+        const tuningChip = treeTuningChipHtml(s);
         // Display-only checkbox (pointer-events-none); the row's
         // capture-phase select handler (render()) owns the toggle.
         const checkbox = state.selectMode
@@ -2492,6 +2512,7 @@
         checkbox +
         '<img src="' + esc(artUrl(s)) + '" alt="" loading="lazy" decoding="async" class="w-8 h-8 rounded object-cover bg-fb-card cursor-pointer' + (sel ? ' ring-2 ring-fb-primary' : '') + '" data-v3-play onerror="this.style.visibility=\'hidden\'">' +
         '<span class="flex-1 min-w-0 cursor-pointer" data-v3-play><span class="block text-sm text-fb-text truncate">' + esc(s.title) + '</span></span>' +
+        tuningChip +
         (chips ? '<span class="hidden sm:flex items-center gap-1 shrink-0">' + chips + '</span>' : '') +
         (fl ? '<span class="text-[0.5625rem] font-bold px-1 py-0.5 rounded shrink-0 ' + (fl === 'FEEDPAK' ? 'bg-fb-primary/20 text-fb-primary' : 'bg-fb-card text-fb-textDim') + '">' + fl + '</span>' : '') +
         accuracyBadge(k, 'tree') +
