@@ -957,3 +957,105 @@ def test_reset_with_no_config_is_noop(client, tmp_path):
     r = client.post("/api/settings/reset", json={"keys": ["master_difficulty"]})
     assert r.status_code == 200
     assert r.json()["reset"] == []
+
+
+# ── FEEDBACK_DLC_DIR_FALLBACK — launcher default that never pins (#1063) ────
+
+def _import_server(tmp_path, monkeypatch, dlc_env=None, fallback_env=None):
+    monkeypatch.setenv("CONFIG_DIR", str(tmp_path))
+    if dlc_env is None:
+        monkeypatch.delenv("DLC_DIR", raising=False)
+    else:
+        monkeypatch.setenv("DLC_DIR", dlc_env)
+    if fallback_env is None:
+        monkeypatch.delenv("FEEDBACK_DLC_DIR_FALLBACK", raising=False)
+    else:
+        monkeypatch.setenv("FEEDBACK_DLC_DIR_FALLBACK", fallback_env)
+    sys.modules.pop("server", None)
+    return importlib.import_module("server")
+
+
+def _close_server(mod):
+    conn = getattr(getattr(mod, "meta_db", None), "conn", None)
+    if conn is not None:
+        getattr(sys.modules.get("server"), "_join_background_db_threads", lambda: None)()
+        conn.close()
+
+
+def test_get_dlc_dir_fallback_used_when_config_path_missing(tmp_path, monkeypatch):
+    """A saved dlc_dir that no longer exists falls through to the fallback."""
+    fallback = tmp_path / "bundled"
+    fallback.mkdir()
+    mod = _import_server(tmp_path, monkeypatch, fallback_env=str(fallback))
+    try:
+        (tmp_path / "config.json").write_text(json.dumps({"dlc_dir": str(tmp_path / "moved")}))
+        assert mod._get_dlc_dir() == fallback
+    finally:
+        _close_server(mod)
+
+
+def test_get_dlc_dir_config_wins_over_fallback_without_restart(tmp_path, monkeypatch):
+    """Once Settings saves a real folder, the next lookup uses it, not the fallback."""
+    fallback = tmp_path / "bundled"
+    fallback.mkdir()
+    new_lib = tmp_path / "new_lib"
+    new_lib.mkdir()
+    mod = _import_server(tmp_path, monkeypatch, fallback_env=str(fallback))
+    try:
+        (tmp_path / "config.json").write_text(json.dumps({"dlc_dir": str(tmp_path / "moved")}))
+        assert mod._get_dlc_dir() == fallback
+        r = settings_router.save_settings({"dlc_dir": str(new_lib)})
+        assert "warnings" not in r
+        assert mod._get_dlc_dir() == new_lib
+    finally:
+        _close_server(mod)
+
+
+def test_get_dlc_dir_explicit_env_still_wins_over_fallback(tmp_path, monkeypatch):
+    env_dir = tmp_path / "env_dlc"
+    env_dir.mkdir()
+    fallback = tmp_path / "bundled"
+    fallback.mkdir()
+    mod = _import_server(tmp_path, monkeypatch, dlc_env=str(env_dir), fallback_env=str(fallback))
+    try:
+        assert mod._get_dlc_dir() == env_dir
+    finally:
+        _close_server(mod)
+
+
+def test_get_dlc_dir_ignores_missing_fallback(tmp_path, monkeypatch):
+    mod = _import_server(tmp_path, monkeypatch, fallback_env=str(tmp_path / "nope"))
+    try:
+        assert mod._get_dlc_dir() is None
+    finally:
+        _close_server(mod)
+
+
+def test_save_dlc_dir_warns_when_dlc_dir_env_pins_library(tmp_path, monkeypatch):
+    """Saving a different folder while DLC_DIR is set stores it but says it won't be scanned."""
+    env_dir = tmp_path / "env_dlc"
+    env_dir.mkdir()
+    other = tmp_path / "other"
+    other.mkdir()
+    mod = _import_server(tmp_path, monkeypatch, dlc_env=str(env_dir))
+    try:
+        r = settings_router.save_settings({"dlc_dir": str(other)})
+        assert "error" not in r
+        assert any("DLC_DIR" in w for w in r["warnings"])
+        assert "DLC_DIR" in r["message"]
+        saved = json.loads((tmp_path / "config.json").read_text())
+        assert saved["dlc_dir"] == str(other)
+        assert mod._get_dlc_dir() == env_dir
+    finally:
+        _close_server(mod)
+
+
+def test_save_dlc_dir_no_warning_when_it_matches_dlc_dir_env(tmp_path, monkeypatch):
+    env_dir = tmp_path / "env_dlc"
+    env_dir.mkdir()
+    mod = _import_server(tmp_path, monkeypatch, dlc_env=str(env_dir))
+    try:
+        r = settings_router.save_settings({"dlc_dir": str(env_dir)})
+        assert "warnings" not in r
+    finally:
+        _close_server(mod)

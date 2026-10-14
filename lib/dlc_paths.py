@@ -37,6 +37,9 @@ def _get_dlc_dir(cfg: dict | None = None) -> Path | None:
             p = Path(raw)
             if p.is_dir():
                 return p
+    fallback = (appstate.dlc_dir_fallback_env or "").strip()
+    if fallback and Path(fallback).is_dir():
+        return Path(fallback)
     return None
 
 

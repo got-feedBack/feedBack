@@ -83,6 +83,8 @@ config_dir = None
 dlc_dir = None          # the DLC_DIR env value as a Path (Path("") if unset)
 dlc_dir_env = None      # the raw DLC_DIR env string, "" if unset — distinguishes
                         # "unset" from Path("")→"." (see dlc_paths._get_dlc_dir)
+dlc_dir_fallback_env = None  # raw FEEDBACK_DLC_DIR_FALLBACK, "" if unset — used
+                             # only when config.json has no usable dlc_dir
 # Cache/asset dirs. static_dir + sloppak_cache_dir are patched via
 # `setattr(server, …)` in a few tests, so a router reading them here needs those
 # setattr sites retargeted to `setattr(appstate, …)` in the same PR (ws_highway
@@ -130,7 +132,7 @@ server_root = None
 _SLOTS = frozenset({
     "meta_db", "audio_effect_mappings", "tuning_providers",
     "library_providers", "local_library_provider",
-    "config_dir", "dlc_dir", "dlc_dir_env",
+    "config_dir", "dlc_dir", "dlc_dir_env", "dlc_dir_fallback_env",
     "static_dir", "sloppak_cache_dir", "audio_cache_dir",
     "get_progression_content", "builtin_diagnostic_filename",
     "running_version",

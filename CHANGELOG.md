@@ -313,6 +313,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine (`app.js`, `highway.js`, `playSong`, `showScreen`, the capability registry).
 
 ### Fixed
+- **A library folder saved in Settings is scanned again after a launch with a
+  missing folder (#1063).** When the saved folder didn't exist at startup (moved,
+  or on an unplugged drive), the desktop app handed the backend its default
+  library as `DLC_DIR`, which outranks Settings, so every Rescan kept reading the
+  default folder until the next restart. Launchers now pass that default as
+  `FEEDBACK_DLC_DIR_FALLBACK`, used only while the saved folder is unusable. An
+  explicit `DLC_DIR` still wins, and saving a different folder while it is set
+  now says so instead of reporting a plain success.
 - **Count-in follows the song's meter and its pickup measure.** The count-in
   (loop wrap, section practice, and the "Countdown before song" setting) always
   clicked exactly four beats, so a 3/4 song was counted in 4/4, and a song

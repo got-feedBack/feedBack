@@ -78,6 +78,16 @@ def save_settings(data: dict):
                 count = sum(1 for f in Path(dlc_path).iterdir()
                             if f.suffix.lower() in sloppak_mod.SONG_EXTS)
                 messages.append(f"DLC folder: {count} song files found")
+                # An explicit DLC_DIR outranks config.json in _get_dlc_dir, so
+                # the saved path is stored but not scanned. Say so instead of
+                # reporting a plain success (feedBack#1063).
+                env_dir = appstate.dlc_dir
+                if (appstate.dlc_dir_env and env_dir.is_dir()
+                        and Path(dlc_path).resolve() != env_dir.resolve()):
+                    dlc_warnings.append(
+                        f"The library folder is set by the DLC_DIR environment "
+                        f"variable ({appstate.dlc_dir_env}), so the app keeps "
+                        f"scanning that folder until DLC_DIR is unset")
             else:
                 # A non-resolving DLC path (a stale value, an unplugged
                 # external/network drive, or a path carried over from another

@@ -115,6 +115,11 @@ except OSError:
 # falls through to the config.json fallback.
 _DLC_DIR_ENV = os.environ.get("DLC_DIR", "").strip()
 DLC_DIR = Path(_DLC_DIR_ENV) if _DLC_DIR_ENV else Path("")
+# A launcher-supplied default library (the desktop app's bundled folder). Unlike
+# DLC_DIR it never overrides config.json: it is only used while the saved
+# dlc_dir is missing or not a directory, so a Settings change still takes effect
+# on the next scan instead of being pinned until restart (feedBack#1063).
+_DLC_DIR_FALLBACK_ENV = (getenv_compat("FEEDBACK_DLC_DIR_FALLBACK", "") or "").strip()
 CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", str(Path.home() / ".local" / "share" / "feedback")))
 
 # Writable cache directories (use CONFIG_DIR, not STATIC_DIR which may be read-only)
@@ -143,6 +148,7 @@ appstate.configure(
     config_dir=CONFIG_DIR,
     dlc_dir=DLC_DIR,
     dlc_dir_env=_DLC_DIR_ENV,
+    dlc_dir_fallback_env=_DLC_DIR_FALLBACK_ENV,
     static_dir=STATIC_DIR,
     sloppak_cache_dir=SLOPPAK_CACHE_DIR,
     audio_cache_dir=AUDIO_CACHE_DIR,
