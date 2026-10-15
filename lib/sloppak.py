@@ -988,6 +988,19 @@ def _resolve_drum_parts(
     return drum_tab_data, parts
 
 
+# Library arrangement order: Lead > Combo > Rhythm > Bass > anything else
+# (stable). extract_meta() indexes the library in this order and load_song()
+# MUST produce the same one: the library's arrangement chips and playlists'
+# pinned arrangements hand that index to the highway WS as `?arrangement=N`,
+# which indexes song.arrangements. Manifest order is the author's, not ours to
+# rely on.
+_ARRANGEMENT_PRIORITY = {"Lead": 0, "Combo": 1, "Rhythm": 2, "Bass": 3}
+
+
+def _arrangement_rank(name: str) -> int:
+    return _ARRANGEMENT_PRIORITY.get(name, 99)
+
+
 def load_song(
     filename: str,
     dlc_root: Path,
@@ -1136,6 +1149,15 @@ def load_song(
             else:
                 log.warning("sloppak: notation %r failed validation: %s", notation_rel, reason)
     notation_by_id_data = notation_acc if any_notation else None
+
+    # Library order, not manifest order — see _ARRANGEMENT_PRIORITY. Sort the
+    # parallel id list with it: ws_highway resolves notation by song.arrangements
+    # index through arrangement_ids.
+    if song.arrangements:
+        _order = sorted(range(len(song.arrangements)),
+                        key=lambda i: _arrangement_rank(song.arrangements[i].name))
+        song.arrangements = [song.arrangements[i] for i in _order]
+        arrangement_ids_acc = [arrangement_ids_acc[i] for i in _order]
 
     # Optional drum_tab.json — top-level manifest key per sloppak-spec §5.3.
     # The file lives off to the side (its own JSON), and the manifest opts in
@@ -1526,6 +1548,7 @@ def extract_meta(path: Path) -> dict:
     arr_list = manifest.get("arrangements", []) or []
 
     arrangements = []
+    drum_entries: set[int] = set()
     for i, entry in enumerate(arr_list):
         arrangements.append(
             {
@@ -1534,9 +1557,12 @@ def extract_meta(path: Path) -> dict:
                 "notes": 0,  # unknown without loading; fine for the index
             }
         )
-    # Sort like archive path: Lead > Combo > Rhythm > Bass
-    priority = {"Lead": 0, "Combo": 1, "Rhythm": 2, "Bass": 3}
-    arrangements.sort(key=lambda a: priority.get(a["name"], 99))
+        if isinstance(entry, dict) and str(entry.get("type") or "").strip().lower() in ("drums", "drum"):
+            drum_entries.add(i)
+    # Same order as load_song() (see _ARRANGEMENT_PRIORITY). `type: drums`
+    # entries never become a song.arrangements entry, so they go LAST: ahead of
+    # a fretted part they would shift its index off the one the highway loads.
+    arrangements.sort(key=lambda a: (a["index"] in drum_entries, _arrangement_rank(a["name"])))
     for i, a in enumerate(arrangements):
         a["index"] = i
 
