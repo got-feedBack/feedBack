@@ -313,6 +313,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine (`app.js`, `highway.js`, `playSong`, `showScreen`, the capability registry).
 
 ### Fixed
+- **Clicking a plugin's pedal opens its settings, wherever they live (#746).**
+  Plugins that file their settings under a Settings tab (`settings.category`,
+  e.g. 3D Highway, 3D Drum Highway and 3D Keys Highway under Graphics) were
+  only looked up in the Plugins tab, so the pedal dropped you on whatever
+  Settings tab was last open. The pedal now finds the panel in any tab,
+  switches to that tab, and expands it.
 - **Count-in follows the song's meter and its pickup measure.** The count-in
   (loop wrap, section practice, and the "Countdown before song" setting) always
   clicked exactly four beats, so a 3/4 song was counted in 4/4, and a song

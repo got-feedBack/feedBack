@@ -252,17 +252,40 @@
         host._t = setTimeout(function () { host.classList.add('hidden'); }, 3000);
     }
 
-    // Open a plugin's settings panel: switch to the legacy Settings screen (it
-    // mounts each plugin's settings.html as a <details data-plugin-id> under
-    // #plugin-settings — app.js), then expand + scroll to it. Retries a few
+    // A plugin's settings <details data-plugin-id> lives in #plugin-settings,
+    // or in a per-tab container (#plugin-settings-graphics / -mic /
+    // -progression) when its manifest sets settings.category — see
+    // _pluginSettingsTarget in js/plugin-loader.js. Search them all. Match by
+    // iterating (not an interpolated selector) so an unusual plugin id with
+    // quotes/brackets can't break querySelector or inject a selector.
+    function findSettingsPanel(id) {
+        var all = document.querySelectorAll('#settings details[data-plugin-id], #plugin-settings details[data-plugin-id]');
+        for (var i = 0; i < all.length; i++) { if (all[i].getAttribute('data-plugin-id') === id) return all[i]; }
+        return null;
+    }
+
+    // Bring the panel's Settings tab to the front: a panel in an inactive
+    // tab is in the DOM but hidden, so expanding it alone shows nothing.
+    // Clicking the tab button goes through settings.js's own activateTab().
+    function showSettingsTabFor(details) {
+        var panel = details && details.closest ? details.closest('.fb-tabpanel') : null;
+        var tab = panel && panel.dataset ? panel.dataset.tab : null;
+        if (!tab) return;
+        var btns = document.querySelectorAll('#settings-tabbar .fb-tab');
+        for (var i = 0; i < btns.length; i++) {
+            if (btns[i].dataset && btns[i].dataset.tab === tab) { btns[i].click(); return; }
+        }
+    }
+
+    // Open a plugin's settings panel: switch to the Settings screen (it mounts
+    // each plugin's settings.html as a <details data-plugin-id> — app.js),
+    // bring its tab to the front, then expand + scroll to it. Retries a few
     // frames in case the details haven't hydrated yet.
     function openSettingsPanel(id, tries) {
         var t = tries == null ? 12 : tries;
-        // Match by iterating (not an interpolated selector) so an unusual plugin
-        // id with quotes/brackets can't break querySelector or inject a selector.
-        var d = null, all = document.querySelectorAll('#plugin-settings details[data-plugin-id]');
-        for (var i = 0; i < all.length; i++) { if (all[i].getAttribute('data-plugin-id') === id) { d = all[i]; break; } }
+        var d = findSettingsPanel(id);
         if (d) {
+            showSettingsTabFor(d);
             d.open = true;
             try { d.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) { d.scrollIntoView(); }
             return;
@@ -548,6 +571,8 @@
         // Pure helpers exposed for unit tests.
         _test: {
             categoryOf: categoryOf, thumbUrl: thumbUrl, settingsTarget: settingsTarget,
+            findSettingsPanel: findSettingsPanel, showSettingsTabFor: showSettingsTabFor,
+            openPluginSettings: openPluginSettings,
             clampToBoard: clampToBoard, defaultSlot: defaultSlot,
             loadLayout: loadLayout, saveLayout: saveLayout,
             frameFor: frameFor, pickFrame: pickFrame, frameUrl: frameUrl,

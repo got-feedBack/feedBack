@@ -29,12 +29,13 @@ function loadPage(opts) {
     };
     win.addEventListener = () => {};
     win.matchMedia = () => ({ matches: false });
-    const doc = {
+    const doc = Object.assign({
         readyState: 'complete',
         getElementById: () => null,          // render() bails: no #v3-plugins
         querySelector: () => null,
+        querySelectorAll: () => [],
         addEventListener: () => {},
-    };
+    }, opts.doc || {});
     const ctx = {
         window: win, document: doc, console,
         fetch: () => Promise.reject(new Error('no fetch in test')),
@@ -151,4 +152,108 @@ test('DRAG_THRESHOLD is a small positive pixel budget', () => {
     const { t } = loadPage();
     assert.equal(typeof t.DRAG_THRESHOLD, 'number');
     assert.ok(t.DRAG_THRESHOLD > 0 && t.DRAG_THRESHOLD < 20);
+});
+
+// ── Settings panel lookup across tabs (#746) ────────────────────────────────
+// A plugin with settings.category (e.g. the 3D highways → "graphics") mounts
+// its <details> in #plugin-settings-graphics, not #plugin-settings. The pedal
+// must find it there and bring its tab to the front.
+
+function fakeSettingsDom() {
+    const clicks = [];
+    const panel = (tab) => ({ dataset: { tab } });
+    const details = (id, tab) => ({
+        getAttribute: (k) => (k === 'data-plugin-id' ? id : null),
+        closest: (sel) => (sel === '.fb-tabpanel' ? panel(tab) : null),
+    });
+    const all = [details('tuner', 'plugins'), details('highway_3d', 'graphics')];
+    const tabs = ['gameplay', 'graphics', 'plugins'].map((tab) => ({
+        dataset: { tab }, click: () => clicks.push(tab),
+    }));
+    const queries = [];
+    const doc = {
+        querySelectorAll: (sel) => {
+            queries.push(sel);
+            if (sel.indexOf('details[data-plugin-id]') !== -1) return all;
+            if (sel === '#settings-tabbar .fb-tab') return tabs;
+            return [];
+        },
+    };
+    return { doc, clicks, queries };
+}
+
+test('findSettingsPanel: finds a panel mounted in a per-tab container', () => {
+    const dom = fakeSettingsDom();
+    const { t } = loadPage({ doc: dom.doc });
+    const d = t.findSettingsPanel('highway_3d');
+    assert.ok(d, 'graphics-tab panel not found');
+    assert.equal(d.getAttribute('data-plugin-id'), 'highway_3d');
+    // The lookup must not be limited to #plugin-settings.
+    assert.ok(dom.queries.some((q) => q.indexOf('#settings details[data-plugin-id]') !== -1));
+    assert.equal(t.findSettingsPanel('missing'), null);
+});
+
+test('showSettingsTabFor: clicks the tab that holds the panel', () => {
+    const dom = fakeSettingsDom();
+    const { t } = loadPage({ doc: dom.doc });
+    t.showSettingsTabFor(t.findSettingsPanel('highway_3d'));
+    assert.deepEqual(dom.clicks, ['graphics']);
+    t.showSettingsTabFor(t.findSettingsPanel('tuner'));
+    assert.deepEqual(dom.clicks, ['graphics', 'plugins']);
+});
+
+test('showSettingsTabFor: no-op outside a tab panel (classic settings page)', () => {
+    const dom = fakeSettingsDom();
+    const { t } = loadPage({ doc: dom.doc });
+    t.showSettingsTabFor({ closest: () => null });
+    t.showSettingsTabFor(null);
+    assert.deepEqual(dom.clicks, []);
+});
+
+// Drive the handler the pedal's click/keydown calls, so the test fails if
+// openSettingsPanel ever stops bringing the panel's tab to the front.
+function fakePedalDom() {
+    const events = [];
+    const details = (id, tab) => {
+        const d = {
+            getAttribute: (k) => (k === 'data-plugin-id' ? id : null),
+            closest: (sel) => (sel === '.fb-tabpanel' ? { dataset: { tab } } : null),
+            scrollIntoView: () => events.push('scroll:' + id),
+        };
+        Object.defineProperty(d, 'open', { set: (v) => events.push('open:' + id + '=' + v) });
+        return d;
+    };
+    const all = [details('tuner', 'plugins'), details('highway_3d', 'graphics')];
+    const tabs = ['gameplay', 'graphics', 'plugins'].map((tab) => ({
+        dataset: { tab }, click: () => events.push('tab:' + tab),
+    }));
+    const doc = {
+        getElementById: () => null,
+        querySelectorAll: (sel) => {
+            if (sel.indexOf('details[data-plugin-id]') !== -1) return all;
+            if (sel === '#settings-tabbar .fb-tab') return tabs;
+            return [];
+        },
+    };
+    return { doc, events };
+}
+
+test('pedal activation: settings-only plugin selects its inactive tab before opening', () => {
+    const dom = fakePedalDom();
+    const { t, win } = loadPage({ doc: dom.doc });
+    win.showScreen = (id) => dom.events.push('screen:' + id);
+    t.openPluginSettings({ id: 'highway_3d', has_settings: true });
+    assert.deepEqual(dom.events, [
+        'screen:settings', 'tab:graphics', 'open:highway_3d=true', 'scroll:highway_3d',
+    ]);
+});
+
+test('pedal activation: unmounted screen falls back to the settings panel in its tab', () => {
+    const dom = fakePedalDom();
+    const { t, win } = loadPage({ doc: dom.doc });
+    win.showScreen = (id) => dom.events.push('screen:' + id);
+    t.openPluginSettings({ id: 'highway_3d', has_screen: true, has_settings: true });
+    assert.deepEqual(dom.events, [
+        'screen:settings', 'tab:graphics', 'open:highway_3d=true', 'scroll:highway_3d',
+    ]);
 });
