@@ -1423,8 +1423,9 @@ def _resolve_pending_slides(rs_notes, rs_chords, pending_slides):
     slide target so the slide renders; already-sustained (normal) slides keep
     their authored sustain.
 
-    ``link_next`` (which tells the highway to suppress the target note's gem so
-    the slide visually connects) is set ONLY for normal slides. A grace note is
+    ``link_next`` (the target is a continuation of the slide, not re-struck) is
+    set ONLY for legato slides (flag 2): a shift slide (flag 1) re-picks its
+    target, so that note keeps its own attack. A grace note is
     an ornament *before* the principal note, so its target IS re-struck and must
     keep its gem — setting link_next there hid the main note and made the grace
     look unrendered. Grace slides therefore get slide_to + sustain but NOT
@@ -1446,16 +1447,17 @@ def _resolve_pending_slides(rs_notes, rs_chords, pending_slides):
             _nxt = next((x for x in _seq if x.time > _rn.time), None)
             if _nxt is not None and _nxt.fret != _rn.fret:
                 _rn.slide_to = _nxt.fret
-                if not _is_grace:
-                    # Normal slide: suppress the target gem so the slide connects
-                    # (matches GP5). A grace target is re-struck — keep its gem.
+                if (_flags & 0b0010) and not _is_grace:
+                    # Legato slide: the target continues the slide (matches
+                    # GP5). Shift-slide and grace targets are re-struck.
                     _rn.link_next = True
                 if _rn.sustain <= 0:
                     _gap = _nxt.time - _rn.time
                     if _gap > 0:
                         _rn.sustain = _gap
         elif _flags & 0b0100:      # slide out, downwards (unpitched)
-            _rn.slide_unpitch_to = max(1, _rn.fret - 5)
+            if _rn.fret > 1:       # nothing below fret 1 to slide down to
+                _rn.slide_unpitch_to = max(1, _rn.fret - 5)
         elif _flags & 0b1000:      # slide out, upwards (unpitched)
             _rn.slide_unpitch_to = _rn.fret + 5
 

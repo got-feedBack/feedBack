@@ -1232,3 +1232,20 @@ def test_auto_select_gpx_unhinted_does_not_steal_later_rhythm():
     assert names[indices[0]] == "Lead"
     assert names[indices[2]] == "Rhythm"
     assert names[indices[1]] == "Combo"
+
+
+def test_resolve_shift_slide_does_not_link_next():
+    # Flag 1 = shift slide: the target is re-picked, so it is not a
+    # continuation of the slide (only a legato slide, flag 2, links).
+    a = RsNote(time=0.0, string=0, fret=1, sustain=1.0)
+    b = RsNote(time=1.0, string=0, fret=3, sustain=1.0)
+    _resolve_pending_slides([a, b], [], [(a, 0, 1, False)])
+    assert a.slide_to == 3
+    assert a.link_next is False
+
+
+@pytest.mark.parametrize("fret", [0, 1])
+def test_resolve_slide_out_down_skipped_without_room_below(fret):
+    n = RsNote(time=0.0, string=0, fret=fret, sustain=1.0)
+    _resolve_pending_slides([n], [], [(n, 0, 4)])
+    assert n.slide_unpitch_to == -1

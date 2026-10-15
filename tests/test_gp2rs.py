@@ -1388,3 +1388,99 @@ def test_chord_diagram_extended_string_outside_played_width_not_applied():
     assert ct.get("chordName") == ""
     # played template is width 6 (rs6/high-e unused) -> finger0..finger5
     assert all(ct.get(f"finger{i}") == "-1" for i in range(6))
+
+
+# ── convert_track: origin-flagged articulations (HO/PO, slides, ghost) ───────
+# GP3-5 store a hammer-on/pull-off or a pitched slide on the ORIGIN note (where
+# the arc starts); RS wants HO/PO on the DESTINATION and slide_to (the target
+# fret) on the origin, so both resolve against the next note on the string.
+
+def _ct_notes_xml(beats):
+    root = ET.fromstring(convert_track(_ct_song(beats), track_index=0))  # noqa: S314
+    return root.findall(".//notes/note")
+
+
+def _ct_line(frets, gp_string=1, **first_effect):
+    """Consecutive quarter notes on one string; effects apply to the first."""
+    notes = [_ct_note(guitarpro.NoteType.normal, gp_string, f) for f in frets]
+    for k, v in first_effect.items():
+        setattr(notes[0].effect, k, v)
+    return notes, [_ct_beat(tick=i * GP_TICKS_PER_QUARTER, dur_value=4, notes=[n])
+                   for i, n in enumerate(notes)]
+
+
+def test_hammer_on_flags_destination_not_origin():
+    _, beats = _ct_line([5, 7], hammer=True)
+    origin, dest = _ct_notes_xml(beats)
+    assert origin.get("hammerOn") == "0" and origin.get("pullOff") == "0"
+    assert dest.get("hammerOn") == "1" and dest.get("pullOff") == "0"
+
+
+def test_pull_off_detected_from_descending_fret():
+    _, beats = _ct_line([7, 5], hammer=True)
+    origin, dest = _ct_notes_xml(beats)
+    assert origin.get("pullOff") == "0" and origin.get("hammerOn") == "0"
+    assert dest.get("pullOff") == "1" and dest.get("hammerOn") == "0"
+
+
+def test_pull_off_to_open_string():
+    _, beats = _ct_line([3, 0], hammer=True)
+    _, dest = _ct_notes_xml(beats)
+    assert dest.get("pullOff") == "1"
+
+
+def test_hammer_pull_chain_marks_each_destination():
+    # 5h7p5: both the 5 and the 7 carry GP's hammer flag
+    notes, beats = _ct_line([5, 7, 5], hammer=True)
+    notes[1].effect.hammer = True
+    first, second, third = _ct_notes_xml(beats)
+    assert first.get("hammerOn") == "0" and first.get("pullOff") == "0"
+    assert second.get("hammerOn") == "1"
+    assert third.get("pullOff") == "1"
+
+
+def test_hammer_flag_on_last_note_marks_nothing():
+    # A dangling flag (no following note on the string) is a no-op, and a
+    # following note on ANOTHER string is not the destination.
+    a = _ct_note(guitarpro.NoteType.normal, 1, 5)
+    a.effect.hammer = True
+    b = _ct_note(guitarpro.NoteType.normal, 2, 7)
+    notes = _ct_notes_xml([_ct_beat(0, 4, [a]),
+                           _ct_beat(GP_TICKS_PER_QUARTER, 4, [b])])
+    assert all(n.get("hammerOn") == "0" and n.get("pullOff") == "0" for n in notes)
+
+
+def test_legato_slide_sets_target_on_origin_and_links():
+    _, beats = _ct_line([5, 7], slides=[guitarpro.SlideType.legatoSlideTo])
+    origin, dest = _ct_notes_xml(beats)
+    assert origin.get("slideTo") == "7"
+    assert origin.get("linkNext") == "1"
+    assert dest.get("slideTo") == "-1"
+
+
+def test_shift_slide_sets_target_but_does_not_link():
+    # A shift slide re-picks its target, so the target is not a continuation.
+    _, beats = _ct_line([5, 7], slides=[guitarpro.SlideType.shiftSlideTo])
+    origin, _ = _ct_notes_xml(beats)
+    assert origin.get("slideTo") == "7"
+    assert origin.get("linkNext") == "0"
+
+
+@pytest.mark.parametrize("fret, expected", [(7, "2"), (3, "1"), (1, "-1"), (0, "-1")])
+def test_slide_out_downwards_needs_room_below(fret, expected):
+    _, beats = _ct_line([fret], slides=[guitarpro.SlideType.outDownwards])
+    (note,) = _ct_notes_xml(beats)
+    assert note.get("slideUnpitchTo") == expected
+
+
+def test_ghost_note_is_not_converted_to_muted_note():
+    _, beats = _ct_line([5], ghostNote=True)
+    (note,) = _ct_notes_xml(beats)
+    assert note.get("mute") == "0"
+    assert note.get("fret") == "5"
+
+
+def test_dead_note_is_still_muted():
+    note = _ct_note(guitarpro.NoteType.dead, 1, 0)
+    (out,) = _ct_notes_xml([_ct_beat(0, 4, [note])])
+    assert out.get("mute") == "1"

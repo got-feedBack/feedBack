@@ -313,6 +313,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine (`app.js`, `highway.js`, `playSong`, `showScreen`, the capability registry).
 
 ### Fixed
+- **Guitar Pro (GP3-5) import: hammer-ons, pull-offs and slides land on the
+  right notes; ghost notes stay playable.** GP stores a hammer-on/pull-off on
+  the note the slur *starts* from, but `lib/gp2rs.py` flagged that origin note
+  itself (and picked H vs P from the note *before* it), so every HO/PO showed
+  up one note early — on the picked note — and the note actually sounded
+  legato was charted as picked. The flag is now resolved like a pitched slide:
+  the next note on the same string becomes the hammer-on (higher fret) or
+  pull-off (lower fret, including to an open string), so `5h7p5` charts as
+  picked 5, hammer 7, pull 5. Shift slides no longer set `linkNext` — a shift
+  slide re-picks its target, only a legato slide carries into it (the GP6/7/8
+  path in `lib/gp2rs_gpx.py` gets the same flag-1/flag-2 split). A slide out
+  downwards from an open string or the first fret no longer becomes a
+  degenerate "slide" to fret 1 in either path. Ghost notes (quiet, parenthesised
+  notes) were being imported as muted/dead notes; they are now ordinary pitched
+  notes — real dead notes (`NoteType.dead`) are unaffected. Tests:
+  `tests/test_gp2rs.py`, `tests/test_gp2rs_gpx.py`.
 - **Count-in follows the song's meter and its pickup measure.** The count-in
   (loop wrap, section practice, and the "Countdown before song" setting) always
   clicked exactly four beats, so a 3/4 song was counted in 4/4, and a song
