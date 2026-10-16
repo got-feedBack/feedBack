@@ -14210,14 +14210,18 @@
             const sprMat = txtMat(fretDisplay, '#ffffff', false, 'ghostFret');
             const baseGhostMat = _meshMatForGhostFretDigit(sprMat);
             let instMat = lb.userData.h3dGhostFretLblInstMat;
-            if (!instMat || instMat.map !== baseGhostMat.map) {
-                if (instMat) {
-                    try { instMat.dispose(); } catch (_) { /* idempotent */ }
-                }
+            if (!instMat) {
                 instMat = baseGhostMat.clone();
                 instMat.transparent = true;
                 instMat.needsUpdate = true;
                 lb.userData.h3dGhostFretLblInstMat = instMat;
+            } else if (instMat.map !== baseGhostMat.map) {
+                // Pooled meshes are reassigned every frame, so the digit changes
+                // constantly. Every ghost base material is built identically by
+                // _meshMatForGhostFretDigit and only its map (a default-param
+                // CanvasTexture) differs, so swapping .map keeps the same shader
+                // program and visuals without a dispose + clone per change.
+                instMat.map = baseGhostMat.map;
             }
             instMat.opacity = alpha;
             instMat.depthTest = false;
