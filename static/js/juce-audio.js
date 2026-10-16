@@ -514,16 +514,60 @@ import { S } from './player-state.js';
         }).catch(() => {});
     }
 
+    // The tap batches inside the worklet (~10 ms per post instead of one
+    // message per 128-frame render quantum) and, when the desktop preload
+    // offers it, posts those batches on a MessagePort whose other end lives
+    // in the desktop main process. That keeps song audio off the renderer
+    // main thread entirely: a GC pause, layout or heavy highway frame no
+    // longer delays the push and underflows the engine's renderer bus (it
+    // primes at only ~10 ms). Until the main process acknowledges the port,
+    // or on an older desktop build without it, batches go to the main thread
+    // and out through pushRendererAudio() as before.
     const TAP_WORKLET = `
         class FeedbackBusTap extends AudioWorkletProcessor {
+            constructor(options) {
+                super();
+                const want = (options && options.processorOptions
+                    && options.processorOptions.batchFrames) | 0;
+                this.batchFrames = want > 0 ? want : 512;
+                this.buf = new Float32Array(this.batchFrames * 2);
+                this.fill = 0;
+                this.active = false;
+                this.sink = null;
+                this.sinkReady = false;
+                this.port.onmessage = (e) => {
+                    const d = e.data || {};
+                    if (d.sink) {
+                        this.sink = d.sink;
+                        this.sink.onmessage = (m) => {
+                            // The main process answers { ready } once it is
+                            // listening (or { ready: false } if it cannot use
+                            // the batches) — only then stop the fallback path.
+                            this.sinkReady = !!(m.data && m.data.ready);
+                        };
+                    }
+                    if ('active' in d) { this.active = !!d.active; this.fill = 0; }
+                };
+            }
+            flush() {
+                const n = this.fill * 2;
+                this.fill = 0;
+                // postMessage structured-clones, so the batch buffer is reused
+                // without a per-post allocation in the common full-batch case.
+                const out = n === this.buf.length ? this.buf : this.buf.slice(0, n);
+                if (this.sinkReady) this.sink.postMessage(out);
+                else this.port.postMessage(out);
+            }
             process(inputs) {
                 const inp = inputs[0];
-                if (inp && inp[0]) {
-                    const L = inp[0], R = inp[1] || inp[0];
-                    const out = new Float32Array(L.length * 2);
-                    for (let i = 0; i < L.length; i++) { out[i*2] = L[i]; out[i*2+1] = R[i]; }
-                    this.port.postMessage(out, [out.buffer]);
-                }
+                if (!this.active || !inp || !inp[0]) return true;
+                const L = inp[0], R = inp[1] || inp[0];
+                if ((this.fill + L.length) * 2 > this.buf.length) this.flush();
+                const buf = this.buf;
+                let o = this.fill * 2;
+                for (let i = 0; i < L.length; i++) { buf[o++] = L[i]; buf[o++] = R[i]; }
+                this.fill += L.length;
+                if (this.fill >= this.batchFrames) this.flush();
                 return true;
             }
         }
@@ -532,30 +576,58 @@ import { S } from './player-state.js';
     const _tapModuleUrl = URL.createObjectURL(new Blob([TAP_WORKLET], { type: 'application/javascript' }));
     const _tapModuleLoaded = new WeakSet();   // AudioContexts with the module added
 
-    // One tap per captured graph. `active` gates the push (the worklet keeps
-    // running when inactive — it's silent bookkeeping, not audio).
+    // Hand one end of a fresh MessageChannel to the worklet and the other to
+    // the desktop main process. contextBridge cannot carry a MessagePort, so
+    // the port goes through window.postMessage to the preload (Electron's
+    // documented context-isolation pattern); the preload forwards it with
+    // ipcRenderer.postMessage. Returns false when the preload lacks the API.
+    function _connectDirectSink(node, sampleRate) {
+        const type = api.rendererBusPortMessage;
+        if (typeof type !== 'string' || typeof MessageChannel !== 'function') return false;
+        const ch = new MessageChannel();
+        node.port.postMessage({ sink: ch.port1 }, [ch.port1]);
+        window.postMessage({ type, sourceRate: sampleRate }, '*', [ch.port2]);
+        return true;
+    }
+
+    // One tap per captured graph. `active` gates the push inside the worklet
+    // (the node keeps running when inactive — it's silent bookkeeping, not
+    // audio).
     function _makeTap(ctx) {
-        const state = { node: null, active: false, batch: [], batchFrames: 0 };
+        let active = false;
+        const state = {
+            node: null,
+            direct: false,
+            get active() { return active; },
+            set active(v) {
+                active = !!v;
+                if (state.node) state.node.port.postMessage({ active });
+            },
+        };
         state.attach = async (sourceNode) => {
             if (!_tapModuleLoaded.has(ctx)) {
                 await ctx.audioWorklet.addModule(_tapModuleUrl);
                 _tapModuleLoaded.add(ctx);
             }
             if (!state.node) {
-                state.node = new AudioWorkletNode(ctx, 'feedback-bus-tap', { numberOfInputs: 1, channelCount: 2 });
-                const BATCH = Math.round(ctx.sampleRate / 100);   // ~10 ms
+                // ~10 ms, rounded to whole 128-frame render quanta so a full
+                // batch is exactly the reused buffer (512 frames @ 48 kHz).
+                const batchFrames = Math.max(128, Math.round(ctx.sampleRate / 100 / 128) * 128);
+                state.node = new AudioWorkletNode(ctx, 'feedback-bus-tap', {
+                    numberOfInputs: 1, channelCount: 2, processorOptions: { batchFrames },
+                });
+                // Fallback path (and the window before the main process acks
+                // the direct port): the worklet already batched, push as-is.
                 state.node.port.onmessage = (e) => {
-                    if (!state.active) { state.batch = []; state.batchFrames = 0; return; }
-                    state.batch.push(e.data);
-                    state.batchFrames += e.data.length / 2;
-                    if (state.batchFrames >= BATCH) {
-                        const merged = new Float32Array(state.batchFrames * 2);
-                        let o = 0;
-                        for (const c of state.batch) { merged.set(c, o); o += c.length; }
-                        api.pushRendererAudio(merged, ctx.sampleRate);
-                        state.batch = []; state.batchFrames = 0;
-                    }
+                    if (active) api.pushRendererAudio(e.data, ctx.sampleRate);
                 };
+                try {
+                    state.direct = _connectDirectSink(state.node, ctx.sampleRate);
+                } catch (e) {
+                    console.warn('[renderer-bus] direct port unavailable, using IPC push:', e);
+                    state.direct = false;
+                }
+                if (active) state.node.port.postMessage({ active });
             }
             sourceNode.connect(state.node);
             // No onward connection: the tap is a sink-side observer; audibility
@@ -563,7 +635,6 @@ import { S } from './player-state.js';
         };
         state.detach = (sourceNode) => {
             state.active = false;
-            state.batch = []; state.batchFrames = 0;
             if (state.node && sourceNode) {
                 try { sourceNode.disconnect(state.node); } catch (_) { /* already gone */ }
             }

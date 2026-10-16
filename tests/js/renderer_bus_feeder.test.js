@@ -79,7 +79,7 @@ function makeLoopbackStream({ suppressed = true } = {}) {
 
 // `displayMedia`: undefined → loopback capture unavailable (Docker sphere /
 // old desktop main); a function → used as navigator.mediaDevices.getDisplayMedia.
-function makeSandbox({ isAudioRunning = () => true, exclusive = () => true, displayMedia } = {}) {
+function makeSandbox({ isAudioRunning = () => true, exclusive = () => true, displayMedia, portMessage } = {}) {
     const calls = { setRendererBus: [], pushRendererAudio: [], setPageMuted: [] };
 
     const api = {
@@ -88,9 +88,20 @@ function makeSandbox({ isAudioRunning = () => true, exclusive = () => true, disp
         pushRendererAudio: (buf, rate) => { calls.pushRendererAudio.push([buf.length, rate]); },
         setPageMuted: (m) => { calls.setPageMuted.push(m); return Promise.resolve(m); },
     };
+    if (portMessage) api.rendererBusPortMessage = portMessage;
+    const windowPosts = [];
 
+    const workletNodes = [];
     class FakeWorkletNode {
-        constructor() { this.port = { onmessage: null }; }
+        constructor(ctx, name, options) {
+            this.options = options;
+            this.posted = [];
+            this.port = {
+                onmessage: null,
+                postMessage: (msg, transfer) => { this.posted.push({ msg, transfer }); },
+            };
+            workletNodes.push(this);
+        }
         connect() {}
         disconnect() {}
     }
@@ -101,7 +112,9 @@ function makeSandbox({ isAudioRunning = () => true, exclusive = () => true, disp
         Blob: class { constructor() {} },
         AudioWorkletNode: FakeWorkletNode,
         AudioContext: function () { const c = makeFakeContext(); sandbox.__createdContexts.push(c); return c; },
-        WeakSet, WeakMap, Promise, Float32Array, Math,
+        WeakSet, WeakMap, Promise, Float32Array, Math, MessageChannel,
+        __workletNodes: workletNodes,
+        __windowPosts: windowPosts,
         setInterval: () => 0,
         document: {
             hidden: false,
@@ -120,6 +133,7 @@ function makeSandbox({ isAudioRunning = () => true, exclusive = () => true, disp
         _juceMode: false,
         _currentSongAudio: null,
         feedBack: { stems: {} },
+        postMessage: (msg, origin, transfer) => { windowPosts.push({ msg, origin, transfer }); },
     };
     sandbox.globalThis = sandbox;
 
@@ -339,4 +353,107 @@ test('engine stops → bus disabled', async () => {
     await sb.window._reevaluateRendererBus();
 
     assert.deepEqual(sb.__calls.setRendererBus.at(-1), [false, 0], 'bus disabled after engine stop');
+});
+
+// ── Tap worklet: in-worklet batching + direct MessagePort sink ───────────────
+
+function loadTapProcessor() {
+    const src = fs.readFileSync(APP_JS, 'utf8');
+    const m = src.match(/const TAP_WORKLET = `([\s\S]*?)`;/);
+    assert.ok(m, 'TAP_WORKLET source not found');
+    let Proc = null;
+    const sb = {
+        AudioWorkletProcessor: class { constructor() { this.port = { onmessage: null, posted: [], postMessage(d) { this.posted.push(d); } }; } },
+        registerProcessor: (name, cls) => { assert.equal(name, 'feedback-bus-tap'); Proc = cls; },
+        Float32Array,
+    };
+    vm.createContext(sb);
+    vm.runInContext(m[1], sb);
+    return Proc;
+}
+
+function quantum(start) {
+    const L = new Float32Array(128), R = new Float32Array(128);
+    for (let i = 0; i < 128; i++) { L[i] = start + i; R[i] = -(start + i); }
+    return [[L, R]];
+}
+
+function makeSinkPort() {
+    return { onmessage: null, posted: [], postMessage(d) { this.posted.push(Float32Array.from(d)); } };
+}
+
+test('tap worklet batches 128-frame quanta into one post per batch, interleaved', () => {
+    const Proc = loadTapProcessor();
+    const p = new Proc({ processorOptions: { batchFrames: 512 } });
+    for (let q = 0; q < 8; q++) p.process(quantum(q * 128));
+    assert.equal(p.port.posted.length, 0, 'inactive tap posts nothing');
+
+    p.port.onmessage({ data: { active: true } });
+    const posts = [];
+    p.port.postMessage = (d) => posts.push(Float32Array.from(d));
+    for (let q = 0; q < 12; q++) p.process(quantum(q * 128));
+    assert.equal(posts.length, 3, '12 quanta / 4 per batch = 3 posts (was 12 before batching)');
+    assert.equal(posts[0].length, 1024, '512 stereo frames per post');
+    assert.deepEqual([...posts[1].subarray(0, 4)], [512, -512, 513, -513], 'continuous interleaved L/R');
+});
+
+test('tap worklet routes batches to the direct sink only after the main process acks it', () => {
+    const Proc = loadTapProcessor();
+    const p = new Proc({ processorOptions: { batchFrames: 256 } });
+    const sink = makeSinkPort();
+    const viaMain = [];
+    p.port.postMessage = (d) => viaMain.push(d);
+    p.port.onmessage({ data: { sink } });
+    p.port.onmessage({ data: { active: true } });
+
+    for (let q = 0; q < 2; q++) p.process(quantum(q * 128));
+    assert.equal(viaMain.length, 1, 'before the ack, batches use the main-thread fallback');
+    assert.equal(sink.posted.length, 0);
+
+    sink.onmessage({ data: { ready: true } });
+    for (let q = 0; q < 4; q++) p.process(quantum(q * 128));
+    assert.equal(sink.posted.length, 2, 'after the ack, batches go straight to the main process');
+    assert.equal(viaMain.length, 1, 'renderer main thread no longer on the audio path');
+
+    sink.onmessage({ data: { ready: false } });
+    for (let q = 0; q < 2; q++) p.process(quantum(q * 128));
+    assert.equal(viaMain.length, 2, 'a refused port falls back to the main-thread path');
+});
+
+test('desktop preload with rendererBusPortMessage → tap hands a MessagePort to worklet and preload', async () => {
+    const stream = makeLoopbackStream();
+    const sb = makeSandbox({
+        exclusive: () => true,
+        displayMedia: () => Promise.resolve(stream),
+        portMessage: 'feedback-desktop:renderer-bus-port',
+    });
+
+    await sb.window._reevaluateRendererBus();
+
+    const node = sb.__workletNodes.at(-1);
+    assert.equal(node.options.processorOptions.batchFrames, 512, '~10 ms batch at 48 kHz');
+    const sinkMsg = node.posted.find((p) => p.msg && p.msg.sink);
+    assert.ok(sinkMsg, 'worklet received its sink port');
+    assert.equal(sinkMsg.transfer.length, 1);
+    assert.equal(sinkMsg.transfer[0], sinkMsg.msg.sink, 'sink port transferred, not cloned');
+    assert.equal(sb.__windowPosts.length, 1, 'other end posted to the preload');
+    const wp = sb.__windowPosts[0];
+    assert.equal(wp.msg.type, 'feedback-desktop:renderer-bus-port');
+    assert.equal(wp.msg.sourceRate, 48000);
+    assert.equal(wp.transfer.length, 1);
+    assert.ok(node.posted.some((p) => p.msg && p.msg.active === true), 'worklet activated');
+    for (const p of [sinkMsg.msg.sink, wp.transfer[0]]) p.close();
+});
+
+test('old desktop preload (no port API) → batched fallback via pushRendererAudio', async () => {
+    const stream = makeLoopbackStream();
+    const sb = makeSandbox({ exclusive: () => true, displayMedia: () => Promise.resolve(stream) });
+
+    await sb.window._reevaluateRendererBus();
+
+    const node = sb.__workletNodes.at(-1);
+    assert.equal(sb.__windowPosts.length, 0, 'no port handed out without the preload API');
+    node.port.onmessage({ data: new Float32Array(1024) });
+    assert.equal(sb.__calls.pushRendererAudio.length, 1);
+    assert.deepEqual([...sb.__calls.pushRendererAudio[0]], [1024, 48000], 'worklet batch pushed as-is');
 });
