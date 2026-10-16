@@ -568,13 +568,21 @@ function _syncSectionPracticePillV3Chrome(isV3) {
             ring.setAttribute('aria-hidden', 'true');
             pill.insertBefore(ring, pill.firstChild);
         }
-        pill.setAttribute('title', 'Practice');
-        pill.setAttribute('aria-label', 'Practice');
+        _setAttrIfChanged(pill, 'title', 'Practice');
+        _setAttrIfChanged(pill, 'aria-label', 'Practice');
     } else {
         if (ring) ring.remove();
-        pill.setAttribute('title', 'Section practice');
-        pill.setAttribute('aria-label', 'Section practice');
+        _setAttrIfChanged(pill, 'title', 'Section practice');
+        _setAttrIfChanged(pill, 'aria-label', 'Section practice');
     }
+}
+
+// This runs from the highway draw hook (every frame). setAttribute with an
+// unchanged value still queues a mutation record and invalidates style, so
+// compare first. classList.toggle(name, force) is already a no-op when the
+// state matches.
+function _setAttrIfChanged(el, name, value) {
+    if (el.getAttribute(name) !== value) el.setAttribute(name, value);
 }
 
 // Wrap an existing #section-practice-bar in the pill control (creating the
@@ -861,25 +869,33 @@ function _syncSectionPracticePieceUi() {
     const wholeCb = document.getElementById('section-practice-whole');
     const total = _sectionPracticeRanges.length;
     const active = _sectionPracticeActiveParent >= 0;
+    // Called from the 60 Hz tick via _updateSectionPracticeHighlight, so every
+    // write is guarded: assigning textContent replaces the text node and
+    // setting disabled=true re-sets the attribute even when nothing changed,
+    // and each of those invalidates style/layout.
     if (label) {
+        let text;
         if (!active || !total) {
-            label.textContent = 'Part — of —';
+            text = 'Part — of —';
         } else {
             const idx = _sectionPracticeCurrentPartIndex();
-            label.textContent = `Part ${idx + 1} of ${total}`;
+            text = `Part ${idx + 1} of ${total}`;
         }
+        if (label.textContent !== text) label.textContent = text;
     }
-    if (wholeCb) {
+    if (wholeCb && wholeCb.checked !== _sectionPracticeWholeSection) {
         wholeCb.checked = _sectionPracticeWholeSection;
     }
     const partIdx = (!active || !total || _sectionPracticeWholeSection)
         ? 0
         : (_sectionPracticeSelected >= 0 ? _sectionPracticeSelected : 0);
     if (prev) {
-        prev.disabled = !active || !total || (!_sectionPracticeWholeSection && partIdx <= 0);
+        const disabled = !active || !total || (!_sectionPracticeWholeSection && partIdx <= 0);
+        if (prev.disabled !== disabled) prev.disabled = disabled;
     }
     if (next) {
-        next.disabled = !active || !total || (!_sectionPracticeWholeSection && partIdx >= total - 1);
+        const disabled = !active || !total || (!_sectionPracticeWholeSection && partIdx >= total - 1);
+        if (next.disabled !== disabled) next.disabled = disabled;
     }
 }
 
@@ -1147,20 +1163,43 @@ function _scrollSectionPracticeChipIntoView(chip) {
     chip.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
+// Chip refs + the highlight state last applied to them. The 60 Hz tick calls
+// _updateSectionPracticeHighlight; re-querying the chips there allocated a
+// NodeList every tick and re-toggled every chip. The chips are only ever
+// replaced wholesale (renderSectionPracticeBar / _hideSectionPracticeBar set
+// scroll.innerHTML), so a detached first chip means the cache is stale.
+let _sectionPracticeChipScroll = null;
+let _sectionPracticeChips = [];
+let _sectionPracticeHighlightKey = '';
+
+function _sectionPracticeChipRefs(scroll) {
+    const first = _sectionPracticeChips[0];
+    if (scroll !== _sectionPracticeChipScroll || !first || !first.isConnected || !scroll.contains(first)) {
+        _sectionPracticeChipScroll = scroll;
+        _sectionPracticeChips = Array.from(scroll.querySelectorAll('.section-practice-chip[data-parent-idx]'));
+        _sectionPracticeHighlightKey = '';
+    }
+    return _sectionPracticeChips;
+}
+
 export function _updateSectionPracticeHighlight(ct) {
     const scroll = document.getElementById('section-practice-scroll');
     if (!scroll) return;
-    const chips = scroll.querySelectorAll('.section-practice-chip[data-parent-idx]');
+    const chips = _sectionPracticeChipRefs(scroll);
     if (!chips.length) return;
 
     const followEnabled = !_sectionPracticeMode && _sectionPracticeBarIsReady();
     const followParent = followEnabled ? _sectionPracticeParentIndexAtTime(ct) : -1;
 
-    chips.forEach((chip) => {
-        const idx = Number(chip.dataset.parentIdx);
-        chip.classList.toggle('is-selected', idx === _sectionPracticeActiveParent);
-        chip.classList.toggle('is-playing', followEnabled && idx === followParent);
-    });
+    const key = `${_sectionPracticeActiveParent}|${followEnabled ? followParent : 'off'}`;
+    if (key !== _sectionPracticeHighlightKey) {
+        _sectionPracticeHighlightKey = key;
+        chips.forEach((chip) => {
+            const idx = Number(chip.dataset.parentIdx);
+            chip.classList.toggle('is-selected', idx === _sectionPracticeActiveParent);
+            chip.classList.toggle('is-playing', followEnabled && idx === followParent);
+        });
+    }
 
     if (followEnabled && followParent >= 0 && followParent !== _sectionPracticeFollowParent) {
         _sectionPracticeFollowParent = followParent;
