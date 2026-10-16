@@ -69,21 +69,69 @@ export function _emitSongPositionChanged(time, duration) {
     window.feedBack.emit('song:position-changed', Object.assign(payload, { duration }));
 }
 
+// JUCE-mode clock tuning (see jucePlayer._applySample).
+// A poll whose IPC round trip took longer than this can't say WHEN in that
+// window the engine read its position, so it only counts if it disagrees by
+// more than _JUCE_SNAP_S (a real discontinuity).
+const _JUCE_MAX_RTT_MS = 40;
+// Errors at or above this are a discontinuity (engine-side loop, stall,
+// device restart): jump to the sample. Below it, slew.
+const _JUCE_SNAP_S = 0.25;
+// Slew limit as a fraction of playback speed: a residual error is absorbed by
+// running the clock up to 10% fast/slow, so the clock never moves backwards.
+const _JUCE_SLEW = 0.1;
+
 export const jucePlayer = {
     _timer: null,
     _pos: 0,
     _dur: 0,
-    _pollAt: 0,    // performance.now() when _pos was last set
+    _pollAt: 0,    // performance.now() the anchor _pos refers to
     _polling: false,
     _speed: 1,
+    _slew: 0,      // seconds still to absorb into the clock since _pollAt
+    _floor: 0,     // last value handed out while playing (monotonic guard)
+    _gen: 0,       // bumped on every reposition; stale poll replies are dropped
     get currentTime() {
         if (!this._polling) return this._pos;
         // Interpolate between IPC polls so highway motion is smooth at 60fps
         // Scale by _speed so at 0.7x the interpolated clock advances 0.7s/s
-        const elapsed = (performance.now() - this._pollAt) / 1000;
-        return Math.min(this._pos + elapsed * this._speed, this._dur > 0 ? this._dur : Infinity);
+        const elapsed = Math.max(0, (performance.now() - this._pollAt) / 1000);
+        const maxSlew = elapsed * this._speed * _JUCE_SLEW;
+        const slew = Math.max(-maxSlew, Math.min(maxSlew, this._slew));
+        const t = Math.max(this._floor, this._pos + elapsed * this._speed + slew);
+        this._floor = t;
+        return Math.min(t, this._dur > 0 ? this._dur : Infinity);
     },
     get duration() { return this._dur; },
+    // Re-anchor the clock at `pos` (a seek, pause point, rate change or route
+    // hand-off): drops any pending slew, the monotonic floor, and poll
+    // replies that were in flight across the reposition.
+    _setAnchor(pos, at = performance.now()) {
+        this._pos = pos;
+        this._pollAt = at;
+        this._slew = 0;
+        this._floor = -Infinity;
+        this._gen++;
+    },
+    // Fold one getBackingPosition() reply into the clock. `t0`/`t1` bracket
+    // the IPC round trip; the engine read its position somewhere inside it,
+    // so the sample is anchored at the midpoint (anchoring at t1, after the
+    // await, made every anchor stale by the round trip and the clock stepped
+    // back on each poll). Small errors are slewed, never stepped.
+    _applySample(pos, t0, t1) {
+        const rtt = t1 - t0;
+        const target = pos + ((t1 - (t0 + t1) / 2) / 1000) * this._speed;
+        const now = this.currentTime;
+        const err = target - now;
+        if (Math.abs(err) >= _JUCE_SNAP_S) {
+            this._setAnchor(target, t1);
+            return;
+        }
+        if (rtt > _JUCE_MAX_RTT_MS) return;
+        this._pos = now;
+        this._pollAt = t1;
+        this._slew = err;
+    },
     async play() {
         try {
             await window.feedBackDesktop.audio.startBacking();
@@ -98,8 +146,7 @@ export const jucePlayer = {
         // Snapshot the interpolated position before stopping the poll so
         // _pos stays at the visible pause point rather than jumping back
         // to the last raw IPC sample (which can be up to 100ms behind).
-        this._pos = this.currentTime;
-        this._pollAt = performance.now();
+        this._setAnchor(this.currentTime);
         this._stopPolling();
         try {
             await window.feedBackDesktop.audio.stopBacking();
@@ -109,28 +156,30 @@ export const jucePlayer = {
     },
     async seek(s) {
         const prev = this._pos;
-        this._pos = s;
-        this._pollAt = performance.now();
+        this._setAnchor(s);
         try {
             await window.feedBackDesktop.audio.seekBacking(s);
         } catch (err) {
             console.warn('[jucePlayer] seekBacking failed:', err);
-            this._pos = prev;
-            this._pollAt = performance.now();
+            this._setAnchor(prev);
         }
     },
     _startPolling() {
         this._stopPolling();
+        this._setAnchor(this._pos);
         this._polling = true;
-        this._pollAt = performance.now();
         const self = this;
         function scheduleNext() {
             self._timer = setTimeout(async () => {
                 if (!self._polling) return;
+                const gen = self._gen;
                 try {
-                    self._pos = await window.feedBackDesktop.audio.getBackingPosition();
-                    self._pollAt = performance.now();
-                    _emitSongPositionChanged(self.currentTime, self.duration || null);
+                    const t0 = performance.now();
+                    const pos = await window.feedBackDesktop.audio.getBackingPosition();
+                    if (self._polling && gen === self._gen) {
+                        self._applySample(pos, t0, performance.now());
+                        _emitSongPositionChanged(self.currentTime, self.duration || null);
+                    }
                 } catch (err) {
                     console.warn('[jucePlayer] position poll failed:', err);
                 } finally {
@@ -145,15 +194,13 @@ export const jucePlayer = {
         if (this._timer) { clearTimeout(this._timer); this._timer = null; }
     },
     setRate(rate) {
-        this._pos = this.currentTime;
-        this._pollAt = performance.now();
+        this._setAnchor(this.currentTime);
         this._speed = rate;
     },
     async stop() {
         await this.pause();
-        this._pos = 0;
+        this._setAnchor(0, 0);
         this._dur = 0;
-        this._pollAt = 0;
         this._speed = 1;
     },
 };

@@ -58,6 +58,7 @@ function makeSandbox({ isAudioRunning, loadBackingTrack, outputType = 'Windows A
 
     const jucePlayer = {
         _dur: 0, _pos: 0, _pollAt: 0,
+        _setAnchor(p) { this._pos = p; this._pollAt = 0; },
         currentTime: 30,
         play() { calls.jucePlay++; return Promise.resolve(true); },
         pause() { calls.jucePause++; return Promise.resolve(); },

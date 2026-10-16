@@ -214,8 +214,7 @@ import { S } from './player-state.js';
             }
             if (window.jucePlayer) {
                 jucePlayer._dur = dur;
-                jucePlayer._pos = pos;
-                jucePlayer._pollAt = performance.now();
+                jucePlayer._setAnchor(pos);
             }
             window._juceMode = true;
             window._juceAudioUrl = url;
