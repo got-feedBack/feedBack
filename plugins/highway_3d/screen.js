@@ -4871,7 +4871,7 @@
         let _timingFx           = BG_DEFAULTS.timingFx;
         let _streakFx           = BG_DEFAULTS.streakFx;
         let _bloom              = BG_DEFAULTS.bloom;
-        let _composer = null, _bloomPass = null, _bloomLoad = null, _bloomW = 0, _bloomH = 0;
+        let _composer = null, _bloomPass = null, _bloomLoad = null, _bloomW = 0, _bloomH = 0, _bloomPR = 0;
         let _sparkPts = null, _sparkPos = null, _sparkCol = null, _sparkVel = null, _sparkLife = null;
         const _SPARK_N = 256;
         const _sparkSeen = new Map();     // note-key -> expiry; one burst per hit
@@ -9304,7 +9304,7 @@
                     comp.addPass(_bloomPass);
                     comp.addPass(new OP.OutputPass());
                     comp.setSize(w, h);
-                    _bloomW = w; _bloomH = h; _composer = comp;
+                    _bloomW = w; _bloomH = h; _bloomPR = ren.getPixelRatio(); _composer = comp;
                 } catch (e) { console.warn('[3D-Hwy] bloom init failed', e); _composer = null; }
             }).catch((e) => console.warn('[3D-Hwy] bloom modules failed', e));
             return null;
@@ -16419,9 +16419,19 @@
                 {
                     const comp = (_bloom && !_ssActive()) ? _bloomEnsure() : null;
                     if (comp) {
-                        const bsz = canvasSize(highwayCanvas);
-                        if (bsz && bsz.w > 0 && bsz.h > 0 && (bsz.w !== _bloomW || bsz.h !== _bloomH)) {
-                            comp.setSize(bsz.w | 0, bsz.h | 0); _bloomW = bsz.w | 0; _bloomH = bsz.h | 0;
+                        // EffectComposer snapshots the renderer's pixel ratio at
+                        // construction, so push adaptive render-scale changes to it
+                        // explicitly; otherwise its targets stay full-res and a lower
+                        // scale saves nothing. Size comes from the last applySize()
+                        // rather than a per-frame layout read of the canvas box.
+                        const bpr = ren.getPixelRatio();
+                        if (bpr !== _bloomPR) { comp.setPixelRatio(bpr); _bloomPR = bpr; }
+                        // Pass the same (possibly fractional) CSS size applySize()
+                        // gave the renderer, so both multiply by the pixel ratio
+                        // before truncating and the targets match the drawing buffer.
+                        const bw = _appliedW, bh = _appliedH;
+                        if (bw > 0 && bh > 0 && (bw !== _bloomW || bh !== _bloomH)) {
+                            comp.setSize(bw, bh); _bloomW = bw; _bloomH = bh;
                         }
                         if (ren.toneMapping !== T.ACESFilmicToneMapping) ren.toneMapping = T.ACESFilmicToneMapping;
                         pbBeg(6); comp.render(); pbEnd(6);
