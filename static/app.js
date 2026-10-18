@@ -60,6 +60,7 @@ import {
     _countdownBeforeSongEnabled,
     _curPlaybackSpeed,
     _exitConfirmEnabled,
+    _loopCountInEnabled,
     _resetPlaybackSpeedForNewSong,
     _showUpNextEnabled,
     _wireSpeedPresetsOnce,
@@ -1068,6 +1069,15 @@ window.setCountdownBeforeSong = function (on) {
     if (el && el.checked !== !!on) el.checked = !!on;
     persistSetting('countdown_before_song', !!on);
 };
+// Settings checkbox setter (onchange="setLoopCountIn(this.checked)"). Mirrors
+// the song-start countdown: localStorage for the synchronous wrap-tick read
+// plus a server persist so it survives a reload / rides in the export bundle.
+window.setLoopCountIn = function (on) {
+    try { localStorage.setItem('loopCountIn', on ? '1' : '0'); } catch (_) { /* private mode */ }
+    const el = document.getElementById('setting-loop-count-in');
+    if (el && el.checked !== !!on) el.checked = !!on;
+    persistSetting('loop_count_in', !!on);
+};
 // One-shot launcher override for the player's return destination.
 window.feedBack.setReturnScreen = function (id) {
     window.feedBack._nextReturnScreen = id || null;
@@ -1824,7 +1834,8 @@ setInterval(() => {
         // A-B loop: count-in then seek back to A
         else if (loopA !== null && loopB !== null && ct >= loopB) {
             S.lastAudioTime = loopB;
-            startCountIn();
+            // "Countdown before each loop" off → silent wrap (seek straight to A).
+            startCountIn({ silent: !_loopCountInEnabled() });
         }
         // Detect and fix audio time jumps (browser seeking bug; skip for JUCE — position is polled)
         else if (!window._juceMode && S.isPlaying && Math.abs(ct - S.lastAudioTime) > 30 && S.lastAudioTime > 0) {

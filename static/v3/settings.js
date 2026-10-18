@@ -28,8 +28,8 @@
     var RESET_MAP = {
         gameplay: {
             server: ['master_difficulty', 'av_offset_ms', 'miss_penalty',
-                'fail_behavior', 'countdown_before_song', 'default_arrangement', 'pathway'],
-            local: ['lefty', 'autoplayExit', 'showUpNext', 'confirmExitSong', 'arrangementNamingMode', 'countdownBeforeSong'],
+                'fail_behavior', 'countdown_before_song', 'loop_count_in', 'default_arrangement', 'pathway'],
+            local: ['lefty', 'autoplayExit', 'showUpNext', 'confirmExitSong', 'arrangementNamingMode', 'countdownBeforeSong', 'loopCountIn'],
             after: function () {
                 // Left-handed is held on the highway object, not re-derived
                 // from localStorage on load — flip it back to the default.

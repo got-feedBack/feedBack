@@ -149,6 +149,12 @@ def save_settings(data: dict):
             if not isinstance(raw, bool):
                 return {"error": "countdown_before_song must be a boolean"}
             updates["countdown_before_song"] = raw
+    if "loop_count_in" in data:
+        raw = data["loop_count_in"]
+        if raw is not None:
+            if not isinstance(raw, bool):
+                return {"error": "loop_count_in must be a boolean"}
+            updates["loop_count_in"] = raw
     if "achievements_enabled" in data:
         raw = data["achievements_enabled"]
         if raw is not None:
@@ -362,7 +368,7 @@ def save_settings(data: dict):
 # known set means a malformed or hostile body can't wipe unrelated config.
 _RESETTABLE_SETTINGS_KEYS = frozenset({
     "default_arrangement", "demucs_server_url", "master_difficulty",
-    "av_offset_ms", "countdown_before_song", "miss_penalty", "fail_behavior",
+    "av_offset_ms", "countdown_before_song", "loop_count_in", "miss_penalty", "fail_behavior",
     "reference_pitch", "instrument", "string_count", "tuning", "pathway",
     "instrument_profiles", "active_instrument_profile",
     "achievements_enabled", "use_amp_sims",
