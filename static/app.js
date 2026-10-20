@@ -64,6 +64,7 @@ import {
     _showUpNextEnabled,
     _wireSpeedPresetsOnce,
     applySpeedPreset,
+    nudgeSpeed,
     setMastery,
     setSpeed,
 } from './js/player-controls.js';
@@ -2001,6 +2002,48 @@ registerShortcut({
     description: 'Offset audio forward (Shift: 50ms, else 10ms)',
     scope: 'player',
     handler: (e) => nudgeAvOffsetMs(e.shiftKey ? 50 : 10)
+});
+
+// Playback speed: `,` slower / `.` faster by 10 % (Shift: 20 %), `0` back to
+// 100 %. The e.code aliases match the physical keys whatever the layout or
+// Shift state (Shift turns ',' into '<' on US layouts). Ctrl/Alt/Meta stay free
+// for the OS and browser (Cmd+, is Preferences on macOS).
+const _SPEED_MODS = { ctrl: false, alt: false, meta: false };
+const _speedStep = (e, dir) => nudgeSpeed(dir * (e.shiftKey ? 20 : 10));
+registerShortcut({
+    key: ',',
+    description: 'Slower (Shift: 20%, else 10%)',
+    scope: 'player',
+    modifiers: _SPEED_MODS,
+    handler: (e) => _speedStep(e, -1)
+});
+registerShortcut({
+    key: 'Comma',
+    description: 'Slower (Shift: 20%, else 10%)',
+    scope: 'player',
+    modifiers: _SPEED_MODS,
+    handler: (e) => _speedStep(e, -1)
+});
+registerShortcut({
+    key: '.',
+    description: 'Faster (Shift: 20%, else 10%)',
+    scope: 'player',
+    modifiers: _SPEED_MODS,
+    handler: (e) => _speedStep(e, 1)
+});
+registerShortcut({
+    key: 'Period',
+    description: 'Faster (Shift: 20%, else 10%)',
+    scope: 'player',
+    modifiers: _SPEED_MODS,
+    handler: (e) => _speedStep(e, 1)
+});
+registerShortcut({
+    key: '0',
+    description: 'Speed back to 100%',
+    scope: 'player',
+    modifiers: _SPEED_MODS,
+    handler: () => applySpeedPreset(100)
 });
 
 registerShortcut({

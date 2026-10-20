@@ -95,6 +95,23 @@ export function applySpeedPreset(percent) {
     slider.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
+// Keyboard speed nudge: `,` / `.` step 10 %, with Shift 20 %, from the current
+// speed, clamped to the slider's range. The step math is separate so tests can
+// reach it without a DOM.
+export function _nudgedSpeedPercent(currentPct, delta, min = 15, max = 150) {
+    const cur = Number.isFinite(currentPct) ? Math.round(currentPct) : 100;
+    const d = Number.isFinite(delta) ? delta : 0;
+    return Math.max(min, Math.min(max, cur + d));
+}
+
+export function nudgeSpeed(delta) {
+    const slider = document.getElementById('speed-slider');
+    if (!slider) return;
+    const min = Number(slider.min) || 15;
+    const max = Number(slider.max) || 150;
+    applySpeedPreset(_nudgedSpeedPercent(_curPlaybackSpeed() * 100, delta, min, max));
+}
+
 export function _wireSpeedPresetsOnce() {
     if (_speedPresetsWired) return;
     const presets = document.getElementById('speed-presets');

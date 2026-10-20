@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Keyboard shortcuts for playback speed.** In the player, `,` slows down and `.`
+  speeds up by 10% (with Shift: 20%), and `0` returns to 100%. They follow the speed
+  slider (15–150%) and move it, and are listed in the `?` panel.
 - **Core reader for source rigs (feedpak 1.18.0).** A pack can declare what a
   MIDI part should sound like by binding a rig; core now reads that binding and
   hands it to the client instead of dropping it. Three parts: the
