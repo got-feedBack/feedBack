@@ -5433,14 +5433,16 @@
         // micro-jumps (1–2 static frames, then a jump), most visible as a
         // "stutter" across a dense wall of repeated chords even when FPS is
         // steady. smoothNow() interpolates forward with performance.now()
-        // between distinct audio samples (mirroring core highway.js
-        // getTime()), tracking the observed playback rate so the speed slider
-        // stays accurate, and falls back to the raw value on pause / seek /
-        // stall so the scroll never drifts against silent audio.
+        // between distinct audio samples, tracking the playback rate so the
+        // speed slider stays accurate, slews toward each new sample instead of
+        // jumping back to it (slewClock), and falls back to the raw value on
+        // pause / seek / stall so the scroll never drifts against silent audio.
         let _clkAudioT = NaN;   // last distinct bundle.currentTime sample
         let _clkPerf = NaN;     // performance.now() when that sample arrived
-        let _clkRate = 1;       // observed chart-seconds per real-second
         let _frameNow = 0;      // smoothed time for THIS frame (update → camUpdate)
+        // slewClock() state: last returned time, when, and the tracked rate
+        // (chart-seconds per real-second). at = NaN → next frame snaps.
+        const _clkOut = { t: 0, at: NaN, rate: 1 };
 
         // Low-overdraw sustain rendering (DEFAULT since perf profiling on
         // dense palm-mute / fret-hand-mute passages). Those sections are GPU
@@ -10709,6 +10711,40 @@
             return allowed;
         }
 
+        // Advance a monotonic per-frame clock. Pure (all state in `clk`).
+        // Predicts forward at a tracked rate and pulls toward the latest audio
+        // sample extrapolated at that same rate, with a short time constant,
+        // instead of jumping to the sample: a new sample that lands a few ms
+        // behind the extrapolation no longer steps the highway backwards. The
+        // rate is the loop's own rather than a per-sample-pair estimate, which
+        // reads several x when two samples arrive a few ms apart under load.
+        // A > 50 ms error (seek, loop wrap), a > 250 ms frame gap, or a
+        // not-playing clock snaps (the latter to the sample itself).
+        function slewClock(clk, sampleT, samplePerf, nowMs, playing) {
+            const SNAP_S = 0.05;
+            const TAU_S = 0.15;
+            if (!playing || Number.isNaN(clk.at)) {
+                clk.t = sampleT; clk.at = nowMs;
+                return sampleT;
+            }
+            const dt = (nowMs - clk.at) / 1000;
+            clk.at = nowMs;
+            if (dt <= 0) return clk.t;
+            const pred = clk.t + clk.rate * dt;
+            const target = sampleT + (clk.rate * (nowMs - samplePerf)) / 1000;
+            const err = target - pred;
+            if (dt > 0.25 || Math.abs(err) > SNAP_S) {
+                clk.t = target;
+                return target;
+            }
+            const k = Math.min(1, dt / TAU_S);
+            // Second-order loop: the rate term follows the speed slider so the
+            // phase correction doesn't have to.
+            clk.rate = Math.min(5, Math.max(0.05, clk.rate + (2 * err * k) / TAU_S));
+            clk.t = Math.max(clk.t, pred + err * k);
+            return clk.t;
+        }
+
         // Smoothed playback clock for this frame. Called once per frame at the
         // top of update(); camUpdate() reads the stored _frameNow afterward so
         // notes and camera share one clock. See the _clk* state block above.
@@ -10726,29 +10762,18 @@
             if (bundle.isPlaying === false) {
                 _clkAudioT = raw;
                 _clkPerf = p;
-                _clkRate = 1;
+                slewClock(_clkOut, raw, p, p, false);
                 return (_frameNow = raw);
             }
             if (raw !== _clkAudioT) {
-                // New audio sample — re-anchor and refine the rate estimate.
-                if (!Number.isNaN(_clkPerf)) {
-                    const dP = (p - _clkPerf) / 1000;
-                    if (dP > 0.001 && dP < 0.5) {
-                        const r = (raw - _clkAudioT) / dP;
-                        _clkRate = (r > 0.05 && r < 5) ? r : 1; // seek/loop → reset
-                    } else if (dP >= 0.5) {
-                        _clkRate = 1; // long gap (paused / tab inactive)
-                    }
-                }
+                // New audio sample — re-anchor.
                 _clkAudioT = raw;
                 _clkPerf = p;
-                return (_frameNow = raw);
             }
-            // Same audio sample as last call — interpolate forward, capped so a
-            // stalled main thread or paused audio can't run the clock away.
-            const dt = (p - _clkPerf) / 1000;
-            if (dt <= 0 || dt > 0.1) return (_frameNow = raw);
-            return (_frameNow = _clkAudioT + _clkRate * dt);
+            // A sample older than 100 ms means a stalled main thread or paused
+            // audio: return it as-is rather than running the clock away.
+            const playing = p - _clkPerf <= 100;
+            return (_frameNow = slewClock(_clkOut, _clkAudioT, _clkPerf, p, playing));
         }
 
         /* ── Per-frame rendering ─────────────────────────────────────────── */
@@ -11684,7 +11709,7 @@
                     // Drop the clock anchor so the new song's currentTime
                     // re-anchors cleanly instead of measuring a bogus rate
                     // across the seek-to-0 discontinuity.
-                    _clkAudioT = NaN; _clkPerf = NaN; _clkRate = 1;
+                    _clkAudioT = NaN; _clkPerf = NaN; _clkOut.at = NaN; _clkOut.rate = 1;
                 }
             }
 
@@ -16060,7 +16085,7 @@
             _lookaheadLowBonusU = 0;
             _lookaheadHiNeckLatch = false;
             _measureStarts = []; _measureStartsRef = null;
-            _clkAudioT = NaN; _clkPerf = NaN; _clkRate = 1; _frameNow = 0;
+            _clkAudioT = NaN; _clkPerf = NaN; _clkOut.at = NaN; _clkOut.rate = 1; _frameNow = 0;
             prevLowFretBonus = 0;
             prevLockActive = false;
             _camSnapped = false;

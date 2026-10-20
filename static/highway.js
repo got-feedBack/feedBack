@@ -69,6 +69,47 @@ import {
     strumGroupBuckets,
 } from './js/highway-draw.js';
 
+/**
+ * Advance the per-frame render clock one rAF step. Pure; `clk` is
+ * {t, at, rate} owned by the caller (at = NaN means "no prior frame").
+ *
+ * `sampleT` / `samplePerf` are the latest audio sample (chart time) and
+ * the performance.now() it arrived at. audio.currentTime moves in ~10-20 ms
+ * steps, so drawing the sample as-is repeats or doubles a step every few
+ * frames, and extrapolating it with a per-sample rate (getTime()) steps
+ * backwards whenever a new sample lands behind the extrapolation. Instead,
+ * predict forward at a tracked rate and pull toward the sample extrapolated
+ * at that same rate with a short time constant, never stepping backwards.
+ * The rate is tracked here rather than taken from getTime(): its
+ * per-segment estimate can read several x when two setTime ticks bunch up
+ * under load. A > 50 ms error (seek, loop wrap, stall) or a > 250 ms frame
+ * gap snaps; a not-playing clock returns the sample itself.
+ */
+function stepRenderClock(clk, sampleT, samplePerf, nowMs, playing) {
+    const SNAP_S = 0.05;
+    const TAU_S = 0.15;
+    if (!playing || Number.isNaN(clk.at)) {
+        clk.t = sampleT; clk.at = nowMs;
+        return sampleT;
+    }
+    const dt = (nowMs - clk.at) / 1000;
+    clk.at = nowMs;
+    if (dt <= 0) return clk.t;
+    const pred = clk.t + clk.rate * dt;
+    const target = sampleT + (clk.rate * (nowMs - samplePerf)) / 1000;
+    const err = target - pred;
+    if (dt > 0.25 || Math.abs(err) > SNAP_S) {
+        clk.t = target;
+        return target;
+    }
+    const k = Math.min(1, dt / TAU_S);
+    // Second-order loop: the rate term follows the speed slider so the
+    // phase correction doesn't have to.
+    clk.rate = Math.min(5, Math.max(0.05, clk.rate + (2 * err * k) / TAU_S));
+    clk.t = Math.max(clk.t, pred + err * k);
+    return clk.t;
+}
+
 function createHighway() {
   // R3c: per-instance mutable state in one object, so extracted renderer/ws
   // modules can close over it as a factory arg without cross-panel sharing.
@@ -210,6 +251,12 @@ function createHighway() {
     hwState._domVisSampledFrame = NaN;
     hwState.animFrame = null;
     hwState._lastPausedDrawAt = 0;
+    // Wall time of the previous rendered frame and the resulting frame
+    // delta (seconds). draw() samples the render clock once per frame and
+    // the default renderer's anchor smoothing scales by the real dt.
+    hwState._lastDrawAt = 0;
+    hwState._frameDt = 1 / 60;
+    hwState._renderClock = { t: 0, at: NaN, rate: 1 };
     hwState._connectOpts = {};
     hwState._resizeContainer = null;
     hwState._resizeHandler = null;
@@ -670,7 +717,7 @@ function createHighway() {
                 hwState.ctx.fillRect(0, 0, W, H);
 
                 const anchor = getAnchorAt(hwState.currentTime);
-                updateSmoothAnchor(anchor, 1 / 60);
+                updateSmoothAnchor(anchor, hwState._frameDt);
 
                 hwState.ctx.save();
                 if (hwState._lefty) {
@@ -1280,6 +1327,23 @@ function createHighway() {
                     && _nowP - hwState._lastPausedDrawAt < _PAUSED_FRAME_INTERVAL_MS) return;
                 hwState._lastPausedDrawAt = _nowP;
             }
+        }
+        // Sample the render clock once per frame. setTime() is driven by a
+        // free-running 60 Hz setInterval that is not phase-locked to rAF and
+        // carries audio.currentTime's coarse steps, so drawing its raw value
+        // repeats or doubles a step every few frames. stepRenderClock()
+        // smooths from the same anchor getTime() uses and returns raw
+        // chartTime once the clock reads as paused / stalled (the predicate
+        // getTime() and bundle.isPlaying already use).
+        // No anchor yet → keep setTime's value.
+        const _frameAt = performance.now();
+        hwState._frameDt = hwState._lastDrawAt > 0
+            ? Math.min((_frameAt - hwState._lastDrawAt) / 1000, 0.25) : 1 / 60;
+        hwState._lastDrawAt = _frameAt;
+        if (!Number.isNaN(hwState._chartAnchorPerfNow)) {
+            const _clockPlaying = _frameAt - hwState._chartLastAdvanceAt <= _CHART_MAX_INTERP_MS;
+            hwState.currentTime = stepRenderClock(hwState._renderClock, hwState.chartTime,
+                hwState._chartAnchorPerfNow, _frameAt, _clockPlaying) + hwState.avOffsetSec;
         }
         // Skip bundle allocation when the default renderer is active —
         // it reads closure state directly and ignores the bundle.
@@ -2878,6 +2942,7 @@ function createHighway() {
             hwState._drawMsEMA = 0;
             hwState._lastAutoAdjustAt = 0;
             hwState._lastPausedDrawAt = 0;
+            hwState._lastDrawAt = 0;
             hwState._frameMsEMA = 0;
             hwState._lastFramePerf = 0;
             hwState._hudOn = false;
@@ -2897,6 +2962,8 @@ function createHighway() {
             hwState._chartAnchorPerfNow = NaN;
             hwState._chartLastAdvanceAt = 0;
             hwState._chartObservedRate = 1;
+            hwState._renderClock.at = NaN;
+            hwState._renderClock.rate = 1;
             // Release the renderer's GPU / DOM / event-listener resources
             // when leaving the player — anything it allocated in init()
             // should be torn down here so navigating away doesn't leak.
