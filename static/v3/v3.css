@@ -679,6 +679,14 @@ html[data-scoreboard="off"] #v3-live-performance-hud { display: none !important;
     z-index: 40;
 }
 .v3-rail-pop.hidden { display: none; }
+/* Many plugin controls must not grow past the window: the popover is centred,
+   so an overflowing one hides its first and last controls. Only this popover:
+   overflow-y on the others (the mixer's wide fader row) would add scrollbars. */
+#v3-rail-pop-plugins {
+    max-height: calc(100vh - 2rem);
+    overflow-x: hidden;
+    overflow-y: auto;
+}
 .v3-pop-row {
     display: flex;
     align-items: center;
