@@ -1,0 +1,62 @@
+name: Bug report
+description: Something in feedBack, the desktop app or a plugin is not working.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please search the [open issues](https://github.com/got-feedBack/feedBack/issues) first to avoid duplicates.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The exact tag or nightly build, for example `0.3.0-alpha.1` or `nightly.20260722`. It is shown in Settings → About.
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Docker
+        - Desktop (Windows)
+        - Desktop (macOS)
+        - Desktop (Linux)
+        - Other (describe below)
+    validations:
+      required: true
+  - type: input
+    id: plugin
+    attributes:
+      label: Plugin
+      description: If the bug is in a plugin, name it. Leave empty if it is in the core app.
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Go to '...'
+        2. Click on '...'
+        3. See the error
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: What happened instead. Add screenshots if they help.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or diagnostics
+      description: Drop a diagnostics bundle (Settings → Diagnostics → Export Diagnostics) or paste relevant log lines.
+      render: text

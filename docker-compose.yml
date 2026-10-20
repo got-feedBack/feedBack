@@ -12,7 +12,6 @@ services:
       - ./static:/app/static
       - ./server.py:/app/server.py
       - ./VERSION:/app/VERSION
-      - ./ug_browser.py:/app/ug_browser.py
       - ./lib:/app/lib
       - ./plugins:/app/plugins
       - ./.git:/app/.git:ro

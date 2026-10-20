@@ -9,17 +9,20 @@ server.py              FastAPI app — library API, WebSocket highway, plugin lo
 static/
   app.js               Main frontend — screens, library views, player, plugin loader
   highway.js           Canvas note highway renderer (createHighway factory)
-  index.html           Single-page app shell
   style.css            Custom CSS loaded alongside Tailwind
+  js/                  Frontend modules split out of app.js / highway.js
+  capabilities/        Frontend capability domain implementations
+  v3/                  v3 UI: index.html (single-page app shell), v3.css, player-chrome.js, screens
 lib/
   song.py              Core data models (Note, Chord, Arrangement, Song)
   sloppak.py           Sloppak format support
   loosefolder.py       Loose-folder XML chart support
   audio.py             OGG/MP3 audio handling
-  retune.py            Pitch-shifting logic
   tunings.py           Tuning name/offset utilities
   gp2rs.py             Guitar Pro to arrangement XML conversion
   gp2midi.py           Guitar Pro to MIDI
+  appstate.py          Shared core singletons injected into the routers
+  routers/             FastAPI route modules mounted by server.py (never import server)
 plugins/
   __init__.py           Plugin discovery, loading, requirements install
   <plugin_name>/        Each plugin is its own directory (often a git submodule)
@@ -93,6 +96,16 @@ Best practices:
 - `register_library_provider(provider)` — register a plugin-provided library source. Providers expose `id`, `label`, optional `kind`/`capabilities`, and callable `query_page`, `query_artists`, `query_stats`, and `tuning_names` methods. Providers with `art.read` may also expose `get_art(song_id)` returning one of: a `Response` object (any media type, served as-is); raw `bytes` or `bytearray` (**assumed PNG** — use a `Response` or a `dict` with `content`+`media_type` keys for JPEG/WebP or other formats); a URL string (http/https → 302 redirect; other schemes are rejected with 400); a filesystem path string or `Path` (served as a file with auto-detected media type); or a `dict` with a `url`, `path`, or `content` key. Providers with `song.sync` may expose `sync_song(song_id)` returning `None` (success with no local file) or a `dict` — the dict is passed through as the JSON response and should include `filename`/`local_filename` if a local playable file was produced.
 - `unregister_library_provider(provider_id)` — remove a plugin-provided library source by id. The built-in `local` provider cannot be removed.
 - `get_sloppak_cache_dir()` — sloppak cache path
+- `get_scan_status()`: returns a copy of the live library scan status dict
+- `get_art_cache_dir()`: art cache path
+- `register_tuning_provider(provider_id, get_tunings)`: contribute custom tunings to the core `tuning.read` capability. `get_tunings` must be callable.
+- `unregister_tuning_provider(provider_id)`: remove a tuning provider by id
+- `register_demo_janitor_hook(fn)`: register a zero-argument, non-async callable that the demo-mode janitor runs hourly for session cleanup
+- `award_xp(amount, source=None)`: add XP to the unified core store and return the new progress payload
+- `get_xp_progress()`: return the current XP progress payload
+- `seed_xp(amount, marker="minigames")`: one-time migration of XP from a plugin's own pre-unification store. Returns `True` if it seeded.
+- `reset_xp(source)`: reset one source's XP contribution and return the new progress payload
+- `record_progression_event(event_type, payload=None)`: backend twin of the frontend `progression` capability's record-event command. Returns the toast-ready summary.
 - `load_sibling(name)` — loads a sibling module from this plugin's directory under a unique, namespaced module name. See "Sibling imports" below.
 - `log` — stdlib `logging.Logger` namespaced to `feedBack.plugin.<id>`. Pre-configured with the app-wide level, format (including JSON mode), and correlation IDs. Use this for all backend plugin output instead of `print()`. See "Backend plugin logging" below.
 
@@ -586,7 +599,7 @@ cover.jpg              Album art (optional)
 lyrics.json            Syllable-level lyrics (optional)
 ```
 
-Sloppak is the preferred format for new features. The [Stems plugin](https://github.com/topkoa/slopsmith-plugin-stems) provides live stem mixing for sloppak songs.
+Sloppak is the preferred format for new features. The [Stems plugin](https://github.com/got-feedBack/feedBack-plugin-stems) provides live stem mixing for sloppak songs.
 
 **Full developer reference:** the authoritative format spec now lives in its own repo —
 [got-feedback/feedpak-spec](https://github.com/got-feedback/feedpak-spec)
@@ -613,7 +626,6 @@ of a code comment.)
 
 **Key code:**
 - `lib/sloppak.py` — format detection, zip/directory resolution, metadata extraction, song loading
-- `lib/sloppak_convert.py` — sloppak assembly pipeline, Demucs stem splitting
 - `lib/song.py` — shared data models (`Note`, `Chord`, `Arrangement`, `Song`) and wire format serialization used by both formats
 
 ## Frontend Conventions
@@ -624,7 +636,7 @@ of a code comment.)
 - **Styling** — Tailwind CSS utility classes, dark theme (`bg-dark-600`, `text-gray-300`, accent `#4080e0`, gold `#e8c040`). Tailwind is served as a **prebuilt** stylesheet (`static/tailwind.min.css`, regenerated by `bash scripts/build-tailwind.sh`), **never** the runtime Play CDN — the CDN's on-the-fly JIT rescanned the DOM on the main thread and dropped ~26% of frames with the 3D highway (feedBack-desktop#110). The committed CSS only contains classes the build scanner saw, so CI (`tailwind-fresh`) rebuilds and diffs it; run the build script and commit when you add new classes. A plugin that uses classes not guaranteed in core (notably arbitrary values like `w-[37px]`) MUST ship its own compiled stylesheet via the `styles` manifest key, built with `corePlugins.preflight = false` (utilities only — core ships the one base reset). Plugins MUST NOT load the Tailwind Play CDN or any runtime CSS JIT. See constitution Principle II.
 - **Naming** — camelCase for JS functions, kebab-case for CSS classes, snake_case for plugin IDs
 - **Text selection (v3)** — the v3 UI defaults to `user-select: none` on `html` (in `static/v3/v3.css`) so accidental drag/double-click selection of chrome never looks broken. Form fields are always re-enabled, and a **plugin's mounted screen subtree (`.screen[id^="plugin-"]`) stays selectable by default**, so a plugin's copy-worthy text (lyrics, chord names, results, diagnostics) is unaffected — *unless your plugin renders copyable content OUTSIDE its `plugin-<id>` screen* (e.g. injected into the player chrome / a HUD overlay), which inherits the non-select default. Opt such content back in with the core-served **`.fb-selectable`** class (it sets `user-select: text` on the element + descendants; works for runtime-installed plugins since it's hand-authored in core CSS, not a scanned Tailwind utility). Never use a `* { user-select: none }` rule (breaks input carets/IME), and never use `user-select: none` to "lock" text — keep errors, IDs, paths, versions, and metadata selectable.
-- **Player layout** — `#player` is `display:flex; flex-direction:column; position:fixed; inset:0`. `#highway` is `flex:1`. `#player-controls` sits at the bottom. Hiding the highway collapses the layout — use `margin-top: auto` on controls if you need to hide it.
+- **Player layout** — `#player` is `display:flex; flex-direction:column; position:fixed; inset:0`. `#highway` is `flex:1`. In v3, `#player-controls` is the auto-hiding `.v3-transport`, absolutely positioned at the bottom of `#player` (`static/v3/v3.css`), so hiding the highway does not move it. Mount player controls into `window.feedBack.ui.playerControlSlot()`, not `#player-controls` (see [docs/plugin-v3-ui.md](docs/plugin-v3-ui.md)).
 
 ## Backend Conventions
 
@@ -704,7 +716,7 @@ Message delivery is incremental. You may receive `loading` updates and `lyrics` 
 
 2. **Plugin gitlinks** — Plugins are separate git repos cloned into `plugins/`. Switching branches on the main repo can delete or clobber these directories. Be careful with `git checkout` and `git clean`.
 
-3. **Highway flex layout** — `#highway` has `flex:1` in the player. Hiding it with `display:none` removes the flex child, causing `#player-controls` to float to the top. If you hide the highway, add `margin-top: auto` to the controls div to keep it at the bottom.
+3. **Highway flex layout** — `#highway` has `flex:1` in the player, so hiding it with `display:none` removes the flex child that fills the screen. The v3 transport is absolutely positioned at the bottom of `#player`, so it stays in place and needs no `margin-top: auto` fix. Your replacement content has to fill the space itself.
 
 4. **Multiple WebSocket connections** — The server supports many simultaneous WebSocket connections to the same song. Split screen panels, lyrics panes, and jumping tab panes each open their own. This is by design — don't try to multiplex.
 

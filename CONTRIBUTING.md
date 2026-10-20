@@ -49,4 +49,4 @@ Standard PR workflow described in [CLAUDE.md → Git Workflow](CLAUDE.md):
 
 ## Questions
 
-Open an issue or start a [Discussion](https://github.com/got-feedback/feedBack/discussions) if you're unsure whether a contribution fits — much better to ask early than to find out after the work is done.
+[Open an issue](https://github.com/got-feedBack/feedBack/issues) if you're unsure whether a contribution fits — much better to ask early than to find out after the work is done.
