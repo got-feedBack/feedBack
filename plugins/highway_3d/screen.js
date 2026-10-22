@@ -818,6 +818,9 @@
     // Open-string MIDI (thick → thin), matched to RS string index 0 low.
     const _BASE_OPEN_MIDI_BASS4 = Object.freeze([28, 33, 38, 43]);
     const _BASE_OPEN_MIDI_BASS5 = Object.freeze([23, 28, 33, 38, 43]);
+    // B E A D G C — the standard the GP importer writes 6-string bass tuning
+    // offsets against (lib/gp2rs.py STANDARD_TUNING_BASS, lib/tunings.py bass-6).
+    const _BASE_OPEN_MIDI_BASS6 = Object.freeze([23, 28, 33, 38, 43, 48]);
     const _BASE_OPEN_MIDI_GUITAR6 = Object.freeze([40, 45, 50, 55, 59, 64]);
     const _BASE_OPEN_MIDI_GUITAR7 = Object.freeze([35, 40, 45, 50, 55, 59, 64]);
     // F#/B/E standard extension — low string is a fifth below RS 7‑string low B.
@@ -829,6 +832,7 @@
         if (sc === 4) return _BASE_OPEN_MIDI_GUITAR6.slice(0, 4);
         if (sc === 5 && isBass) return _BASE_OPEN_MIDI_BASS5.slice();
         if (sc === 5) return _BASE_OPEN_MIDI_GUITAR6.slice(0, 5);
+        if (sc === 6 && isBass) return _BASE_OPEN_MIDI_BASS6.slice();
         if (sc === 7) return _BASE_OPEN_MIDI_GUITAR7.slice();
         if (sc === 8) return _BASE_OPEN_MIDI_GUITAR8.slice();
         if (Number.isFinite(sc) && sc > 8) {
@@ -850,6 +854,81 @@
         const octave = Math.floor(m / 12) - 1;
         const n = _NOTE_NAMES_SHARP[(m % 12 + 12) % 12];
         return n + octave;
+    }
+
+    // On-note name labels (noteNamesVisible): the usual chart spelling for each
+    // pitch class, sharps or flats by common use. No octave number.
+    const _NOTE_NAMES_COMMON = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'];
+
+    /**
+     * Name of the note at `fret` on a string whose open (uncapoed) pitch is
+     * `openMidi`. Chart fret numbers count from the nut, so a capo only raises
+     * open strings (fret 0); fretted notes already include it.
+     */
+    function _noteNameForFret(openMidi, fret, capo) {
+        const f = Number.isFinite(fret) ? fret : 0;
+        const c = Number.isFinite(capo) ? capo : 0;
+        const m = Math.round(openMidi + (f > 0 ? f : c));
+        return _NOTE_NAMES_COMMON[(m % 12 + 12) % 12];
+    }
+
+    // Longest gap between onsets that still counts as playing the same note
+    // again ("in a row"): a gallop or eighth notes, not the same note after a rest.
+    const NOTE_NAME_RUN_GAP = 0.5;
+
+    /**
+     * Notes the "only notes held at least N seconds" filter names although each
+     * is short: runs of the same note (same string and fret, back to back, onsets
+     * at most `maxGap` apart) lasting at least `minSustain` from the first onset
+     * to the end of the last note. A fast gallop on one note (Heaven and Hell)
+     * keeps its name; a lone short note doesn't. `notes` sorted by .t, as
+     * bundle.notes is. Returns a Set of the qualifying note objects.
+     */
+    function _noteNameRepeatedRuns(notes, minSustain, maxGap) {
+        const out = new Set();
+        if (!Array.isArray(notes) || notes.length < 2) return out;
+        const gap = Number.isFinite(maxGap) ? maxGap : NOTE_NAME_RUN_GAP;
+        const min = Number.isFinite(minSustain) ? minSustain : 0;
+        let start = 0;
+        for (let i = 1; i <= notes.length; i++) {
+            const prev = notes[i - 1], n = notes[i];
+            const again = !!n && !!prev && n.s === prev.s && n.f === prev.f
+                && Number.isFinite(n.t) && Number.isFinite(prev.t)
+                && n.t >= prev.t && n.t - prev.t <= gap;
+            if (again) continue;
+            const end = i - 1;
+            if (end > start) {
+                const first = notes[start], last = notes[end];
+                if (last.t + (last.sus || 0) - first.t >= min) {
+                    for (let k = start; k <= end; k++) out.add(notes[k]);
+                }
+            }
+            start = i;
+        }
+        return out;
+    }
+
+    // Named strings for the note-name string filter: core's "Highway String
+    // Colors" slot keys, so a string keeps its name and colour across
+    // instruments and tunings (drop D's low string is still lowE; a 5-string
+    // bass's low B is low7). The per-chart mapping comes from core only, never
+    // a local copy, so the two can't drift apart.
+    const NOTE_NAME_SLOT_KEYS = ['lowE', 'A', 'D', 'G', 'B', 'highE', 'low7', 'low8'];
+
+    /**
+     * Slot key per string index (0 = lowest) for a chart, from core's
+     * window.feedBack.highwayColors.keysForChart; null on a core without that
+     * API (the string filter then names every string).
+     */
+    function _noteNameSlotKeysForChart(sc, isBass) {
+        const api = (typeof window !== 'undefined' && window.feedBack) ? window.feedBack.highwayColors : null;
+        if (!api || typeof api.keysForChart !== 'function') return null;
+        try {
+            const k = api.keysForChart(sc, isBass);
+            return Array.isArray(k) && k.length ? k : null;
+        } catch (_) {
+            return null;
+        }
     }
 
     /**
@@ -1458,6 +1537,11 @@
 
     /** Fret-number label tints — gold on approaching/active notes, muted blue when idle. */
     const FRET_LABEL_GOLD_HEX = '#D8A636';
+    // On-note name labels (noteNamesVisible). Light grey, not white: the bloom
+    // pass (UnrealBloomPass threshold 0.82) makes anything brighter glow, which
+    // turned white names hazy once bloom loaded. #c6c6c6 sits at ~0.78, like the
+    // gold fret numbers (~0.66) that stay crisp.
+    const NOTE_NAME_HEX = '#c6c6c6';
     const FRET_LABEL_IDLE_HEX = '#9ab8cc';
 
     /** 3D chord-box rim bars (thin on all chords, including repeats in a sequence). */
@@ -1595,14 +1679,27 @@
     function slideOffsetWorldX(n, chartTime, st_) {
         const st = st_ || slideTrailEnd(n);
         if (!st || n.f <= 0 || !(n.sus > 0)) return 0;
+        return (fretMid(st.endFret) - fretMid(n.f)) * slideEaseW(n, chartTime, st);
+    }
+
+    /** Eased 0..1 progress of a slide over its sustain (pitched vs unpitched curve). */
+    function slideEaseW(n, chartTime, st) {
         const denom = Math.max(n.sus, 1e-6);
         const p = Math.max(0, Math.min(1, (chartTime - n.t) / denom));
-        const startX = fretMid(n.f);
-        const endX = fretMid(st.endFret);
-        const w = st.unpitched
+        return st.unpitched
             ? 1 - Math.sin((1 - p) * Math.PI / 2)
             : Math.pow(Math.sin(p * Math.PI / 2), 3);
-        return (endX - startX) * w;
+    }
+
+    /**
+     * Fret the gem is over right now: n.f, or during a slide the fret nearest
+     * its glide position (same easing as slideOffsetWorldX). Used by the
+     * note-name label so the name follows the gem.
+     */
+    function slideFretNow(n, chartTime, st_) {
+        const st = st_ || slideTrailEnd(n);
+        if (!st || n.f <= 0 || !(n.sus > 0) || chartTime <= n.t) return n.f;
+        return Math.round(n.f + (st.endFret - n.f) * slideEaseW(n, chartTime, st));
     }
 
     // Camera tgtDist building blocks. Both the dynamic (camera-follow)
@@ -2397,7 +2494,7 @@
         return _bgBandsCache;
     }
 
-    const BG_DEFAULTS = { style: 'particles', intensity: 0.5, reactive: true, palette: 'default', bgTheme: 'default', hwTheme: 'default', showFretOnNote: true, fretNumberGhostScope: 'chords', cameraSmoothing: 0.5, zoomSmoothing: 0.5, tiltSmoothing: 0.5, cameraLockLow: false, cameraLockZoom: 0.5, cameraMode: 'lookahead', nutHeadstockVisible: true, tuningLabelsVisible: true, nutColor: '#f5f3f0', headstockColor: '#d4b48a', textSize: 0.5, vibrancy: 0.85, glow: 0.25, customImageDataUrl: '', customImageName: '', customVideoName: '', chordDiagramVisible: true, chordDiagramSize: 0.5, chordDiagramPosition: 'tl', fretColumnMarkerCadence: 1, projectionVisible: true, inlayLabelsVisible: false, sectionLabelsOnHighway: false, sectionHudVisible: false, sectionHudPosition: 'tr', sectionHudSize: 0.5, toneHudVisible: false, toneHudPosition: 'tl', toneHudSize: 0.5, fpsVisible: false, fretDividersVisible: true, slideArrowApproachVisible: true, slideArrowNeckVisible: true, slideArrowChainPreviewVisible: true, hitFx: 0.7, sparks: true, cinematic: true, verdictMarks: true, timingFx: true, streakFx: true, bloom: true };
+    const BG_DEFAULTS = { style: 'particles', intensity: 0.5, reactive: true, palette: 'default', bgTheme: 'default', hwTheme: 'default', showFretOnNote: true, fretNumberGhostScope: 'chords', cameraSmoothing: 0.5, zoomSmoothing: 0.5, tiltSmoothing: 0.5, cameraLockLow: false, cameraLockZoom: 0.5, cameraMode: 'lookahead', nutHeadstockVisible: true, tuningLabelsVisible: true, nutColor: '#f5f3f0', headstockColor: '#d4b48a', textSize: 0.5, vibrancy: 0.85, glow: 0.25, customImageDataUrl: '', customImageName: '', customVideoName: '', chordDiagramVisible: true, chordDiagramSize: 0.5, chordDiagramPosition: 'tl', fretColumnMarkerCadence: 1, projectionVisible: true, inlayLabelsVisible: false, sectionLabelsOnHighway: false, sectionHudVisible: false, sectionHudPosition: 'tr', sectionHudSize: 0.5, toneHudVisible: false, toneHudPosition: 'tl', toneHudSize: 0.5, fpsVisible: false, fretDividersVisible: true, slideArrowApproachVisible: true, slideArrowNeckVisible: true, slideArrowChainPreviewVisible: true, noteNamesVisible: false, noteNamesLongOnly: false, noteNamesMinSustain: 0.2, noteNamesStrings: NOTE_NAME_SLOT_KEYS.join(','), hitFx: 0.7, sparks: true, cinematic: true, verdictMarks: true, timingFx: true, streakFx: true, bloom: true };
     // User-selectable, persistable bg styles — must mirror settings.html's
     // VALID_STYLES. 'venue' is deliberately NOT here: it is an internal effective
     // style reached only via _venueSceneOverride (the viz-picker Venue flow), so
@@ -2807,7 +2904,7 @@
     // means (fall back to default rather than silently flipping to
     // false). Add new boolean keys to BG_DEFAULTS and they pick this
     // up via the dispatch below.
-    const _BG_BOOL_KEYS = new Set(['reactive', 'showFretOnNote', 'cameraLockLow', 'inlayLabelsVisible', 'sectionLabelsOnHighway', 'sectionHudVisible', 'nutHeadstockVisible', 'tuningLabelsVisible', 'projectionVisible', 'chordDiagramVisible', 'fpsVisible', 'toneHudVisible', 'fretDividersVisible', 'slideArrowApproachVisible', 'slideArrowNeckVisible', 'slideArrowChainPreviewVisible', 'sparks', 'cinematic', 'verdictMarks', 'timingFx', 'streakFx', 'bloom']);
+    const _BG_BOOL_KEYS = new Set(['reactive', 'showFretOnNote', 'cameraLockLow', 'inlayLabelsVisible', 'sectionLabelsOnHighway', 'sectionHudVisible', 'nutHeadstockVisible', 'tuningLabelsVisible', 'projectionVisible', 'chordDiagramVisible', 'fpsVisible', 'toneHudVisible', 'fretDividersVisible', 'slideArrowApproachVisible', 'slideArrowNeckVisible', 'slideArrowChainPreviewVisible', 'noteNamesVisible', 'noteNamesLongOnly', 'sparks', 'cinematic', 'verdictMarks', 'timingFx', 'streakFx', 'bloom']);
     function _bgCoerceBool(val, fallback) {
         if (val === 'true' || val === '1') return true;
         if (val === 'false' || val === '0') return false;
@@ -2846,6 +2943,17 @@
             const t = val.trim();
             if (/^#[0-9a-fA-F]{6}$/.test(t)) return t.toLowerCase();
             return BG_DEFAULTS[key];
+        }
+        if (key === 'noteNamesMinSustain') {
+            const n = parseFloat(val);
+            return Number.isFinite(n) ? Math.max(0.05, Math.min(2, n)) : BG_DEFAULTS.noteNamesMinSustain;
+        }
+        if (key === 'noteNamesStrings') {
+            // Comma list of slot keys; unknown keys dropped, canonical order.
+            // '' (no strings) is valid and simply shows no names.
+            if (typeof val !== 'string') return BG_DEFAULTS.noteNamesStrings;
+            const want = new Set(val.split(',').map((t) => t.trim()));
+            return NOTE_NAME_SLOT_KEYS.filter((k) => want.has(k)).join(',');
         }
         if (key === 'fretColumnMarkerCadence') {
             const n = parseInt(val, 10);
@@ -2976,6 +3084,12 @@
     window.h3dBgSetSlideArrowApproachVisible = (v) => _bgWriteGlobal('slideArrowApproachVisible', !!v);
     window.h3dBgSetSlideArrowNeckVisible     = (v) => _bgWriteGlobal('slideArrowNeckVisible', !!v);
     window.h3dBgSetSlideArrowChainPreviewVisible = (v) => _bgWriteGlobal('slideArrowChainPreviewVisible', !!v);
+    window.h3dBgSetNoteNamesVisible = (v) => _bgWriteGlobal('noteNamesVisible', !!v);
+    window.h3dBgSetNoteNamesLongOnly = (v) => _bgWriteGlobal('noteNamesLongOnly', !!v);
+    window.h3dBgSetNoteNamesMinSustain = (v) => _bgWriteGlobal('noteNamesMinSustain', _bgCoerce('noteNamesMinSustain', String(v)));
+    // Accepts an array of slot keys or a comma list.
+    window.h3dBgSetNoteNamesStrings = (v) => _bgWriteGlobal('noteNamesStrings',
+        _bgCoerce('noteNamesStrings', Array.isArray(v) ? v.join(',') : String(v)));
     // Custom image asset for the 'image' bg style (#19). Composite setter:
     // writes both the data URL (the bytes that drive the texture) and the
     // display filename, each emitting a change event. The listener
@@ -4898,6 +5012,18 @@
         let projectionVisible      = BG_DEFAULTS.projectionVisible;   // board "note preview" ghost on the fretboard
         let slideArrowApproachVisible = BG_DEFAULTS.slideArrowApproachVisible; // slide-direction arrow riding with the note/gem
         let slideArrowNeckVisible      = BG_DEFAULTS.slideArrowNeckVisible;    // slide-direction arrow preview on the neck
+        let noteNamesVisible = BG_DEFAULTS.noteNamesVisible; // note name above single-note gems
+        // Open-string MIDI per string + capo for the note-name labels; refreshed
+        // in update() only when tuning / capo / string count change.
+        const _noteNameOpenMidi = [];
+        const _noteNameStringOn = [];   // per string index: name this string?
+        let _noteNameCapo = 0, _noteNameKey = '';
+        // "Only longer notes": runs of one repeated note that count as long
+        // (_noteNameRepeatedRuns), per chart and minimum length.
+        let _noteNameRuns = new Set(), _noteNameRunsFor = null, _noteNameRunsMin = -1;
+        let noteNamesLongOnly = BG_DEFAULTS.noteNamesLongOnly;     // only notes held >= min
+        let noteNamesMinSustain = BG_DEFAULTS.noteNamesMinSustain; // seconds
+        let noteNamesStrings = BG_DEFAULTS.noteNamesStrings;       // enabled slot keys (CSV)
         let slideArrowChainPreviewVisible = BG_DEFAULTS.slideArrowChainPreviewVisible; // early neck preview for chained/multi-leg slides
         let _vibrancyIdleOp = 0.4  + 0.6  * BG_DEFAULTS.vibrancy;
         let _vibrancyProjOp = 0.15 + 0.35 * BG_DEFAULTS.vibrancy;
@@ -5131,6 +5257,7 @@
         let gFHXLines = null, pFHXLines = null;   // FH X lines combined geometry
         let pNoteFretLabel, pConnectorLine, pDropLine, pTapChevron, pAccentHalo;
         let pTeachMarkLbl;  // teaching marks fg/sd label sprites (§6.2.2)
+        let pNoteNameLbl;   // note-name labels above single-note gems (noteNamesVisible)
         let pHaloBar = null, gHaloBar = null; // gradient halo bar geometry — replaces per-shell pChordAccentHalo
         let gArpBracket = null; // shared 1×1×1 box geometry for pArpBracket; built once, disposed in teardown
         let pSusRibbon = null, pSusRibbonOl = null;
@@ -8325,6 +8452,12 @@
                 _tml.material.depthTest = false;
                 return _tml;
             });
+            pNoteNameLbl = pool(lblG, () => {
+                const _nnl = new T.Sprite(txtMat('C', NOTE_NAME_HEX, false, 'noteFret').clone());
+                _nnl.material.fog = false;
+                _nnl.material.depthTest = false;
+                return _nnl;
+            });
             pConnectorLine = pool(noteG, () => new T.Line(
                 new T.BufferGeometry().setFromPoints([new T.Vector3(0, 0, 0), new T.Vector3(0, 1, 0)]),
                 new T.LineBasicMaterial({ color: 0xaaaaaa, transparent: true, opacity: 0.5, depthTest: false }),
@@ -8384,6 +8517,7 @@
             pTechPlane.warm(_WARM_CHORD);
             pNoteFretLabel.warm(_WARM_NOTE);
             pTeachMarkLbl.warm(_WARM_NOTE);
+            pNoteNameLbl.warm(_WARM_NOTE);
             pChordFrameFill.warm(_WARM_CHORD);
             pChordBox.warm(_WARM_CHORD);
             pChordLbl.warm(_WARM_CHORD);
@@ -8485,7 +8619,11 @@
                     changedKey === 'projectionVisible' ||
                     changedKey === 'slideArrowApproachVisible' ||
                     changedKey === 'slideArrowNeckVisible' ||
-                    changedKey === 'slideArrowChainPreviewVisible') {
+                    changedKey === 'slideArrowChainPreviewVisible' ||
+                    changedKey === 'noteNamesVisible' ||
+                    changedKey === 'noteNamesLongOnly' ||
+                    changedKey === 'noteNamesMinSustain' ||
+                    changedKey === 'noteNamesStrings') {
                     // Flag flips don't need a mesh rebuild — just refresh
                     // the per-instance state for the next frame to consult.
                     // Same shape for showFretOnNote (#12), cameraSmoothing
@@ -8810,6 +8948,10 @@
             slideArrowApproachVisible = _bgReadSetting(panelKey, 'slideArrowApproachVisible');
             slideArrowNeckVisible     = _bgReadSetting(panelKey, 'slideArrowNeckVisible');
             slideArrowChainPreviewVisible = _bgReadSetting(panelKey, 'slideArrowChainPreviewVisible');
+            noteNamesVisible = _bgReadSetting(panelKey, 'noteNamesVisible');
+            noteNamesLongOnly = _bgReadSetting(panelKey, 'noteNamesLongOnly');
+            noteNamesMinSustain = _bgReadSetting(panelKey, 'noteNamesMinSustain');
+            noteNamesStrings = _bgReadSetting(panelKey, 'noteNamesStrings');
             _vibrancyIdleOp = 0.4  + 0.6  * vibrancy;
             _vibrancyProjOp = 0.15 + 0.35 * vibrancy;
             // Custom image asset is a single GLOBAL slot — bytes are
@@ -10814,6 +10956,8 @@
                 _prewarmTex(txtMat('T', '#7fd1ff', false, 'teachFg'));
                 for (let i = 1; i <= 4; i++) _prewarmTex(txtMat(String(i), '#7fd1ff', false, 'teachFg'));
                 for (let i = 0; i <= 11; i++) _prewarmTex(txtMat(String(i), '#ffcc66', false, 'teachSd'));
+                // Note-name labels (drawNote, noteNamesVisible).
+                for (const nm of _NOTE_NAMES_COMMON) _prewarmTex(txtMat(nm, NOTE_NAME_HEX, false, 'noteFret'));
                 // Technique sprite factories (own caches, keyed by packed
                 // number): PM/FH mute X, hammer/pull triangles, bend
                 // chevron stacks, slide direction arrows — per string
@@ -10915,6 +11059,7 @@
             if (pFHXLines) pFHXLines.reset();
             pNoteFretLabel.reset(); pConnectorLine.reset(); pDropLine.reset();
             pTeachMarkLbl.reset();
+            pNoteNameLbl.reset();
             pFretColMarker.reset(); pSusRail.reset(); pSusRailBloom.reset(); pTechPlane.reset();
             // Clear per-frame queues in-place (avoid reallocating the array object).
             _ndLabels.length = 0;
@@ -11388,6 +11533,15 @@
             _drawChordTemplates = bundle.chordTemplates ?? null;
             _drawAnchors = anchors ?? null;
             _drawTeachingMarks = !!bundle.teachingMarksVisible;
+            if (noteNamesVisible) _refreshNoteNameTuning(bundle);
+            if (noteNamesVisible && noteNamesLongOnly
+                && (bundle.notes !== _noteNameRunsFor || noteNamesMinSustain !== _noteNameRunsMin)) {
+                // Chart-static: recomputed only when the notes array (song,
+                // arrangement, difficulty) or the minimum length changes.
+                _noteNameRuns = _noteNameRepeatedRuns(bundle.notes, noteNamesMinSustain, NOTE_NAME_RUN_GAP);
+                _noteNameRunsFor = bundle.notes;
+                _noteNameRunsMin = noteNamesMinSustain;
+            }
             // Default on: only an explicit false (older bundles omit the flag) hides fg.
             _showFingerHints = bundle.fingerHintsVisible !== false;
 
@@ -14205,6 +14359,35 @@
          * slots (always plain lead notes, where those collapse to
          * n.f/projFactor/n.f).
          */
+        // Open-string pitches for the note-name labels. Same tuning/capo source
+        // as the nut's pitch labels (_openStringPitchLabelsForTuning): bundle
+        // first (chart-transform aware), songInfo as fallback. Recomputed only
+        // when string count, arrangement, tuning or capo change.
+        function _refreshNoteNameTuning(bundle) {
+            const info = bundle.songInfo || {};
+            const tuning = Array.isArray(bundle.tuning) ? bundle.tuning
+                : (Array.isArray(info.tuning) ? info.tuning : []);
+            const capo = Number.isFinite(bundle.capo) ? bundle.capo
+                : (Number.isFinite(info.capo) ? info.capo : 0);
+            const key = nStr + '|' + (info.arrangement || '') + '|' + tuning.join(',') + '|' + capo
+                + '|' + noteNamesStrings;
+            if (key === _noteNameKey) return;
+            _noteNameKey = key;
+            _noteNameCapo = capo;
+            const base = _baseOpenStringMidis(nStr, info.arrangement);
+            const slots = _noteNameSlotKeysForChart(nStr, /bass/i.test(info.arrangement || ''));
+            const enabled = new Set(String(noteNamesStrings || '').split(',').filter(Boolean));
+            _noteNameOpenMidi.length = 0;
+            _noteNameStringOn.length = 0;
+            for (let i = 0; i < nStr; i++) {
+                const off = Number.isFinite(tuning[i]) ? tuning[i] : 0;
+                _noteNameOpenMidi.push((base[i] !== undefined ? base[i] : 40) + off);
+                // Without core's slot mapping a partial selection can't be applied,
+                // so name every string, unless the user selected none at all.
+                _noteNameStringOn.push(slots ? enabled.has(slots[i]) : enabled.size > 0);
+            }
+        }
+
         function drawGhostFretLabel(x, y, projRim, fretDisplay, alpha, growScale, fretForScale) {
             const lb = pGhostFretLbl.get();
             const sprMat = txtMat(fretDisplay, '#ffffff', false, 'ghostFret');
@@ -15056,6 +15239,35 @@
                     harmMark.position.set(x, y + techniqueYNow, noteZ + K);
                     harmMark.rotation.z = approachRot;
                     harmMark.renderOrder = techniqueMarkerRenderOrder;
+                }
+
+                // ── Note name above the gem (opt-in, single notes only) ────
+                // Sits on top of the technique stack (yo) so it never covers a
+                // bend chevron or H/P triangle. Fades in like the fret label;
+                // stays while a sustain is held. During a slide it names the
+                // fret the gliding gem is over, not the starting fret.
+                if (noteNamesVisible && !fromChord && _noteNameOpenMidi[s] !== undefined
+                    && _noteNameStringOn[s]
+                    && (!noteNamesLongOnly || (n.sus || 0) >= noteNamesMinSustain || _noteNameRuns.has(n))) {
+                    const nameAlpha = dt >= 0
+                        ? Math.min(1.0, (AHEAD - dt) / 0.35)
+                        : (sustained ? 1.0 : 0);
+                    if (nameAlpha > 0) {
+                        const nameLbl = pNoteNameLbl.get();
+                        const nameFret = slideXNow !== 0 ? slideFretNow(n, now, slideSt) : n.f;
+                        const nameMat = txtMat(_noteNameForFret(_noteNameOpenMidi[s], nameFret, _noteNameCapo),
+                            NOTE_NAME_HEX, false, 'noteFret');
+                        _setLabelMap(nameLbl, nameMat);
+                        // noteFret canvases widen for two-glyph names (Bb, F#);
+                        // keep the glyph aspect instead of squeezing into a square.
+                        const img = nameMat.map && nameMat.map.image;
+                        const aspect = img && img.height ? img.width / img.height : 1;
+                        const nameS = NH * 1.4 * sLbl;
+                        nameLbl.scale.set(nameS * aspect, nameS, 1);
+                        nameLbl.position.set(x, yo + nameS * 0.6, noteZ + K);
+                        nameLbl.renderOrder = techniqueMarkerRenderOrder;
+                        nameLbl.material.opacity = nameAlpha;
+                    }
                 }
 
                 // ── Per-note fret connector label ─────────────────────────
