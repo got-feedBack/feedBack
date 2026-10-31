@@ -154,6 +154,13 @@ export async function loadSettings() {
     try { localStorage.setItem('countdownBeforeSong', countdownOn ? '1' : '0'); } catch (_) { /* private mode */ }
     const countdownEl = document.getElementById('setting-countdown-before-song');
     if (countdownEl) countdownEl.checked = countdownOn;
+    // Loop count-in defaults ON (the historical behaviour), so an absent key
+    // means enabled. Mirrored to localStorage for the wrap tick's synchronous
+    // read, same as the song-start countdown above.
+    const loopCountInOn = data.loop_count_in !== false;
+    try { localStorage.setItem('loopCountIn', loopCountInOn ? '1' : '0'); } catch (_) { /* private mode */ }
+    const loopCountEl = document.getElementById('setting-loop-count-in');
+    if (loopCountEl) loopCountEl.checked = loopCountInOn;
     // Achievements epic: mirror the opt-in flag to localStorage so the
     // onboarding card + the bundled achievements plugin can read the current
     // state app-wide (the plugin's own settings panel still owns the toggle).

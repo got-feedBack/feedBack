@@ -41,6 +41,15 @@ export function _countdownBeforeSongEnabled() {
     try { return localStorage.getItem('countdownBeforeSong') === '1'; } catch (_) { return false; }
 }
 
+// "Countdown before each loop" (Gameplay tab). Mirrored to localStorage by
+// loadSettings so the A-B wrap tick reads it synchronously — no async
+// /api/settings fetch on the play hot path. Defaults ON: the one-bar click
+// before every loop wrap is the historical behaviour, so an absent key must
+// keep counting in.
+export function _loopCountInEnabled() {
+    try { return localStorage.getItem('loopCountIn') !== '0'; } catch (_) { return true; }
+}
+
 export function _curPlaybackSpeed() {
     try {
         return window._juceMode

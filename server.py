@@ -1391,6 +1391,10 @@ def _default_settings():
         # into the song-start path; miss_penalty / fail_behavior are persisted
         # but not yet consumed by scoring (stub rows on the Gameplay tab).
         "countdown_before_song": False,
+        # One-bar count before every A-B loop wrap. Defaults TRUE (unlike the
+        # song-start countdown) because it is the pre-existing behaviour: an
+        # absent key must keep counting in.
+        "loop_count_in": True,
         "miss_penalty": "none",
         "fail_behavior": "continue",
         # Achievements epic: opt-in to publishing earned Feats (name + Feat id

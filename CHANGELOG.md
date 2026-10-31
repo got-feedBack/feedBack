@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Optional "Countdown before each loop" toggle (Gameplay tab, default ON).**
+  A-B loop wraps have always played the one-bar click count-in with no way to
+  turn it off. The new `loop_count_in` setting keeps that default but lets it be
+  disabled: off restarts the loop straight on the first note via a new silent
+  wrap path (`wrapLoopSilently`) — no pause, rewind animation, clicks, or
+  overlay — while still emitting the same `loop:restart` event, so plugins that
+  sync on the wrap (note_detect's drill) are unaffected. Section practice's
+  `immediate` count-in is exempt: it is a deliberate "get ready" before a
+  passage. Mirrors the "Countdown before song" plumbing end to end (server
+  default + validated, resettable key; localStorage mirror read synchronously at
+  the 60 Hz wrap tick; Gameplay settings row wired to `setLoopCountIn()`).
+  Tests: `tests/js/loop_count_in.test.js`, `tests/test_settings_api.py`.
 - **Core reader for source rigs (feedpak 1.18.0).** A pack can declare what a
   MIDI part should sound like by binding a rig; core now reads that binding and
   hands it to the client instead of dropping it. Three parts: the

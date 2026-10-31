@@ -796,8 +796,33 @@ def test_defaults_include_gameplay_keys(client, tmp_path):
     # neutral defaults so the frontend hydrates predictably.
     data = client.get("/api/settings").json()
     assert data["countdown_before_song"] is False
+    # Loop count-in defaults ON: it is the historical one-bar count before every
+    # A-B loop wrap, so an absent key must keep counting in.
+    assert data["loop_count_in"] is True
     assert data["miss_penalty"] == "none"
     assert data["fail_behavior"] == "continue"
+
+
+def test_loop_count_in_persists_bool(client, tmp_path):
+    r = client.post("/api/settings", json={"loop_count_in": False})
+    assert r.status_code == 200
+    assert _read_cfg(tmp_path)["loop_count_in"] is False
+    client.post("/api/settings", json={"loop_count_in": True})
+    assert _read_cfg(tmp_path)["loop_count_in"] is True
+
+
+@pytest.mark.parametrize("bad_value", [1, 0, "true", "yes", [], {}])
+def test_loop_count_in_rejects_non_bool(client, tmp_path, bad_value):
+    (tmp_path / "config.json").write_text(json.dumps({"loop_count_in": False}))
+    r = client.post("/api/settings", json={"loop_count_in": bad_value})
+    assert "error" in r.json()
+    # Previous value preserved on bad input.
+    assert _read_cfg(tmp_path)["loop_count_in"] is False
+
+
+def test_loop_count_in_is_resettable(server_module):
+    """The flag is in the resettable allow-list so a Reset clears it to default."""
+    assert "loop_count_in" in settings_router._RESETTABLE_SETTINGS_KEYS
 
 
 

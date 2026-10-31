@@ -242,8 +242,39 @@ export function hideSongCreditsOverlay() {
     if (_creditsOverlay) { _creditsOverlay.remove(); _creditsOverlay = null; }
 }
 
+// A-B loop wrap with the per-loop countdown switched off: seek straight back to
+// A and keep playing. No pause, no rewind animation, no clicks, no overlay — the
+// loop simply restarts on the first note. Emits the same `loop:restart` contract
+// as the count-in path so plugins that sync on the wrap (note_detect's drill) do
+// not care which path ran.
+//
+// `_countingIn` is set synchronously before the awaited seek: the 60 Hz wrap
+// tick's `!isCountingIn()` guard then prevents a second wrap firing while the
+// seek is in flight.
+async function wrapLoopSilently() {
+    _countingIn = true;
+    const gen = _countInGen;
+    const r = await _audioSeek(loopA, 'loop-wrap-silent');
+    if (gen !== _countInGen) return; // teardown during seek
+    // Same off-target guard as the count-in wrap: a JUCE rollback / clamp far
+    // from loopA means this iteration should be dropped rather than resume the
+    // loop from the wrong position.
+    if (!r.completed || Math.abs(r.to - loopA) > 0.05) {
+        _countingIn = false;
+        return;
+    }
+    S.lastAudioTime = r.to;
+    window.highway.setTime(r.to);
+    window.feedBack.emit('loop:restart', { loopA, loopB, time: loopA });
+    _countingIn = false;
+}
+
 export async function startCountIn(opts = {}) {
     if (_countingIn) return;
+    // A-B loop wrap with the per-loop countdown disabled. Section practice's
+    // `immediate` entry is a deliberate "get ready" before a passage and always
+    // counts in, so it is exempt.
+    if (opts.silent && !opts.immediate) return wrapLoopSilently();
     _countingIn = true;
     // Snapshot the current gen so every delayed callback (rewind frames,
     // post-seek then, count-in ticks, post-count play) can bail if a
