@@ -147,6 +147,21 @@ def _has_unextracted_columns() -> bool:
     return row is not None
 
 
+def _has_newly_resolvable_smart_names(arrangements) -> bool:
+    """True when a cached row stores ``smart_name: null`` for an arrangement
+    whose name the current smart-name fallback does classify. Such rows were
+    written by an older fallback; the scanner's "key absent" re-queue never
+    reaches them and the smart-mode filters skip them until they rescan."""
+    from song import Arrangement, compute_smart_names
+    for a in arrangements:
+        if not (isinstance(a, dict) and "smart_name" in a and a["smart_name"] is None):
+            continue
+        name = a.get("name")
+        if isinstance(name, str) and compute_smart_names([Arrangement(name=name)])[0]:
+            return True
+    return False
+
+
 def _record_dir_signature(all_songs, dlc: Path) -> None:
     sig = _stat_dirs(dlc, _library_dirs(all_songs, dlc))
     if sig is not None:   # a dir vanished mid-scan → skip; next scan is full
@@ -362,6 +377,13 @@ def background_scan(force: bool = False):
             # the arrangement (e.g. a name outside the recognised set with
             # zero path flags), so rescanning would produce the same null
             # forever and never converge.
+            to_scan.append((f, mtime, size, dlc))
+        elif cached.get("arrangements") and _has_newly_resolvable_smart_names(
+                cached["arrangements"]):
+            # An explicit null the CURRENT name fallback can now classify
+            # (e.g. "Rhythm 2" before numbered names were recognised): the
+            # writer derives smart names from the same fallback, so one
+            # rescan stores the type and this row is never re-queued again.
             to_scan.append((f, mtime, size, dlc))
 
     if not to_scan:

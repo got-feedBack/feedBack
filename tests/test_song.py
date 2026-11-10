@@ -1341,6 +1341,20 @@ def test_smart_names_recognises_display_names_from_load_song():
     assert compute_smart_names(arrs) == ["Lead", "Bonus Lead", "Bass"]
 
 
+def test_smart_names_numbered_repeats_use_their_base_name():
+    # Converters number a song's repeated charts of one kind ("Rhythm 2",
+    # "Bass 3"); without a path flag they still need a smart type, or the
+    # library's Lead / Rhythm / Bass filter misses them.
+    arrs = [_sarr(name="Rhythm"), _sarr(name="Rhythm 2"), _sarr(name="Bass"),
+            _sarr(name="Bass 2"), _sarr(name="Bass 3"), _sarr(name="Lead 3")]
+    assert compute_smart_names(arrs) == [
+        "Rhythm", "Alt. Rhythm", "Bass", "Alt. Bass 1", "Alt. Bass 2", "Lead"]
+
+
+def test_smart_names_numbered_unknown_name_still_none():
+    assert compute_smart_names([_sarr(name="Vocals 2"), _sarr(name="Take 5")]) == [None, None]
+
+
 def test_smart_names_multiple_combos_get_alt_names():
     # 3 Combo tracks with represent=0 → Lead, Alt. Lead 1, Alt. Lead 2
     arrs = [_sarr(name="Combo"), _sarr(name="Combo"), _sarr(name="Combo")]

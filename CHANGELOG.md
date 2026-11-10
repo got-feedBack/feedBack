@@ -313,6 +313,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine (`app.js`, `highway.js`, `playSong`, `showScreen`, the capability registry).
 
 ### Fixed
+- **Numbered arrangements get their part type.** Charts named "Rhythm 2",
+  "Lead 3" or "Bass 3" (how converters number a song's repeated charts of one
+  kind) had no smart name, so the library's Lead / Rhythm / Bass filters and
+  the arrangement order skipped them. They now get their base type: "Bass 3" is a
+  Bass part, shown as Alt. Bass when the song has another Bass chart and as Bass
+  when it is the only one. Songs already in the library pick this up on the next
+  Refresh (a one-time rescan of just those songs).
 - **Count-in follows the song's meter and its pickup measure.** The count-in
   (loop wrap, section practice, and the "Countdown before song" setting) always
   clicked exactly four beats, so a 3/4 song was counted in 4/4, and a song
