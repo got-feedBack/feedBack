@@ -6,6 +6,7 @@ import bisect
 import json
 import logging
 import math
+import re
 import xml.etree.ElementTree as ET
 
 log = logging.getLogger("feedBack.lib.song")
@@ -744,6 +745,9 @@ def arrangement_string_count(arr: Arrangement) -> int:
     return max(notes_count, name_based, tuning_count)
 
 
+_NUMBERED_NAME_RE = re.compile(r"(.+?)\s+\d+")
+
+
 def compute_smart_names(arrangements: list[Arrangement]) -> list[str | None]:
     """Compute smart display names for arrangements based on arrangement XML path flags.
 
@@ -803,8 +807,13 @@ def compute_smart_names(arrangements: list[Arrangement]) -> list[str | None]:
             return "path_rhythm", bool(a.bonus_arr)
         if a.path_bass:
             return "path_bass", bool(a.bonus_arr)
-        name = a.name if isinstance(a.name, str) else ""
-        entry = _NAME_FALLBACK.get(name.strip().lower())
+        name = (a.name if isinstance(a.name, str) else "").strip().lower()
+        entry = _NAME_FALLBACK.get(name)
+        if entry is None:
+            # Numbered repeats ("Lead 3", "Rhythm 2", "Bass 3"): converters
+            # number a song's second, third, … chart of one kind this way.
+            m = _NUMBERED_NAME_RE.fullmatch(name)
+            entry = _NAME_FALLBACK.get(m.group(1)) if m else None
         if entry is None:
             return None, bool(a.bonus_arr)
         path_attr, bonus_override = entry
