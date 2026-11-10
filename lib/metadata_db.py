@@ -2374,19 +2374,35 @@ class MetadataDB:
         ).fetchall()
         return {r[0]: r[1] for r in rows if r[2] and r[2] > 0}
 
-    def top_stats(self, limit: int = 5) -> list[dict]:
-        """Top scored songs (best score first) for the profile 'Your best
-        scores' panel. Aggregated per-song across arrangements (best score,
-        best accuracy, total plays), only SCORED songs (plays > 0), dead songs
-        skipped. Mirrors best_accuracy_map's grouping; enriched with metadata
-        by the /api/stats/top route."""
+    # Shortest song the accuracy ranking counts: a diagnostic clip or a short
+    # exercise reaches 100% trivially and would crowd out real songs.
+    TOP_ACCURACY_MIN_SECONDS = 60
+
+    def top_stats(self, limit: int = 5, sort: str = "score") -> list[dict]:
+        """Top songs for the profile 'Your best scores' panel. Aggregated
+        per-song across arrangements (best score, best accuracy, total plays),
+        only SCORED songs (plays > 0), dead songs skipped. Mirrors
+        best_accuracy_map's grouping; enriched with metadata by the
+        /api/stats/top route.
+
+        sort="score" (default): best score first. Points add up per note, so
+        long songs lead. sort="accuracy": best accuracy first (score breaks
+        ties), songs shorter than TOP_ACCURACY_MIN_SECONDS left out."""
         limit = max(1, min(50, int(limit)))
+        if sort == "accuracy":
+            where = (" AND filename IN (SELECT filename FROM songs "
+                     "WHERE COALESCE(duration, 0) >= ?) ")
+            params: tuple = (self.TOP_ACCURACY_MIN_SECONDS, limit)
+            order = "MAX(best_accuracy) DESC, MAX(best_score) DESC"
+        else:
+            where, params = "", (limit,)
+            order = "MAX(best_score) DESC, MAX(best_accuracy) DESC"
         rows = self.conn.execute(
             "SELECT filename, MAX(best_score), MAX(best_accuracy), SUM(plays) "
-            "FROM song_stats WHERE 1=1 " + self._existing_song_filter() +   # skip dead songs
+            "FROM song_stats WHERE 1=1 " + self._existing_song_filter() + where +   # skip dead songs
             "GROUP BY filename HAVING SUM(plays) > 0 "
-            "ORDER BY MAX(best_score) DESC, MAX(best_accuracy) DESC LIMIT ?",
-            (limit,),
+            f"ORDER BY {order} LIMIT ?",
+            params,
         ).fetchall()
         return [
             {"filename": r[0], "best_score": r[1], "best_accuracy": r[2], "plays": r[3]}
