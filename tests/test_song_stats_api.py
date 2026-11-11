@@ -139,6 +139,26 @@ def test_top_aggregates_arrangements_and_respects_limit(client, server):
     assert len(client.get("/api/stats/top?limit=1").json()) == 1
 
 
+def test_top_sorts_by_accuracy_and_skips_short_songs(client, server):
+    # The profile toggle's "Accuracy" ranking: best accuracy first, score as the
+    # tie-break, and songs under a minute (diagnostic clips) left out. The
+    # default (and any unknown sort) stays best score first.
+    server.meta_db.put("long.archive", 0, 0, {"title": "Long", "duration": 600})
+    server.meta_db.put("tidy.archive", 0, 0, {"title": "Tidy", "duration": 200})
+    server.meta_db.put("tie.archive", 0, 0, {"title": "Tie", "duration": 180})
+    server.meta_db.put("clip.archive", 0, 0, {"title": "Clip", "duration": 30})
+    client.post("/api/stats", json={"filename": "long.archive", "score": 9000, "accuracy": 0.80})
+    client.post("/api/stats", json={"filename": "tidy.archive", "score": 3000, "accuracy": 0.96})
+    client.post("/api/stats", json={"filename": "tie.archive", "score": 2000, "accuracy": 0.96})
+    client.post("/api/stats", json={"filename": "clip.archive", "score": 500, "accuracy": 1.0})
+    by_acc = [r["filename"] for r in client.get("/api/stats/top?sort=accuracy").json()]
+    assert by_acc == ["tidy.archive", "tie.archive", "long.archive"]
+    by_score = [r["filename"] for r in client.get("/api/stats/top").json()]
+    assert by_score[:3] == ["long.archive", "tidy.archive", "tie.archive"]
+    assert "clip.archive" in by_score          # points ranking keeps short songs
+    assert [r["filename"] for r in client.get("/api/stats/top?sort=bogus").json()] == by_score
+
+
 # ── Codex-preflight regressions (bad-input hardening + resume touch) ──────────
 
 def test_stats_rejects_non_finite_score_accuracy(client):

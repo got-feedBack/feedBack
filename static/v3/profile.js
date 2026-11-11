@@ -174,7 +174,14 @@
         // during load and when nothing's been scored yet.
         const bestsCard =
             '<div class="bg-fb-card/80 backdrop-blur rounded-xl p-6 border border-fb-border/50">' +
-            '<h3 class="text-lg font-bold text-fb-text mb-2">Your best scores</h3>' +
+            '<div class="flex items-center justify-between gap-1 mb-2">' +
+            '<h3 class="text-lg font-bold text-fb-text">Your best scores</h3>' +
+            // Rank by accuracy or by points (points add up per note, so long
+            // songs lead that list). The choice is remembered per browser.
+            '<div class="flex items-center gap-1" role="group" aria-label="Rank best scores by">' +
+            BESTS_SORTS.map(([v, label]) => '<button type="button" data-bests-sort="' + v + '" aria-pressed="false" ' +
+                'class="text-xs px-2 py-0.5 rounded-md border border-fb-border/50">' + label + '</button>').join('') +
+            '</div></div>' +
             '<div id="v3-profile-bests" class="text-sm text-fb-textDim">Play a song to start tracking your accuracy and best scores.</div>' +
             '</div>';
         const playerIdFooter = (_profile && _profile.player_hash
@@ -222,16 +229,57 @@
         try { document.dispatchEvent(new CustomEvent('v3:profile-rendered')); } catch (_) { /* noop */ }
     }
 
-    // Fill the "Your best scores" panel from /api/stats/top (top scored songs,
-    // best first). Leaves the placeholder text in place on error / no scores so
-    // a fresh profile still reads sensibly. Accuracy is 0–1 (matches the library
-    // grid + dashboard badges).
+    // "Your best scores" ranking: by points (the original order) or accuracy.
+    const BESTS_SORTS = [['accuracy', 'Accuracy'], ['score', 'Points']];
+    const BESTS_SORT_KEY = 'v3.profile.bestsSort';
+    // The choice lives in memory; localStorage only seeds and remembers it, so
+    // the toggle still works when storage is blocked or full.
+    let _bestsSort = null;
+    function bestsSort() {
+        if (_bestsSort) return _bestsSort;
+        _bestsSort = 'score';
+        try { const v = localStorage.getItem(BESTS_SORT_KEY); if (v === 'accuracy' || v === 'score') _bestsSort = v; } catch (_) { /* storage blocked */ }
+        return _bestsSort;
+    }
+
+    // Fill the "Your best scores" panel from /api/stats/top (top 10, best
+    // first, by the chosen ranking). Shows the placeholder when nothing is
+    // scored yet and a load error when the request fails. Accuracy is 0–1
+    // (matches the library grid + dashboard badges).
     async function renderBests() {
         const host = document.getElementById('v3-profile-bests');
         if (!host) return;
-        let rows = [];
-        try { const r = await fetch('/api/stats/top?limit=5'); if (r.ok) rows = await r.json(); } catch (e) { /* P15 — keep placeholder */ }
-        if (!Array.isArray(rows) || !rows.length) return;   // keep the placeholder text
+        const sort = bestsSort();
+        document.querySelectorAll('[data-bests-sort]').forEach((b) => {
+            const on = b.getAttribute('data-bests-sort') === sort;
+            b.setAttribute('aria-pressed', on ? 'true' : 'false');
+            b.classList.toggle('bg-fb-primary', on);
+            b.classList.toggle('text-white', on);
+            b.classList.toggle('text-fb-textDim', !on);
+            if (!b.dataset.wired) {
+                b.dataset.wired = '1';
+                b.addEventListener('click', () => {
+                    _bestsSort = b.getAttribute('data-bests-sort');
+                    try { localStorage.setItem(BESTS_SORT_KEY, _bestsSort); } catch (_) { /* storage blocked */ }
+                    renderBests();
+                });
+            }
+        });
+        let rows = null;   // null = the request failed (vs [] = nothing scored)
+        try { const r = await fetch('/api/stats/top?limit=10&sort=' + sort); if (r.ok) rows = await r.json(); } catch (e) { /* P15 — handled below */ }
+        if (sort !== bestsSort()) return;   // a newer click re-rendered meanwhile
+        if (!Array.isArray(rows)) {
+            // Don't claim "no scores" on a failed load; the toggle retries.
+            host.textContent = "Couldn't load your best scores. Click a ranking to try again.";
+            return;
+        }
+        if (!rows.length) {
+            // Placeholder (also replaces the other ranking's list on a switch).
+            host.textContent = sort === 'accuracy'
+                ? 'No scored songs of a minute or longer yet.'
+                : 'Play a song to start tracking your accuracy and best scores.';
+            return;
+        }
         const accColor = (a) => (a >= 0.9 ? 'text-fb-good' : a >= 0.5 ? 'text-fb-mid' : 'text-fb-low');
         host.innerHTML =
             '<ol class="space-y-2">' + rows.map((s, i) => {
