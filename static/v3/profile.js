@@ -232,15 +232,20 @@
     // "Your best scores" ranking: by points (the original order) or accuracy.
     const BESTS_SORTS = [['accuracy', 'Accuracy'], ['score', 'Points']];
     const BESTS_SORT_KEY = 'v3.profile.bestsSort';
+    // The choice lives in memory; localStorage only seeds and remembers it, so
+    // the toggle still works when storage is blocked or full.
+    let _bestsSort = null;
     function bestsSort() {
-        try { const v = localStorage.getItem(BESTS_SORT_KEY); if (v === 'accuracy' || v === 'score') return v; } catch (_) { /* storage blocked */ }
-        return 'score';
+        if (_bestsSort) return _bestsSort;
+        _bestsSort = 'score';
+        try { const v = localStorage.getItem(BESTS_SORT_KEY); if (v === 'accuracy' || v === 'score') _bestsSort = v; } catch (_) { /* storage blocked */ }
+        return _bestsSort;
     }
 
     // Fill the "Your best scores" panel from /api/stats/top (top 10, best
-    // first, by the chosen ranking). Leaves the placeholder text in place on
-    // error / no scores so a fresh profile still reads sensibly. Accuracy is
-    // 0–1 (matches the library grid + dashboard badges).
+    // first, by the chosen ranking). Shows the placeholder when nothing is
+    // scored yet and a load error when the request fails. Accuracy is 0–1
+    // (matches the library grid + dashboard badges).
     async function renderBests() {
         const host = document.getElementById('v3-profile-bests');
         if (!host) return;
@@ -254,15 +259,21 @@
             if (!b.dataset.wired) {
                 b.dataset.wired = '1';
                 b.addEventListener('click', () => {
-                    try { localStorage.setItem(BESTS_SORT_KEY, b.getAttribute('data-bests-sort')); } catch (_) { /* storage blocked */ }
+                    _bestsSort = b.getAttribute('data-bests-sort');
+                    try { localStorage.setItem(BESTS_SORT_KEY, _bestsSort); } catch (_) { /* storage blocked */ }
                     renderBests();
                 });
             }
         });
-        let rows = [];
-        try { const r = await fetch('/api/stats/top?limit=10&sort=' + sort); if (r.ok) rows = await r.json(); } catch (e) { /* P15 — keep placeholder */ }
+        let rows = null;   // null = the request failed (vs [] = nothing scored)
+        try { const r = await fetch('/api/stats/top?limit=10&sort=' + sort); if (r.ok) rows = await r.json(); } catch (e) { /* P15 — handled below */ }
         if (sort !== bestsSort()) return;   // a newer click re-rendered meanwhile
-        if (!Array.isArray(rows) || !rows.length) {
+        if (!Array.isArray(rows)) {
+            // Don't claim "no scores" on a failed load; the toggle retries.
+            host.textContent = "Couldn't load your best scores. Click a ranking to try again.";
+            return;
+        }
+        if (!rows.length) {
             // Placeholder (also replaces the other ranking's list on a switch).
             host.textContent = sort === 'accuracy'
                 ? 'No scored songs of a minute or longer yet.'
