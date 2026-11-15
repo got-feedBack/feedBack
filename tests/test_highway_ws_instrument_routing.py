@@ -183,6 +183,43 @@ def test_bass_honors_saved_pref_within_the_bass_parts(make_client):
     assert idx == 2  # the preferred Bass 2, not the primary Bass (index 1)
 
 
+def test_bass_pref_pinned_by_raw_name_holds_in_smart_mode(make_client):
+    # The player's pin saves the raw arrangement name ("Bass 2") while the picker, in
+    # smart mode, shows "Alt. Bass". Opening the song in smart mode must still honour it.
+    server = make_client(instrument="bass", default_arrangement="Bass 2")
+    _write_sloppak(
+        server._get_dlc_dir(), "bbs",
+        [("lead", "Lead"), ("bass", "Bass"), ("bass2", "Bass 2")],
+    )
+    with TestClient(server.app) as client:
+        idx = _arr_index(client, "/ws/highway/bbs.sloppak?naming_mode=smart")
+    assert idx == 2
+
+
+def test_bass_raw_name_pin_beats_another_parts_smart_name(make_client):
+    # "Bass 2" first, "Bass" second: smart names come out "Bass", "Alt. Bass". A pin
+    # saved as raw "Bass" must open the arrangement actually named "Bass" (index 2).
+    server = make_client(instrument="bass", default_arrangement="Bass")
+    _write_sloppak(
+        server._get_dlc_dir(), "bord",
+        [("lead", "Lead"), ("bass2", "Bass 2"), ("bass", "Bass")],
+    )
+    with TestClient(server.app) as client:
+        idx = _arr_index(client, "/ws/highway/bord.sloppak?naming_mode=smart")
+    assert idx == 2
+
+
+def test_guitar_pref_pinned_by_raw_name_holds_in_smart_mode(make_client):
+    server = make_client(instrument="guitar", default_arrangement="Rhythm 2")
+    _write_sloppak(
+        server._get_dlc_dir(), "gg",
+        [("lead", "Lead"), ("rhythm", "Rhythm"), ("rhythm2", "Rhythm 2")],
+    )
+    with TestClient(server.app) as client:
+        idx = _arr_index(client, "/ws/highway/gg.sloppak?naming_mode=smart")
+    assert idx == 2
+
+
 def test_guitar_still_honors_saved_pref(make_client):
     # Guitar routing unchanged: a saved default_arrangement still applies.
     server = make_client(instrument="guitar", default_arrangement="Rhythm")
