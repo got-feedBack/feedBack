@@ -235,6 +235,7 @@
     // The choice lives in memory; localStorage only seeds and remembers it, so
     // the toggle still works when storage is blocked or full.
     let _bestsSort = null;
+    let _bestsReq = 0;   // generation: only the latest request may paint the panel
     function bestsSort() {
         if (_bestsSort) return _bestsSort;
         _bestsSort = 'score';
@@ -265,9 +266,10 @@
                 });
             }
         });
+        const req = ++_bestsReq;
         let rows = null;   // null = the request failed (vs [] = nothing scored)
         try { const r = await fetch('/api/stats/top?limit=10&sort=' + sort); if (r.ok) rows = await r.json(); } catch (e) { /* P15 — handled below */ }
-        if (sort !== bestsSort()) return;   // a newer click re-rendered meanwhile
+        if (req !== _bestsReq) return;   // a newer request (same or other ranking) owns the panel
         if (!Array.isArray(rows)) {
             // Don't claim "no scores" on a failed load; the toggle retries.
             host.textContent = "Couldn't load your best scores. Click a ranking to try again.";
