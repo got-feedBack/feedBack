@@ -196,6 +196,19 @@ def test_bass_pref_pinned_by_raw_name_holds_in_smart_mode(make_client):
     assert idx == 2
 
 
+def test_bass_raw_name_pin_beats_another_parts_smart_name(make_client):
+    # "Bass 2" first, "Bass" second: smart names come out "Bass", "Alt. Bass". A pin
+    # saved as raw "Bass" must open the arrangement actually named "Bass" (index 2).
+    server = make_client(instrument="bass", default_arrangement="Bass")
+    _write_sloppak(
+        server._get_dlc_dir(), "bord",
+        [("lead", "Lead"), ("bass2", "Bass 2"), ("bass", "Bass")],
+    )
+    with TestClient(server.app) as client:
+        idx = _arr_index(client, "/ws/highway/bord.sloppak?naming_mode=smart")
+    assert idx == 2
+
+
 def test_guitar_pref_pinned_by_raw_name_holds_in_smart_mode(make_client):
     server = make_client(instrument="guitar", default_arrangement="Rhythm 2")
     _write_sloppak(

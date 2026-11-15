@@ -284,16 +284,16 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
                     # (3) else the first bass part in order.
                     pref_bass = -1
                     if pref:
-                        for i in bass_idxs:
-                            # The player's pin (☆ next to the arrangement picker) saves the
-                            # arrangement's own name ("Bass 2") even in smart mode, where
-                            # the picker shows "Alt. Bass"; accept either.
-                            names = {getattr(song.arrangements[i], "name", "")}
-                            if naming_mode == "smart" and i < len(smart_names):
-                                names.add(smart_names[i])
-                            if pref in names:
-                                pref_bass = i
-                                break
+                        # The player's pin (☆ next to the arrangement picker) saves the
+                        # arrangement's own name ("Bass 2") even in smart mode, where the
+                        # picker shows "Alt. Bass". An exact raw-name match anywhere wins;
+                        # only then the smart name (a raw "Bass" must not lose to another
+                        # part whose smart name happens to be "Bass").
+                        pref_bass = next((i for i in bass_idxs
+                                          if getattr(song.arrangements[i], "name", "") == pref), -1)
+                        if pref_bass < 0 and naming_mode == "smart":
+                            pref_bass = next((i for i in bass_idxs
+                                              if i < len(smart_names) and smart_names[i] == pref), -1)
                     if pref_bass >= 0:
                         best = pref_bass
                     else:
