@@ -285,9 +285,13 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
                     pref_bass = -1
                     if pref:
                         for i in bass_idxs:
-                            nm = (smart_names[i] if naming_mode == "smart" and i < len(smart_names)
-                                  else getattr(song.arrangements[i], "name", ""))
-                            if nm == pref:
+                            # The player's pin (☆ next to the arrangement picker) saves the
+                            # arrangement's own name ("Bass 2") even in smart mode, where
+                            # the picker shows "Alt. Bass"; accept either.
+                            names = {getattr(song.arrangements[i], "name", "")}
+                            if naming_mode == "smart" and i < len(smart_names):
+                                names.add(smart_names[i])
+                            if pref in names:
                                 pref_bass = i
                                 break
                     if pref_bass >= 0:
@@ -301,7 +305,9 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
             # User's default arrangement preference (only when instrument routing did not
             # already resolve a part — i.e. guitar, or a bass player with no bass part).
             if best < 0 and pref:
-                if naming_mode == "smart":
+                # An exact raw-name match (what the pin saves) wins in either mode.
+                best = next((i for i, a in enumerate(song.arrangements) if a.name == pref), -1)
+                if best < 0 and naming_mode == "smart":
                     best = _pick_smart_arrangement(song.arrangements, smart_names, pref)
                 else:
                     for i, a in enumerate(song.arrangements):
