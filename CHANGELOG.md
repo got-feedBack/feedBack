@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Profile: rank your best scores by accuracy or points.** "Your best scores" now
+  has an Accuracy / Points toggle and shows 10 songs. Points add up per note, so
+  that list is led by long songs; Accuracy shows the songs you play best (songs
+  under a minute, such as diagnostic clips, are left out). The choice is remembered.
+  `GET /api/stats/top` takes `sort=accuracy`; the default stays `score`.
 - **Core reader for source rigs (feedpak 1.18.0).** A pack can declare what a
   MIDI part should sound like by binding a rig; core now reads that binding and
   hands it to the client instead of dropping it. Three parts: the

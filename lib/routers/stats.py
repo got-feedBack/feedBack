@@ -239,12 +239,13 @@ def api_stats_best():
 
 
 @router.get("/api/stats/top")
-def api_top_stats(limit: int = 5):
-    """Top scored songs (best first), joined to song metadata, for the profile
-    'Your best scores' panel (defined before the {filename} catch-all)."""
+def api_top_stats(limit: int = 5, sort: str = "score"):
+    """Top songs (best first) by `sort` = "score" or "accuracy", joined to song
+    metadata, for the profile 'Your best scores' panel (defined before the
+    {filename} catch-all). An unknown sort falls back to score."""
     from urllib.parse import quote
     out = []
-    for r in appstate.meta_db.top_stats(limit):
+    for r in appstate.meta_db.top_stats(limit, "accuracy" if sort == "accuracy" else "score"):
         meta = appstate.meta_db.conn.execute(
             "SELECT title, artist, tuning_name FROM songs WHERE filename = ?",
             (r["filename"],),
