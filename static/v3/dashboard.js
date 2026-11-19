@@ -87,7 +87,8 @@
         // both so resume reopens the exact arrangement the user left, not the
         // default. It has no start-time arg, so play then best-effort seek once
         // the session is up (constitution: highway WS).
-        Promise.resolve(window.playSong(enc(filename), arrangement)).then(() => {
+        // null = no stored part for this instrument: let the server route it.
+        Promise.resolve(window.playSong(enc(filename), arrangement == null ? undefined : arrangement)).then(() => {
             if (Number.isFinite(lastPosition) && lastPosition > 0 && sm && typeof sm.seek === 'function') {
                 setTimeout(() => { try { sm.seek(lastPosition, 'continue-playing'); } catch (e) { /* */ } }, 800);
             }

@@ -71,5 +71,12 @@ def api_toggle_saved(data: dict):
 
 @router.get("/api/session/continue")
 def api_session_continue():
-    """The Continue-Playing card's song (most recent play) or null."""
-    return appstate.meta_db.continue_session()
+    """The Continue-Playing card's song (most recent play) or null. A play on
+    the other instrument's part comes back without an arrangement, so the card
+    opens the selected instrument's part (with its pin) instead."""
+    from routers.stats import _selected_instrument
+    cont = appstate.meta_db.continue_session()
+    if cont:
+        cont["arrangement"] = appstate.meta_db.arrangement_for_instrument(
+            cont["filename"], cont["arrangement"], _selected_instrument())
+    return cont

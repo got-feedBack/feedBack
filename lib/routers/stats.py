@@ -210,12 +210,33 @@ def api_record_stats(data: dict):
     return {"stats": row, "progress": progress}
 
 
+def _selected_instrument() -> str:
+    """The instrument picked in Settings ("bass", "guitar", ...) or ""."""
+    import json
+    try:
+        cfg = json.loads((appstate.config_dir / "config.json").read_text(encoding="utf-8"))
+        return str(cfg.get("instrument", "") or "")
+    except Exception:
+        return ""
+
+
 @router.get("/api/stats/recent")
 def api_recent_stats(limit: int = 12):
-    """Recently-played rows joined to song metadata for 'Jump back in'."""
+    """Recently-played rows joined to song metadata for 'Jump back in'. One
+    tile per song (its most recent row); a row on the other instrument's part
+    loses its arrangement so the tile opens the selected instrument's part."""
     from urllib.parse import quote
-    out = []
-    for r in appstate.meta_db.recent_stats(limit):
+    instrument = _selected_instrument()
+    limit = max(1, min(100, int(limit)))
+    out, seen = [], set()
+    for r in appstate.meta_db.recent_stats(min(100, limit * 4)):
+        if r["filename"] in seen:
+            continue
+        seen.add(r["filename"])
+        if len(out) >= limit:
+            break
+        r["arrangement"] = appstate.meta_db.arrangement_for_instrument(
+            r["filename"], r["arrangement"], instrument)
         meta = appstate.meta_db.conn.execute(
             "SELECT title, artist, tuning_name FROM songs WHERE filename = ?",
             (r["filename"],),

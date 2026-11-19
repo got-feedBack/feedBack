@@ -313,6 +313,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine (`app.js`, `highway.js`, `playSong`, `showScreen`, the capability registry).
 
 ### Fixed
+- **Home reopens your instrument's part.** Continue Playing and Jump back in
+  no longer reopen a guitar part for a bass player (or the reverse) just
+  because it was opened last; they follow Settings' instrument and the
+  default-part pin. Jump back in shows each song once.
 - **Count-in follows the song's meter and its pickup measure.** The count-in
   (loop wrap, section practice, and the "Countdown before song" setting) always
   clicked exactly four beats, so a 3/4 song was counted in 4/4, and a song

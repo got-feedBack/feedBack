@@ -1,6 +1,7 @@
 """Tests for the song-stats endpoints + XP/streak side-effects (P14)."""
 
 import importlib
+import json
 import sys
 
 import pytest
@@ -506,3 +507,46 @@ def test_seconds_validation_rejects_nonfinite(client, token):
         headers={"Content-Type": "application/json"},
     )
     assert r.status_code == 400
+
+
+_LBR = [{"index": 0, "name": "Lead", "smart_name": "Lead"},
+        {"index": 1, "name": "Rhythm", "smart_name": "Rhythm"},
+        {"index": 2, "name": "Bass", "smart_name": "Bass"}]
+
+
+def _set_instrument(tmp_path, instrument):
+    (tmp_path / "config.json").write_text(json.dumps({"instrument": instrument}), encoding="utf-8")
+
+
+def test_home_resume_follows_bass_instrument(client, server, tmp_path):
+    # A bassist who once opened Lead must not get Lead back from Home: the
+    # Lead row comes back without an arrangement so the highway routes to bass.
+    _set_instrument(tmp_path, "bass")
+    server.meta_db.put("lessons.feedpak", 0, 0, {"title": "Lessons", "arrangements": _LBR})
+    client.post("/api/stats", json={"filename": "lessons.feedpak", "arrangement": 2, "lastPlayPosition": 5.0})
+    client.post("/api/stats", json={"filename": "lessons.feedpak", "arrangement": 0, "lastPlayPosition": 1.0})
+    cont = client.get("/api/session/continue").json()
+    assert cont["filename"] == "lessons.feedpak" and cont["arrangement"] is None
+    recent = [r for r in client.get("/api/stats/recent?limit=10").json() if r["filename"] == "lessons.feedpak"]
+    assert len(recent) == 1 and recent[0]["arrangement"] is None
+
+
+def test_home_resume_keeps_matching_or_only_part(client, server, tmp_path):
+    _set_instrument(tmp_path, "bass")
+    server.meta_db.put("lessons.feedpak", 0, 0, {"title": "Lessons", "arrangements": _LBR})
+    server.meta_db.put("guitaronly.feedpak", 0, 0, {"title": "G", "arrangements": _LBR[:2]})
+    client.post("/api/stats", json={"filename": "guitaronly.feedpak", "arrangement": 1, "lastPlayPosition": 3.0})
+    client.post("/api/stats", json={"filename": "lessons.feedpak", "arrangement": 2, "lastPlayPosition": 5.0})
+    assert client.get("/api/session/continue").json()["arrangement"] == 2
+    recent = {r["filename"]: r["arrangement"] for r in client.get("/api/stats/recent?limit=10").json()}
+    # No bass part in that song: the guitar part it was played on stays.
+    assert recent == {"lessons.feedpak": 2, "guitaronly.feedpak": 1}
+
+
+def test_home_resume_follows_guitar_instrument(client, server, tmp_path):
+    _set_instrument(tmp_path, "guitar")
+    server.meta_db.put("lessons.feedpak", 0, 0, {"title": "Lessons", "arrangements": _LBR})
+    client.post("/api/stats", json={"filename": "lessons.feedpak", "arrangement": 2, "lastPlayPosition": 5.0})
+    assert client.get("/api/session/continue").json()["arrangement"] is None
+    _set_instrument(tmp_path, "")
+    assert client.get("/api/session/continue").json()["arrangement"] == 2
