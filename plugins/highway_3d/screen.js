@@ -1459,6 +1459,12 @@
     /** Fret-number label tints — gold on approaching/active notes, muted blue when idle. */
     const FRET_LABEL_GOLD_HEX = '#D8A636';
     const FRET_LABEL_IDLE_HEX = '#9ab8cc';
+    // Bass slap / pop letters above the gem: black with a light outline (the
+    // 'slapPop' text style). Dark on purpose: fret numbers and note names are
+    // light text, so when several labels stack above a gem the technique letter
+    // reads apart from them; it also differs from every gem / string colour. The
+    // letter itself tells S from P.
+    const SLAP_POP_HEX = '#000000';
 
     /** 3D chord-box rim bars (thin on all chords, including repeats in a sequence). */
     const CHORD_FRAME_RIM_MIN = 0.055;       // × K — floor thickness
@@ -5130,6 +5136,7 @@
         let gPMXLines = null, pMuteXLines = null; // PM X lines combined geometry (8 segs as quads)
         let gFHXLines = null, pFHXLines = null;   // FH X lines combined geometry
         let pNoteFretLabel, pConnectorLine, pDropLine, pTapChevron, pAccentHalo;
+        let pSlapPopLbl;    // "S" (slap) / "P" (pop) above bass gems
         let pTeachMarkLbl;  // teaching marks fg/sd label sprites (§6.2.2)
         let pHaloBar = null, gHaloBar = null; // gradient halo bar geometry — replaces per-shell pChordAccentHalo
         let gArpBracket = null; // shared 1×1×1 box geometry for pArpBracket; built once, disposed in teardown
@@ -5526,6 +5533,16 @@
                 wideFont: '900 128px "Arial Black", "Helvetica Neue", Arial, sans-serif',
                 srcH: 256, stroke: '#0a1018', strokeW: 18,
                 shadow: { color: 'rgba(0,0,0,0.7)', blur: 14, dx: 0, dy: 0 },
+            },
+            // Bass slap / pop letters: noteFret's glyphs, inverted (black fill,
+            // light outline) so they stand apart from the white fret numbers. The
+            // outline is the note-name grey (#c6c6c6), below the bloom threshold,
+            // and there is no shadow, so the letters don't glow.
+            slapPop: {
+                font:     '900 160px "Arial Black", "Helvetica Neue", Arial, sans-serif',
+                wideFont: '900 128px "Arial Black", "Helvetica Neue", Arial, sans-serif',
+                srcH: 256, stroke: '#c6c6c6', strokeW: 24,
+                shadow: null,
             },
             // Ghost-fret labels on the board projection: same weight/size/outline
             // as noteFret, but uses textAlign='center'; textBaseline='middle'
@@ -8319,6 +8336,12 @@
             });
             // Teaching marks fg/sd labels (§6.2.2). One pool, two get()s per note
             // (finger + degree); the texture is swapped per draw via material.map.
+            pSlapPopLbl = pool(lblG, () => {
+                const _spl = new T.Sprite(txtMat('S', SLAP_POP_HEX, false, 'slapPop').clone());
+                _spl.material.fog = false;
+                _spl.material.depthTest = false;
+                return _spl;
+            });
             pTeachMarkLbl = pool(lblG, () => {
                 const _tml = new T.Sprite(txtMat('0', '#7fd1ff', false, 'teachMark').clone());
                 _tml.material.fog = false;
@@ -10915,6 +10938,7 @@
             if (pFHXLines) pFHXLines.reset();
             pNoteFretLabel.reset(); pConnectorLine.reset(); pDropLine.reset();
             pTeachMarkLbl.reset();
+            pSlapPopLbl.reset();
             pFretColMarker.reset(); pSusRail.reset(); pSusRailBloom.reset(); pTechPlane.reset();
             // Clear per-frame queues in-place (avoid reallocating the array object).
             _ndLabels.length = 0;
@@ -15022,6 +15046,25 @@
                         chevron.rotation.z = approachRot;
                         chevron.scale.set(chevronScale, chevronScale, 1);
                         chevron.renderOrder = techniqueMarkerRenderOrder;
+                    }
+                }
+                // Slap / pop (bass): a bold "S" / "P" on top of the technique
+                // stack, black with a light outline. Fades in
+                // like the fret label and is gone once the note is hit.
+                if (n.slp || n.plk) {
+                    const spAlpha = dt >= 0 ? Math.min(1.0, (AHEAD - dt) / 0.35) : 0;
+                    if (spAlpha > 0) {
+                        const spLbl = pSlapPopLbl.get();
+                        _setLabelMap(spLbl, txtMat(n.slp ? 'S' : 'P', SLAP_POP_HEX, false, 'slapPop'));
+                        const spS = NH * 1.7 * sLbl;
+                        spLbl.scale.set(spS, spS, 1);
+                        spLbl.position.set(x, y + techniqueYNow + spS * 0.55, noteZ + K);
+                        spLbl.renderOrder = techniqueMarkerRenderOrder;
+                        spLbl.material.opacity = spAlpha;
+                        // Reserve only the glyph's own height (the sprite canvas has
+                        // padding): a taller stack leans sideways in the side-on
+                        // camera, so a note name above would drift off-centre.
+                        yo = Math.max(yo, y + techniqueYNow + spS * 0.75);
                     }
                 }
                 // Tremolo label ('~~~') removed — trail shape already conveys it visually.
