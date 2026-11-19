@@ -12441,6 +12441,10 @@
                             // so Object.assign leaves a stale `true` from a previous
                             // muted chord note untouched. Reset it explicitly here.
                             _scrChordNote.fhm = cn.fhm || false;
+                            // Slap / pop (`slp` / `plk`) are omit-when-false too: reset so a
+                            // slapped chord note doesn't leave its S on the next one.
+                            _scrChordNote.slp = !!cn.slp;
+                            _scrChordNote.plk = !!cn.plk;
                             // Same stale-scratch hazard for the bend shape:
                             // `bnv`/`bt` are omit-when-default on the wire, so a
                             // chord note without them would otherwise inherit the
@@ -14975,6 +14979,7 @@
                 // fret-row labels (issue #35, CLAUDE pitfall #7 corollary).
                 const techniqueMarkerRenderOrder = renderOrderForLayerAtZ(noteZ, 'TECHNIQUE_MARKER');
                 let yo = y + techniqueYNow + NH * 0.8 * sLbl;
+                const yoStart = yo;   // what's left of the stack before any mark reserves space
                 const specialMarkerScale = n.f === 0
                     ? NH * 1.5 * sLbl * openWScale
                     : NH * 1.5 * sLbl;
@@ -15058,13 +15063,18 @@
                         _setLabelMap(spLbl, txtMat(n.slp ? 'S' : 'P', SLAP_POP_HEX, false, 'slapPop'));
                         const spS = NH * 1.7 * sLbl;
                         spLbl.scale.set(spS, spS, 1);
-                        spLbl.position.set(x, y + techniqueYNow + spS * 0.55, noteZ + K);
+                        // Its usual spot just above the gem, unless a mark below
+                        // (bend chevron, H/P triangle) already reserved more of the
+                        // stack: then on top of that, so the two never overlap.
+                        const spBase = y + techniqueYNow + spS * 0.55;
+                        const spY = yo > yoStart ? Math.max(spBase, yo + spS * 0.5) : spBase;
+                        spLbl.position.set(x, spY, noteZ + K);
                         spLbl.renderOrder = techniqueMarkerRenderOrder;
                         spLbl.material.opacity = spAlpha;
                         // Reserve only the glyph's own height (the sprite canvas has
                         // padding): a taller stack leans sideways in the side-on
                         // camera, so a note name above would drift off-centre.
-                        yo = Math.max(yo, y + techniqueYNow + spS * 0.75);
+                        yo = Math.max(yo, spY + spS * 0.2);
                     }
                 }
                 // Tremolo label ('~~~') removed — trail shape already conveys it visually.
