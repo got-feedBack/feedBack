@@ -130,6 +130,14 @@ export function _isSpaceKey(e) {
     return e.key === ' ' || e.key === 'Spacebar';
 }
 
+export function _playerButtonKeepsShortcuts(e, ctx) {
+    const t = e && e.target;
+    if (!ctx || !ctx.isPlayer || !t || t.tagName !== 'BUTTON' || e.defaultPrevented) return false;
+    if (e.key === 'Enter') return false;          // Enter presses the button
+    if (t.closest && t.closest('[role="dialog"][aria-modal="true"], .feedBack-modal')) return false;
+    return true;
+}
+
 export function _shortcutDispatchBlocked(e) {
     if (_isTextInput(e.target)) return true;
     // Space in Section Practice bar should pause/resume, not toggle checkboxes/buttons.
@@ -172,6 +180,12 @@ export function _shortcutDispatchBlocked(e) {
             return false;
         }
     }
+    // A focused <button> in the player (a speed preset, a transport or rail button
+    // after a click) has no use for the player's keys (arrows, , . [ ] …), so they
+    // still fire, like Space and Esc above. Text fields, selects and sliders keep
+    // their keys (they are not buttons), and so does a button whose own handler
+    // already used the key (it called preventDefault: e.g. stem volume on arrows).
+    if (_playerButtonKeepsShortcuts(e, _getCurrentContext())) return false;
     return _isInsideInteractiveControl(e.target);
 }
 
