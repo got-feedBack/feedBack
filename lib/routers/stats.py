@@ -212,10 +212,11 @@ def api_record_stats(data: dict):
 
 @router.get("/api/stats/recent")
 def api_recent_stats(limit: int = 12):
-    """Recently-played rows joined to song metadata for 'Jump back in'."""
+    """Recently-played songs joined to song metadata for 'Jump back in': one
+    tile per song, its most recent row (the part played last)."""
     from urllib.parse import quote
     out = []
-    for r in appstate.meta_db.recent_stats(limit):
+    for r in appstate.meta_db.recent_songs(limit):
         meta = appstate.meta_db.conn.execute(
             "SELECT title, artist, tuning_name FROM songs WHERE filename = ?",
             (r["filename"],),

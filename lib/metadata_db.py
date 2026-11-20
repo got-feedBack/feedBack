@@ -2362,6 +2362,21 @@ class MetadataDB:
         ).fetchall()
         return [dict(zip(self._STATS_COLS, r)) for r in rows]
 
+    def recent_songs(self, limit: int = 12) -> list[dict]:
+        """Each song's most recent row (most recent first) for 'Jump back in':
+        one tile per song, the limit applied after picking each song's newest
+        row (so songs with several played parts don't crowd others out)."""
+        limit = max(1, min(100, int(limit)))
+        cols = ", ".join(self._STATS_COLS)
+        rows = self.conn.execute(
+            "SELECT " + cols + " FROM (SELECT " + cols + ", ROW_NUMBER() OVER ("
+            "PARTITION BY filename ORDER BY last_played_at DESC) AS rn FROM song_stats "
+            "WHERE last_played_at IS NOT NULL " + self._existing_song_filter() +
+            ") WHERE rn = 1 ORDER BY last_played_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(zip(self._STATS_COLS, r)) for r in rows]
+
     def best_accuracy_map(self) -> dict:
         """{filename: best_accuracy} across all arrangements, for batch-badging
         the library grid in one request. Includes every SCORED song (plays > 0)

@@ -149,9 +149,39 @@ def _drum_part_id_for_wire(drum_parts: list[dict] | None, selected_id: str | Non
     return selected_id if selected_id is not None and len(drum_parts or []) > 1 else None
 
 
+def _selected_instrument() -> str:
+    """The instrument picked in Settings ("bass", "guitar", ...) or ""."""
+    try:
+        cfg = json.loads((appstate.config_dir / "config.json").read_text(encoding="utf-8"))
+        return str(cfg.get("instrument", "") or "")
+    except Exception:
+        return ""
+
+
+def _part_fits_instrument(arrangements, smart_names, index, instrument) -> bool:
+    """Is arrangement `index` a part for `instrument`, or does the song have no part
+    for it? Only "bass" and "guitar" are judged; any other instrument fits."""
+    inst = (instrument or "").lower()
+    if inst not in ("bass", "guitar"):
+        return True
+
+    def family(i):
+        sn = ((smart_names[i] if i < len(smart_names) else "") or "").lower()
+        name = (getattr(arrangements[i], "name", "") or "").lower()
+        if arrangement_is_bass(arrangements[i]) or sn.startswith("bass") or "bass" in name:
+            return "bass"
+        if any(k in sn or k in name for k in ("vocal", "drum", "key", "piano")):
+            return "other"
+        return "guitar"
+
+    if family(index) == inst:
+        return True
+    return not any(family(i) == inst for i in range(len(arrangements)))
+
+
 @router.websocket("/ws/highway/{filename:path}")
 async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
-                     naming_mode: str = "legacy", drum_part: str = ""):
+                     naming_mode: str = "legacy", drum_part: str = "", follow_instrument: int = 0):
     """Stream song data for the highway renderer over WebSocket.
 
     `drum_part` selects WHICH drum part's tab streams when the pack carries
@@ -242,7 +272,15 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
 
         # Pick arrangement: explicit request > user preference > most notes
         best = -1
-        if 0 <= arrangement < len(song.arrangements):
+        requested = 0 <= arrangement < len(song.arrangements)
+        if requested and follow_instrument:
+            # Home's Continue Playing / Jump back in reopen the part of the last play
+            # record. Keep it only when it is a part of the selected instrument (or
+            # the song has none); otherwise route as for a fresh open, by instrument
+            # and the pinned default part.
+            requested = _part_fits_instrument(song.arrangements, smart_names, arrangement,
+                                              _selected_instrument())
+        if requested:
             best = arrangement
         else:
             # Read the user's config once: their selected instrument (route the chart

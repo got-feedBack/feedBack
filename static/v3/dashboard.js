@@ -87,7 +87,10 @@
         // both so resume reopens the exact arrangement the user left, not the
         // default. It has no start-time arg, so play then best-effort seek once
         // the session is up (constitution: highway WS).
-        Promise.resolve(window.playSong(enc(filename), arrangement)).then(() => {
+        // The stored part, unless it isn't the selected instrument's (the highway's
+        // follow_instrument; e.g. a bassist who once opened Lead).
+        if (window.feedBack) window.feedBack._followInstrumentOnce = arrangement != null;
+        Promise.resolve(window.playSong(enc(filename), arrangement == null ? undefined : arrangement)).then(() => {
             if (Number.isFinite(lastPosition) && lastPosition > 0 && sm && typeof sm.seek === 'function') {
                 setTimeout(() => { try { sm.seek(lastPosition, 'continue-playing'); } catch (e) { /* */ } }, 800);
             }
@@ -239,7 +242,9 @@
                 // /api/stats/recent rows are arrangement-specific — reopen the
                 // arrangement that was actually played, not the default.
                 const arr = b.getAttribute('data-arr');
-                window.playSong(enc(b.getAttribute('data-recent')), arr === '' || arr == null ? undefined : Number(arr));
+                const hasArr = !(arr === '' || arr == null);
+                if (window.feedBack) window.feedBack._followInstrumentOnce = hasArr;
+                window.playSong(enc(b.getAttribute('data-recent')), hasArr ? Number(arr) : undefined);
             }));
 
         // Let prompt 18 enhance the audio-routing card once it exists.

@@ -193,3 +193,43 @@ def test_guitar_still_honors_saved_pref(make_client):
     with TestClient(server.app) as client:
         idx = _arr_index(client, "/ws/highway/gtr2.sloppak")
     assert idx == 1  # Rhythm, per preference
+
+
+# ── follow_instrument: Home's Continue Playing / Jump back in ────────────────
+# They reopen the part of the last play record; with follow_instrument=1 the
+# requested part is kept only when it is the selected instrument's (or the song
+# has none), else the WS routes as for a fresh open.
+
+def test_follow_instrument_reroutes_a_bassists_lead_record(make_client):
+    server = make_client(instrument="bass")
+    _write_multi_arr_sloppak(server._get_dlc_dir())
+    with TestClient(server.app) as client:
+        idx = _arr_index(client, "/ws/highway/multi.sloppak?arrangement=0&follow_instrument=1")
+        plain = _arr_index(client, "/ws/highway/multi.sloppak?arrangement=0")
+    assert idx == 1      # Lead record → the Bass part
+    assert plain == 0    # without the flag an explicit request still wins
+
+
+def test_follow_instrument_keeps_a_matching_part(make_client):
+    server = make_client(instrument="bass")
+    _write_sloppak(server._get_dlc_dir(), "bb",
+                   [("lead", "Lead"), ("bass", "Bass"), ("bass2", "Bass 2")])
+    with TestClient(server.app) as client:
+        idx = _arr_index(client, "/ws/highway/bb.sloppak?arrangement=2&follow_instrument=1")
+    assert idx == 2      # Bass 2 is a bass part: kept, not swapped for the main Bass
+
+
+def test_follow_instrument_keeps_the_part_when_the_song_has_none(make_client):
+    server = make_client(instrument="bass")
+    _write_sloppak(server._get_dlc_dir(), "gtr", [("lead", "Lead"), ("rhythm", "Rhythm")])
+    with TestClient(server.app) as client:
+        idx = _arr_index(client, "/ws/highway/gtr.sloppak?arrangement=1&follow_instrument=1")
+    assert idx == 1      # no bass part: the Rhythm record stays
+
+
+def test_follow_instrument_reroutes_a_guitarists_bass_record(make_client):
+    server = make_client(instrument="guitar")
+    _write_multi_arr_sloppak(server._get_dlc_dir())
+    with TestClient(server.app) as client:
+        idx = _arr_index(client, "/ws/highway/multi.sloppak?arrangement=1&follow_instrument=1")
+    assert idx == 0      # Bass record → a guitar part (Lead)
