@@ -16096,7 +16096,7 @@
             _renderScale = 1;
             mBeatM = mBeatQ = null;
             pNote = pNoteEdge = pSus = pSusOutline = pSusRibbon = pSusRibbonOl = pLbl = pBeat = pSec = null;
-            pFretLbl = pLane = pLaneDivider = pGhostFretLbl = pChordBox = pChordFrameFill = pChordLbl = pBarreLine = pArpBracket = pNoteFretLabel = pConnectorLine = pDropLine = pTapChevron = pAccentHalo = pHaloBar = pPMXFill = pFHXFill = pMuteXLines = pFHXLines = pTeachMarkLbl = null;
+            pFretLbl = pLane = pLaneDivider = pGhostFretLbl = pChordBox = pChordFrameFill = pChordLbl = pBarreLine = pArpBracket = pNoteFretLabel = pConnectorLine = pDropLine = pTapChevron = pAccentHalo = pHaloBar = pPMXFill = pFHXFill = pMuteXLines = pFHXLines = pTeachMarkLbl = pSlapPopLbl = null;
             if (gPMXFill) { gPMXFill.dispose(); gPMXFill = null; }
             if (gFHXFill) { gFHXFill.dispose(); gFHXFill = null; }
             if (gPMXLines) { gPMXLines.dispose(); gPMXLines = null; }
