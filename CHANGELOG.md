@@ -313,6 +313,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine (`app.js`, `highway.js`, `playSong`, `showScreen`, the capability registry).
 
 ### Fixed
+- **Player keys work after clicking a player button.** A focused button (a speed
+  preset, a transport or rail button) swallowed every shortcut except Space and Esc
+  until you clicked the highway. Buttons now let the player's keys through; text
+  fields, sliders, selects, modals, Enter and controls that use a key themselves keep it.
 - **Count-in follows the song's meter and its pickup measure.** The count-in
   (loop wrap, section practice, and the "Countdown before song" setting) always
   clicked exactly four beats, so a 3/4 song was counted in 4/4, and a song
