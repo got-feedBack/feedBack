@@ -550,3 +550,16 @@ def test_home_resume_follows_guitar_instrument(client, server, tmp_path):
     assert client.get("/api/session/continue").json()["arrangement"] is None
     _set_instrument(tmp_path, "")
     assert client.get("/api/session/continue").json()["arrangement"] == 2
+
+
+def test_recent_limit_counts_songs_not_rows(client, server):
+    # 60 songs with two played parts each: limit=100 must return all 60 songs
+    # (the newest row per song is picked before the limit).
+    for k in range(60):
+        fn = f"s{k:02d}.feedpak"
+        server.meta_db.put(fn, 0, 0, {"title": fn})
+        client.post("/api/stats", json={"filename": fn, "arrangement": 0, "lastPlayPosition": 1.0})
+        client.post("/api/stats", json={"filename": fn, "arrangement": 1, "lastPlayPosition": 2.0})
+    recent = client.get("/api/stats/recent?limit=100").json()
+    assert len(recent) == 60 and len({r["filename"] for r in recent}) == 60
+    assert len(client.get("/api/stats/recent?limit=5").json()) == 5

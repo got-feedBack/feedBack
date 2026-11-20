@@ -227,14 +227,8 @@ def api_recent_stats(limit: int = 12):
     loses its arrangement so the tile opens the selected instrument's part."""
     from urllib.parse import quote
     instrument = _selected_instrument()
-    limit = max(1, min(100, int(limit)))
-    out, seen = [], set()
-    for r in appstate.meta_db.recent_stats(min(100, limit * 4)):
-        if r["filename"] in seen:
-            continue
-        seen.add(r["filename"])
-        if len(out) >= limit:
-            break
+    out = []
+    for r in appstate.meta_db.recent_songs(limit):
         r["arrangement"] = appstate.meta_db.arrangement_for_instrument(
             r["filename"], r["arrangement"], instrument)
         meta = appstate.meta_db.conn.execute(

@@ -434,7 +434,13 @@ def extract_meta(path: Path, dlc_root: Path | None = None) -> dict:
 
     manifest_arr = _validate_manifest_arrangements(manifest.get("arrangements"))
     if manifest_arr is not None:
-        arrangements = manifest_arr
+        # A manifest entry carries no `index`; give it the playback index of the
+        # detected XML part with the same file, so stats rows (keyed by that
+        # index) can be matched back to a part (Home's instrument check).
+        by_file = {a["file"].lower(): a["index"] for a in arrangements}
+        arrangements = [dict(e, index=by_file[e["file"].lower()])
+                        if "index" not in e and e["file"].lower() in by_file else e
+                        for e in manifest_arr]
 
     audio = find_audio(path)
     art   = find_art(path)
