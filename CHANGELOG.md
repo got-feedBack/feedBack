@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **3D highway: slap and pop marks on bass notes.** Notes charted as slap (`slp`) or
+  pop (`plk`) reached the highway without any marker. They now get a bold **S** / **P**
+  above the gem, fading in like the fret label. Black with a light outline (below the
+  bloom threshold, so no glow): dark on purpose, so it reads apart from the light fret
+  numbers and note names when labels stack above the same note.
 - **Core reader for source rigs (feedpak 1.18.0).** A pack can declare what a
   MIDI part should sound like by binding a rig; core now reads that binding and
   hands it to the client instead of dropping it. Three parts: the
