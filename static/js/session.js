@@ -651,6 +651,12 @@ export async function playSong(filename, arrangement, options) {
     if (!_queueDriven && _pq) {
         _pq.clear();
     }
+    // Home's Continue Playing / Jump back in ask, out of band like the queue flag
+    // (plugin wrappers drop `options`), that the reopened part follow the selected
+    // instrument (the highway's follow_instrument). Consumed here, so it can't leak.
+    const _fb = window.feedBack;
+    const _followInstrument = !!(_fb && _fb._followInstrumentOnce);
+    if (_fb) _fb._followInstrumentOnce = false;
     if (!options || options.bridge !== false) {
         _recordPlaybackBridge('playback.window-play-song', 'window.playSong', 'legacy playSong entry point used');
     }
@@ -735,6 +741,7 @@ export async function playSong(filename, arrangement, options) {
 
     const wsParams = new URLSearchParams();
     if (arrangement !== undefined) wsParams.set('arrangement', arrangement);
+    if (arrangement !== undefined && _followInstrument) wsParams.set('follow_instrument', '1');
     wsParams.set('naming_mode', _getArrangementNamingMode());
     const wsUrl = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/highway/${decodeURIComponent(filename)}?${wsParams.toString()}`;
     window.highway.connect(wsUrl);

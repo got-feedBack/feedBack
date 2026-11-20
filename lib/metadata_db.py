@@ -2993,40 +2993,6 @@ class MetadataDB:
     def count_wanted(self) -> int:
         return self.conn.execute("SELECT COUNT(*) FROM wanted").fetchone()[0]
 
-    def arrangement_for_instrument(self, filename: str, arrangement, instrument: str):
-        """The stored arrangement index to reopen, or None to let the highway
-        route by instrument. Stats rows are per arrangement, so a part opened once
-        on the other instrument (a bassist peeking at Lead) would otherwise keep
-        reopening from Home. Returns None only when the song has a part for the
-        selected instrument and the stored one isn't it; unknown instruments and
-        songs without arrangement info keep the stored index."""
-        inst = (instrument or "").lower()
-        if arrangement is None or inst not in ("bass", "guitar"):
-            return arrangement
-        row = self.conn.execute(
-            "SELECT arrangements FROM songs WHERE filename = ?", (filename,)
-        ).fetchone()
-        try:
-            arrs = json.loads(row[0]) if row and row[0] else []
-        except (TypeError, ValueError):
-            return arrangement
-        if not isinstance(arrs, list):
-            return arrangement
-
-        def is_bass(a):
-            return isinstance(a, dict) and "bass" in (
-                str(a.get("smart_name") or "") + " " + str(a.get("name") or "")).lower()
-
-        stored = next((a for a in arrs if isinstance(a, dict) and a.get("index") == arrangement), None)
-        if stored is None:
-            return arrangement
-        want_bass = inst == "bass"
-        if is_bass(stored) == want_bass:
-            return arrangement
-        if any(is_bass(a) == want_bass for a in arrs if isinstance(a, dict)):
-            return None
-        return arrangement
-
     def continue_session(self) -> dict | None:
         """Most-recently-played song (from song_stats) + metadata, for the
         Continue-Playing card. Null when nothing has been played."""

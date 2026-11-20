@@ -343,26 +343,3 @@ def test_extract_meta_manifest_tuning_does_not_become_the_bass_tuning(tmp_path):
     meta = loosefolder.extract_meta(tmp_path)
     assert meta["tuning_offsets"] == [-2, -2, -2, -2, -2, -2]
     assert meta["bass_tuning_offsets"] is None
-
-
-def test_manifest_arrangements_get_the_xml_playback_index(tmp_path):
-    """manifest.json arrangement entries carry no `index`; each gets the index of
-    the detected XML part with the same file, so play records (keyed by that
-    index) match the part (Home's follow-the-instrument check)."""
-    (tmp_path / "audio.wem").write_bytes(b"\0")
-    _write_min_xml(tmp_path / "lead.xml")
-    _write_min_xml(tmp_path / "bass.xml")
-    (tmp_path / "manifest.json").write_text(json.dumps({
-        "arrangements": [
-            {"type": "lead", "name": "Lead", "file": "lead.xml"},
-            {"type": "bass", "name": "Bass", "file": "BASS.xml"},
-            {"type": "rhythm", "name": "Rhythm", "file": "missing.xml"},
-        ],
-    }), encoding="utf-8")
-    detected, _ = loosefolder._detect_arrangements(tmp_path)
-    want = {a["file"].lower(): a["index"] for a in detected}
-    meta = loosefolder.extract_meta(tmp_path)
-    arrs = {a["name"]: a for a in meta["arrangements"]}
-    assert arrs["Lead"]["index"] == want["lead.xml"]
-    assert arrs["Bass"]["index"] == want["bass.xml"]      # file match ignores case
-    assert "index" not in arrs["Rhythm"]                  # no such XML: no guess
