@@ -5900,17 +5900,6 @@
 
         // Hammer-on / pull-off triangle marker: a white ▲ (up) / ▼ (down)
         // with a thick border in the gem's string colour.
-        // Outline colour for the hammer-on / pull-off triangle: the string colour,
-        // scaled down to ~40 % when its luminance is high (yellow, white, light
-        // green), so the white triangle keeps a visible edge on its own gem.
-        function _triOutline(h) {
-            const r = (h >> 16) & 255, gg = (h >> 8) & 255, bl = h & 255;
-            const lum = (0.2126 * r + 0.7152 * gg + 0.0722 * bl) / 255;
-            const k = lum > 0.55 ? 0.4 : 1;
-            const c = ((Math.round(r * k) << 16) | (Math.round(gg * k) << 8) | Math.round(bl * k)) >>> 0;
-            return '#' + c.toString(16).padStart(6, '0');
-        }
-
         function triMat(up, hex) {
             const h = (hex >>> 0) & 0xffffff;
             const key = h * 16 + (up ? 0 : 1);
@@ -5928,10 +5917,10 @@
             g.fillStyle = '#ffffff';
             g.fill();
             g.lineWidth = S * 0.122;
-            // Outline in the string colour, darkened when that colour is light:
-            // a white triangle outlined in yellow (or white) vanishes on its own
-            // gem, while red/blue gems show it clearly.
-            g.strokeStyle = _triOutline(h);
+            // Black outline: a white triangle outlined in the string colour
+            // vanished on its own light gem (yellow A string); black reads on
+            // every string colour, like the S / P marks.
+            g.strokeStyle = '#000000';
             g.stroke();
             const mat = new T.SpriteMaterial({
                 map: new T.CanvasTexture(c), transparent: true,
