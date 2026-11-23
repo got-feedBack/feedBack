@@ -11533,7 +11533,8 @@
             _drawChordTemplates = bundle.chordTemplates ?? null;
             _drawAnchors = anchors ?? null;
             _drawTeachingMarks = !!bundle.teachingMarksVisible;
-            if (noteNamesVisible) _refreshNoteNameTuning(bundle);
+            // Always: slide landings show their note name even with note names off.
+            _refreshNoteNameTuning(bundle);
             if (noteNamesVisible && noteNamesLongOnly
                 && (bundle.notes !== _noteNameRunsFor || noteNamesMinSustain !== _noteNameRunsMin)) {
                 // Chart-static: recomputed only when the notes array (song,
@@ -15355,6 +15356,28 @@
                             _drawTeachMark(teachingDegreeLabel(n.sd), '#ffcc66', -NW * 0.95, 'teachSd');
                         }
                     }
+                }
+            }
+
+            // ── Slide landing: its note name instead of a gem ──
+            // A slide's destination (skipBody, single note) has no gem: it isn't
+            // plucked. Show its note name where the gem would be, so you see
+            // which note the slide ends on. Fades in like the fret label; gone
+            // once the slide has arrived.
+            if (skipBody && !fromChord && dt >= 0 && _noteNameOpenMidi[s] !== undefined) {
+                const landAlpha = Math.min(1.0, (AHEAD - dt) / 0.35);
+                if (landAlpha > 0) {
+                    const landLbl = pNoteNameLbl.get();
+                    const landMat = txtMat(_noteNameForFret(_noteNameOpenMidi[s], n.f, _noteNameCapo),
+                        NOTE_NAME_HEX, false, 'noteFret');
+                    _setLabelMap(landLbl, landMat);
+                    const landImg = landMat.map && landMat.map.image;
+                    const landAspect = landImg && landImg.height ? landImg.width / landImg.height : 1;
+                    const landS = NH * 1.6 * LBL_MULT * (1 + Math.max(0, Math.min(1, dt / AHEAD)) * 1.5) * _textSizeMul;
+                    landLbl.scale.set(landS * landAspect, landS, 1);
+                    landLbl.position.set(x, y, noteZ + K);
+                    landLbl.renderOrder = renderOrderForLayerAtZ(noteZ, 'TECHNIQUE_MARKER');
+                    landLbl.material.opacity = landAlpha;
                 }
             }
 
