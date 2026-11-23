@@ -11533,8 +11533,7 @@
             _drawChordTemplates = bundle.chordTemplates ?? null;
             _drawAnchors = anchors ?? null;
             _drawTeachingMarks = !!bundle.teachingMarksVisible;
-            // Always: slide landings show their note name even with note names off.
-            _refreshNoteNameTuning(bundle);
+            if (noteNamesVisible) _refreshNoteNameTuning(bundle);
             if (noteNamesVisible && noteNamesLongOnly
                 && (bundle.notes !== _noteNameRunsFor || noteNamesMinSustain !== _noteNameRunsMin)) {
                 // Chart-static: recomputed only when the notes array (song,
@@ -15363,8 +15362,10 @@
             // A slide's destination (skipBody, single note) has no gem: it isn't
             // plucked. Show its note name where the gem would be, so you see
             // which note the slide ends on. Fades in like the fret label; gone
-            // once the slide has arrived.
-            if (skipBody && !fromChord && dt >= 0 && _noteNameOpenMidi[s] !== undefined) {
+            // once the slide has arrived. Only with note names on, and on the
+            // strings ticked for them, like every other name.
+            if (noteNamesVisible && skipBody && !fromChord && dt >= 0
+                && _noteNameOpenMidi[s] !== undefined && _noteNameStringOn[s]) {
                 const landAlpha = Math.min(1.0, (AHEAD - dt) / 0.35);
                 if (landAlpha > 0) {
                     const landLbl = pNoteNameLbl.get();

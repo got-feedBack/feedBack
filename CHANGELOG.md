@@ -26,8 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **3D Highway: the note a slide lands on is named.** A slide's destination
   has no gem (it isn't plucked), so nothing showed which note the slide ends
   on. Its note name now appears where the gem would be, sitting on the string,
-  and disappears once the slide arrives. Shown whether or not note names above
-  notes are switched on.
+  and disappears once the slide arrives. Shown with the other note names (same
+  setting and string filter).
 - **Core reader for source rigs (feedpak 1.18.0).** A pack can declare what a
   MIDI part should sound like by binding a rig; core now reads that binding and
   hands it to the client instead of dropping it. Three parts: the
