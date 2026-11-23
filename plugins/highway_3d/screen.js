@@ -5917,7 +5917,10 @@
             g.fillStyle = '#ffffff';
             g.fill();
             g.lineWidth = S * 0.122;
-            g.strokeStyle = '#' + (hex >>> 0).toString(16).padStart(6, '0');
+            // Black outline: a white triangle outlined in the string colour
+            // vanished on its own light gem (yellow A string); black reads on
+            // every string colour, like the S / P marks.
+            g.strokeStyle = '#000000';
             g.stroke();
             const mat = new T.SpriteMaterial({
                 map: new T.CanvasTexture(c), transparent: true,
