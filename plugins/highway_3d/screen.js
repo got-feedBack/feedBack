@@ -15375,7 +15375,9 @@
                     const landAspect = landImg && landImg.height ? landImg.width / landImg.height : 1;
                     const landS = NH * 1.6 * LBL_MULT * (1 + Math.max(0, Math.min(1, dt / AHEAD)) * 1.5) * _textSizeMul;
                     landLbl.scale.set(landS * landAspect, landS, 1);
-                    landLbl.position.set(x, y, noteZ + K);
+                    // Lifted so it sits on the string, like the S / P marks: centred
+                    // on the string its lower half went into the board.
+                    landLbl.position.set(x, y + landS * 0.55, noteZ + K);
                     landLbl.renderOrder = renderOrderForLayerAtZ(noteZ, 'TECHNIQUE_MARKER');
                     landLbl.material.opacity = landAlpha;
                 }
