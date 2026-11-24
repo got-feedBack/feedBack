@@ -15364,7 +15364,7 @@
             // which note the slide ends on. Fades in like the fret label; gone
             // once the slide has arrived. Only with note names on, and on the
             // strings ticked for them, like every other name.
-            if (noteNamesVisible && skipBody && !fromChord && dt >= 0
+            if (noteNamesVisible && skipBody && !fromChord && dt > 0
                 && _noteNameOpenMidi[s] !== undefined && _noteNameStringOn[s]) {
                 const landAlpha = Math.min(1.0, (AHEAD - dt) / 0.35);
                 if (landAlpha > 0) {
