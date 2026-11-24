@@ -689,6 +689,52 @@
         </div>
     </div>
 
+    <!-- Note names above single-note gems (C, C#, D, Eb, E, F, F#, G, Ab, A, Bb, B). -->
+    <div class="mt-4">
+        <label class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+            <input type="checkbox" id="h3d-note-names-visible"
+                   onchange="window.h3dBgSetNoteNamesVisible && window.h3dBgSetNoteNamesVisible(this.checked)"
+                   class="accent-accent">
+            Show note names above notes
+        </label>
+        <p class="text-[10px] text-gray-500 mt-1 ml-6">
+            The note's name (e.g. G for the 3rd fret on the low E string)
+            above each single note coming down the highway. Follows the
+            song's tuning and capo. Chords keep their chord name instead.
+        </p>
+        <div id="h3d-note-names-options" class="ml-6 mt-2 space-y-2 border-l border-gray-700 pl-3">
+            <div class="flex items-center gap-2 text-xs text-gray-300">
+                <label class="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" id="h3d-note-names-long-only"
+                           onchange="window.h3dBgSetNoteNamesLongOnly && window.h3dBgSetNoteNamesLongOnly(this.checked)"
+                           class="accent-accent">
+                    Only notes held at least
+                </label>
+                <input type="number" id="h3d-note-names-min-sustain" min="0.05" max="2" step="0.05" value="0.20"
+                       aria-label="Minimum note length in seconds"
+                       onchange="window.h3dBgSetNoteNamesMinSustain && window.h3dBgSetNoteNamesMinSustain(this.value)"
+                       class="bg-dark-600 border border-gray-700 rounded px-2 text-xs text-gray-300" style="width:4.5rem">
+                <span>seconds</span>
+            </div>
+            <p class="text-[10px] text-gray-500">
+                Skips names on quick notes so busy riffs stay readable. Held
+                notes give you time to read and remember the name, and so does
+                one note played again and again (a gallop on the same fret) for
+                at least that long: every note in such a run keeps its name.
+            </p>
+            <p class="text-xs font-medium text-gray-400">Strings</p>
+            <div id="h3d-note-names-strings" class="flex flex-wrap gap-2"></div>
+            <p class="text-[10px] text-gray-500">
+                Name only the ticked strings, e.g. just Low E to learn that one
+                first. Colours match your Highway String Colors. Strings are named
+                for standard tuning, so in Drop D the lowest string is still
+                Low E. Low B is the extra low string of a 7-string guitar or
+                5-string bass, Low F# of an 8-string. Strings a song doesn't have
+                are ignored.
+            </p>
+        </div>
+    </div>
+
     <!-- Slide direction arrow — three independent ›/‹ markers showing which
          way a slide is headed. -->
     <div class="mt-4">
@@ -956,7 +1002,7 @@
          no-selection / NaN state. -->
     <script>
         (function () {
-            const DEFAULTS = { style: 'particles', intensity: 0.5, reactive: true, palette: 'default', bgTheme: 'default', hwTheme: 'default', showFretOnNote: true, fretNumberGhostScope: 'chords', cameraSmoothing: 0.5, zoomSmoothing: 0.5, tiltSmoothing: 0.5, cameraLockLow: false, cameraLockZoom: 0.5, cameraMode: 'lookahead', nutHeadstockVisible: true, tuningLabelsVisible: true, nutColor: '#f5f3f0', headstockColor: '#d4b48a', textSize: 0.5, vibrancy: 0.85, glow: 0.25, customImageDataUrl: '', customImageName: '', customVideoName: '', chordDiagramVisible: true, chordDiagramSize: 0.5, chordDiagramPosition: 'tl', fretColumnMarkerCadence: 1, projectionVisible: true, inlayLabelsVisible: false, sectionLabelsOnHighway: false, sectionHudVisible: false, sectionHudPosition: 'tr', sectionHudSize: 0.5, toneHudVisible: false, toneHudPosition: 'tl', toneHudSize: 0.5, fpsVisible: false, fretDividersVisible: true, slideArrowApproachVisible: true, slideArrowNeckVisible: true, slideArrowChainPreviewVisible: true };
+            const DEFAULTS = { style: 'particles', intensity: 0.5, reactive: true, palette: 'default', bgTheme: 'default', hwTheme: 'default', showFretOnNote: true, fretNumberGhostScope: 'chords', cameraSmoothing: 0.5, zoomSmoothing: 0.5, tiltSmoothing: 0.5, cameraLockLow: false, cameraLockZoom: 0.5, cameraMode: 'lookahead', nutHeadstockVisible: true, tuningLabelsVisible: true, nutColor: '#f5f3f0', headstockColor: '#d4b48a', textSize: 0.5, vibrancy: 0.85, glow: 0.25, customImageDataUrl: '', customImageName: '', customVideoName: '', chordDiagramVisible: true, chordDiagramSize: 0.5, chordDiagramPosition: 'tl', fretColumnMarkerCadence: 1, projectionVisible: true, inlayLabelsVisible: false, sectionLabelsOnHighway: false, sectionHudVisible: false, sectionHudPosition: 'tr', sectionHudSize: 0.5, toneHudVisible: false, toneHudPosition: 'tl', toneHudSize: 0.5, fpsVisible: false, fretDividersVisible: true, slideArrowApproachVisible: true, slideArrowNeckVisible: true, slideArrowChainPreviewVisible: true, noteNamesVisible: false, noteNamesLongOnly: false, noteNamesMinSustain: 0.2, noteNamesStrings: 'lowE,A,D,G,B,highE,low7,low8' };
             const VALID_STYLES = new Set(['off', 'particles', 'silhouettes', 'lights', 'geometric', 'butterchurn', 'image', 'video']);
             // Scene color themes — the single id+label source for BOTH the
             // Background and Highway dropdowns AND the validator below. The
@@ -1112,6 +1158,8 @@
             let storedSlideArrowApproachVisible = null;
             let storedSlideArrowNeckVisible = null;
             let storedSlideArrowChainPreviewVisible = null;
+            let storedNoteNamesVisible = null;
+            let storedNoteNamesLongOnly = null, storedNoteNamesMinSustain = null, storedNoteNamesStrings = null;
             try {
                 storedStyle = localStorage.getItem('h3d_bg_style');
                 storedBgTheme = localStorage.getItem('h3d_bg_bgTheme');
@@ -1151,6 +1199,10 @@
                 storedSlideArrowApproachVisible = localStorage.getItem('h3d_bg_slideArrowApproachVisible');
                 storedSlideArrowNeckVisible = localStorage.getItem('h3d_bg_slideArrowNeckVisible');
                 storedSlideArrowChainPreviewVisible = localStorage.getItem('h3d_bg_slideArrowChainPreviewVisible');
+                storedNoteNamesVisible = localStorage.getItem('h3d_bg_noteNamesVisible');
+                storedNoteNamesLongOnly = localStorage.getItem('h3d_bg_noteNamesLongOnly');
+                storedNoteNamesMinSustain = localStorage.getItem('h3d_bg_noteNamesMinSustain');
+                storedNoteNamesStrings = localStorage.getItem('h3d_bg_noteNamesStrings');
                 storedCustomImageDataUrl = localStorage.getItem('h3d_bg_customImageDataUrl');
                 storedCustomImageName = localStorage.getItem('h3d_bg_customImageName');
                 storedCustomVideoName = localStorage.getItem('h3d_bg_customVideoName');
@@ -1231,6 +1283,14 @@
             const slideArrowApproachVisible = coerceBool(storedSlideArrowApproachVisible, DEFAULTS.slideArrowApproachVisible);
             const slideArrowNeckVisible = coerceBool(storedSlideArrowNeckVisible, DEFAULTS.slideArrowNeckVisible);
             const slideArrowChainPreviewVisible = coerceBool(storedSlideArrowChainPreviewVisible, DEFAULTS.slideArrowChainPreviewVisible);
+            const noteNamesVisible = coerceBool(storedNoteNamesVisible, DEFAULTS.noteNamesVisible);
+            const noteNamesLongOnly = coerceBool(storedNoteNamesLongOnly, DEFAULTS.noteNamesLongOnly);
+            const noteNamesMinSustain = (function (v) {
+                const n = parseFloat(v);
+                return Number.isFinite(n) ? Math.max(0.05, Math.min(2, n)) : DEFAULTS.noteNamesMinSustain;
+            })(storedNoteNamesMinSustain);
+            const noteNamesStrings = typeof storedNoteNamesStrings === 'string'
+                ? storedNoteNamesStrings : DEFAULTS.noteNamesStrings;
             const customImageDataUrl = (typeof storedCustomImageDataUrl === 'string') ? storedCustomImageDataUrl : DEFAULTS.customImageDataUrl;
             const customImageName    = (typeof storedCustomImageName === 'string')    ? storedCustomImageName    : DEFAULTS.customImageName;
             const customVideoName    = (typeof storedCustomVideoName === 'string')    ? storedCustomVideoName    : DEFAULTS.customVideoName;
@@ -1294,6 +1354,7 @@
             const saav  = document.getElementById('h3d-slide-arrow-approach-visible');
             const sanv  = document.getElementById('h3d-slide-arrow-neck-visible');
             const sacpv = document.getElementById('h3d-slide-arrow-chain-preview-visible');
+            const nnv   = document.getElementById('h3d-note-names-visible');
             const fileInput = document.getElementById('h3d-bg-custom-image-file');
             const clearBtn  = document.getElementById('h3d-bg-custom-image-clear');
             const nameP     = document.getElementById('h3d-bg-custom-image-name');
@@ -1363,6 +1424,74 @@
             if (saav)  saav.checked = slideArrowApproachVisible;
             if (sanv)  sanv.checked = slideArrowNeckVisible;
             if (sacpv) sacpv.checked = slideArrowChainPreviewVisible;
+            if (nnv)   nnv.checked   = noteNamesVisible;
+            const nnLong = document.getElementById('h3d-note-names-long-only');
+            const nnMin  = document.getElementById('h3d-note-names-min-sustain');
+            if (nnLong) nnLong.checked = noteNamesLongOnly;
+            if (nnMin)  nnMin.value    = noteNamesMinSustain.toFixed(2);
+
+            // Note-name options only matter while names are on.
+            function syncH3dNoteNamesOptionsUi() {
+                const c = document.getElementById('h3d-note-names-visible');
+                const w = document.getElementById('h3d-note-names-options');
+                if (w && c) w.classList.toggle('hidden', !c.checked);
+            }
+            syncH3dNoteNamesOptionsUi();
+            if (nnv) nnv.addEventListener('change', syncH3dNoteNamesOptionsUi);
+
+            // Per-string checkboxes, one per named string slot of core's
+            // "Highway String Colors" (same names, order and colours), so the
+            // swatch here is the colour of that string on the highway.
+            const NN_FALLBACK_SLOTS = [
+                { key: 'highE', label: 'High E', sub: '1st' }, { key: 'B', label: 'B', sub: '2nd' },
+                { key: 'G', label: 'G', sub: '3rd' }, { key: 'D', label: 'D', sub: '4th' },
+                { key: 'A', label: 'A', sub: '5th' }, { key: 'lowE', label: 'Low E', sub: '6th / lowest' },
+                { key: 'low7', label: 'Low B', sub: '7-string' }, { key: 'low8', label: 'Low F#', sub: '8-string' },
+            ];
+            function renderH3dNoteNameStrings() {
+                const box = document.getElementById('h3d-note-names-strings');
+                if (!box) return;
+                const api = window.feedBack && window.feedBack.highwayColors;
+                const slots = (api && Array.isArray(api.slots) && api.slots.length) ? api.slots : NN_FALLBACK_SLOTS;
+                let colors = {};
+                try { colors = (api && api.getResolved && api.getResolved()) || {}; } catch (_) { colors = {}; }
+                let enabled = noteNamesStrings;
+                try {
+                    const live = localStorage.getItem('h3d_bg_noteNamesStrings');
+                    if (typeof live === 'string') enabled = live;
+                } catch (_) { /* storage blocked */ }
+                const on = new Set(String(enabled).split(','));
+                box.textContent = '';
+                for (const slot of slots) {
+                    const lbl = document.createElement('label');
+                    lbl.className = 'flex items-center gap-2 text-xs text-gray-300 cursor-pointer px-2 rounded border border-gray-700 bg-dark-600';
+                    lbl.title = slot.sub ? slot.label + ' (' + slot.sub + ')' : slot.label;
+                    const cb = document.createElement('input');
+                    cb.type = 'checkbox';
+                    cb.className = 'accent-accent';
+                    cb.dataset.slot = slot.key;
+                    cb.checked = on.has(slot.key);
+                    cb.addEventListener('change', function () {
+                        const picked = Array.from(box.querySelectorAll('input[data-slot]'))
+                            .filter((el) => el.checked).map((el) => el.dataset.slot);
+                        if (window.h3dBgSetNoteNamesStrings) window.h3dBgSetNoteNamesStrings(picked);
+                    });
+                    const sw = document.createElement('span');
+                    sw.setAttribute('aria-hidden', 'true');
+                    sw.style.cssText = 'display:inline-block;width:10px;height:10px;border-radius:9999px;'
+                        + 'background:' + (colors[slot.key] || '#888888');
+                    lbl.append(cb, sw, document.createTextNode(slot.label));
+                    box.appendChild(lbl);
+                }
+            }
+            renderH3dNoteNameStrings();
+            // Recolour the swatches when the user changes Highway String Colors.
+            // One subscription per page, even if this script re-runs.
+            try {
+                if (typeof window.__h3dNnColorsUnsub === 'function') window.__h3dNnColorsUnsub();
+                const hc = window.feedBack && window.feedBack.highwayColors;
+                window.__h3dNnColorsUnsub = (hc && hc.onChange) ? hc.onChange(renderH3dNoteNameStrings) : null;
+            } catch (_) { /* older core without the colors facade */ }
             if (slhi)  slhi.checked = sectionLabelsOnHighway;
             if (shvi)  shvi.checked = sectionHudVisible;
             if (shpos) shpos.value  = sectionHudPosition;
